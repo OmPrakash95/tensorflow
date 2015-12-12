@@ -34,10 +34,11 @@ class S4ParseUtterance : public OpKernel {
     const Tensor* serialized;
     OP_REQUIRES_OK(ctx, ctx->input("serialized", &serialized));
     auto serialized_t = serialized->scalar<string>();
+    CHECK_EQ(serialized_t.size(), 1);
 
     Example ex;
     OP_REQUIRES(
-        ctx, ParseProtoUnlimited(&ex, serialized_t()) & false,
+        ctx, ParseProtoUnlimited(&ex, serialized_t()),
         errors::InvalidArgument("Could not parse example input, value: '",
                                 serialized_t(), "'"));
     const auto& feature_dict = ex.features().feature();
@@ -88,6 +89,41 @@ class S4ParseUtterance : public OpKernel {
 
       std::fill_n(feature_slice->flat<float>().data(), feature_shape.num_elements(), 0.0f);
     }
+
+    // Copy the tokens.
+    const auto& tokens_iter = feature_dict.find("tokens");
+    CHECK(tokens_iter != feature_dict.end());
+    const auto& tokens = tokens_iter->second.int64_list();
+
+    const int64 tokens_len = tokens.value().size();
+    CHECK(tokens_len);
+
+    Tensor* output_tensor_tokens_len = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("uttid", TensorShape(), &output_tensor_tokens_len));
+    output_tensor_tokens_len->flat<int64>()(0) = tokens_len;
+
+    OpOutputList output_list_tokens;
+    OP_REQUIRES_OK(ctx, ctx->output_list("tokens", &output_list_tokens));
+
+    for (int64 t = 0; t < features_len; ++t) {
+      TensorShape token_shape;
+      token_shape.AddDim(1);
+      token_shape.AddDim(1);
+
+      Tensor* token_slice = nullptr;
+      output_list_tokens.allocate(t, token_shape, &token_slice);
+
+      token_slice->flat<int64>().data()[0] = tokens.value(t);
+    }
+
+    // Copy the uttid across.
+    const auto& uttid_iter = feature_dict.find("uttid");
+    CHECK(uttid_iter != feature_dict.end());
+    const auto& uttid = features_iter->second.bytes_list().value(0);
+
+    Tensor* output_tensor_uttid = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("uttid", TensorShape(), &output_tensor_uttid));
+    output_tensor_uttid->flat<string>()(0) = uttid;
 
     // Copy the text across.
     const auto& text_iter = feature_dict.find("text");
