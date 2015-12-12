@@ -13,6 +13,7 @@ import re
 import os
 import sys
 import tensorflow as tf
+import tensorflow.core.framework.token_model_pb2 as token_model_pb2
 
 def main():
   parser = argparse.ArgumentParser(description='SPEECH3 (C) 2015 William Chan <williamchan@cmu.edu>')
@@ -21,13 +22,24 @@ def main():
   parser.add_argument('--kaldi_txt', type=str)
   parser.add_argument('--kaldi_utt2spk', type=str)
   parser.add_argument('--tf_records', type=str)
+  parser.add_argument('--token_model_pbtxt', type=str, default='speech4/conf/token_model_character_simple.pbtxt')
   parser.add_argument('--type', type=str, default='wsj')
   args   = vars(parser.parse_args())
 
-  convert(args['kaldi_scp'], args['kaldi_txt'], args['tf_records'], args['kaldi_cmvn_scp'], args['kaldi_utt2spk'])
+  convert(args['kaldi_scp'], args['kaldi_txt'], args['tf_records'], args['token_model_pbtxt'], args['kaldi_cmvn_scp'], args['kaldi_utt2spk'])
 
 
-def convert(kaldi_scp, kaldi_txt, tf_records, kaldi_cmvn_scp=None, kaldi_utt2spk=None):
+def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=None, kaldi_utt2spk=None):
+  # Load the token model.
+  token_model_proto = token_model_pb2.TokenModelProto()
+
+  character_to_token_map = {}
+  with open(token_model_pbtxt, 'r') as proto_file:
+    google.protobuf.text_format.Merge(proto_file.read(), token_model_proto)
+
+  for token in token_model_proto.tokens:
+    character_to_token_map[token.token_string] = token.token_id
+
   # Read the text file into utterance_map.
   utterance_map = {}
   lines = [line.strip() for line in open(kaldi_txt, 'r')]
@@ -70,15 +82,20 @@ def convert(kaldi_scp, kaldi_txt, tf_records, kaldi_cmvn_scp=None, kaldi_utt2spk
     # Corresponding text transcript.
     text = utterance_map[uttid]
 
+    # Corresponding tokens.
+    tokens = [token_model_proto.token_sos] * 2 + [character_to_token_map[c] for c in text] + [token_model_proto.token_eos]
+
     example = tf.train.Example(features=tf.train.Features(feature={
         'dim_t': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats_normalized.shape[0]])),
         'dim_w': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats_normalized.shape[1]])),
         'features': tf.train.Feature(bytes_list=tf.train.BytesList(value=[feats_normalized.tostring()])),
+        'tokens': tf.train.Feature(int64_list=tf.train.Int64List(value=tokens)),
         'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[uttid])),
         'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
     tf_record_writer.write(example.SerializeToString())
 
     utt_count = utt_count + 1
+    print 'processed %d out of %d' % (utt_count, len(utterance_map))
 
 
 def normalize_text_wsj(line):
