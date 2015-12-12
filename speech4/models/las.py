@@ -3,8 +3,10 @@
 import numpy as np
 import os.path
 import tensorflow as tf
-import tensorflow.python.platform
+from tensorflow.python.ops import rnn
+from tensorflow.python.ops import rnn_cell
 from tensorflow.python.ops.gen_user_ops import s4_parse_utterance
+import tensorflow.python.platform
 import time
 
 
@@ -13,15 +15,33 @@ FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_integer('batch_size', 8,
                             """Number of utterances to process in a batch.""")
 
+tf.app.flags.DEFINE_integer('features_len_max', 2560,
+                            """Maximum number of features in an utterance.""")
+tf.app.flags.DEFINE_integer('tokens_len_max', 256,
+                            """Maximum number of tokens in an utterance.""")
 
+tf.app.flags.DEFINE_integer('encoder_cell_size', 256,
+                            """Encoder cell size.""")
+tf.app.flags.DEFINE_integer('decoder_cell_size', 256,
+                            """Decoder cell size.""")
+tf.app.flags.DEFINE_integer('attention_embedding_size', 256,
+                            """Attention embedding size.""")
 
 class LASModel(object):
-  def __init__(self, batch_size):
+  def __init__(self, batch_size, features_len_max, tokens_len_max,
+      encoder_cell_size, decoder_cell_size, attention_embedding_size):
     self.batch_size = batch_size
+    self.features_len_max = features_len_max
+    self.tokens_len_max = tokens_len_max
+    self.encoder_cell_size = encoder_cell_size
+    self.decoder_cell_size = decoder_cell_size
 
     self.global_step = tf.Variable(0, trainable=False)
 
+    # Create the inputs.
     self.create_graph_inputs()
+
+    # Create the encoder.
 
 
     self.saver = tf.train.Saver(tf.all_variables())
@@ -29,28 +49,47 @@ class LASModel(object):
 
   def create_graph_inputs(self):
     filename_queue = tf.train.string_input_producer(['speech4/data/train_si284.tfrecords'])
-    serialized = read_utterance(filename_queue)
+
+    reader = tf.TFRecordReader()
+    _, serialized = reader.read(filename_queue)
 
     serialized = tf.train.shuffle_batch(
         [serialized], batch_size=self.batch_size, num_threads=2, capacity=self.batch_size * 4 + 512, min_after_dequeue=512)
     
-    self.features, self.features_len, self.text, self.tokens, self.tokens_len, self.uttid = s4_parse_utterance(serialized, features_len_max=2560, tokens_len_max=256)
+    # Parse the batched of serialized strings into the relevant utterance features.
+    self.features, self.features_len, self.text, self.tokens, self.tokens_len, self.uttid = s4_parse_utterance(serialized, features_len_max=self.features_len_max, tokens_len_max=self.tokens_len_max)
+
+
+  def create_encoder(self):
+    two = tf.constant([2], dtype=tf.float32)
+
+    self.encoder_states = [[self.features, self.features_len]]
+
+    self.encoder_states.append([rnn.rnn(
+        rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0], dtype=tf.float32,
+                         sequence_length=self.encoder_states[-1][1]), self.encoder_states[-1][1]])
+    self.encoder_states.append([rnn.rnn(
+        rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0], dtype=tf.float32,
+                         sequence_length=self.encoder_states[-1][1]), self.encoder_states[-1][1]])
+
+    self.encoder_states.append([rnn.rnn(
+      rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::2], dtype=tf.float32,
+                         sequence_length=self.encoder_states[-1][1]), tf.div(self.encoder_states[-1][1], two)])
+
+    self.encoder_states.append([rnn.rnn(
+      rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::2], dtype=tf.float32,
+                         sequence_length=self.encoder_states[-1][1]), tf.div(self.encoder_states[-1][1], two)])
+
+    encoder_embedding_projection = tf.get_variable("encoder_embedding_projection", [self.encoder_cell_size, self.attention_embedding_size])
+    self.encoder_embeddings = [math_ops.matmul(state, encoder_embedding_projection) for state in self.encoder_states[-1][0]]
 
 
   def step(self, sess, forward_only):
     return sess.run(self.text)
 
 
-
-def read_utterance(filename_queue):
-  reader = tf.TFRecordReader()
-  _, serialized_example = reader.read(filename_queue)
-
-  return serialized_example
-
-
 def create_model(sess, forward_only):
-  model = LASModel(FLAGS.batch_size)
+  model = LASModel(FLAGS.batch_size, FLAGS.features_len_max, FLAGS.tokens_len_max, FLAGS.encoder_cell_size, FLAGS.decoder_cell_size, FLAGS.attention_embedding_size)
   sess.run(tf.initialize_all_variables())
   tf.train.start_queue_runners(sess=sess)
   return model
