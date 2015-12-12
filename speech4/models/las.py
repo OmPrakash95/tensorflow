@@ -41,8 +41,9 @@ class LASModel(object):
     # Create the inputs.
     self.create_graph_inputs()
 
-    # Create the encoder.
-
+    # Create the encoder-encoder.
+    self.create_encoder()
+    self.create_decoder()
 
     self.saver = tf.train.Saver(tf.all_variables())
 
@@ -57,7 +58,8 @@ class LASModel(object):
         [serialized], batch_size=self.batch_size, num_threads=2, capacity=self.batch_size * 4 + 512, min_after_dequeue=512)
     
     # Parse the batched of serialized strings into the relevant utterance features.
-    self.features, self.features_len, self.text, self.tokens, self.tokens_len, self.uttid = s4_parse_utterance(serialized, features_len_max=self.features_len_max, tokens_len_max=self.tokens_len_max)
+    self.features, self.features_len, self.text, self.tokens, self.tokens_len, self.uttid = s4_parse_utterance(
+        serialized, features_len_max=self.features_len_max, tokens_len_max=self.tokens_len_max)
 
 
   def create_encoder(self):
@@ -82,6 +84,16 @@ class LASModel(object):
 
     encoder_embedding_projection = tf.get_variable("encoder_embedding_projection", [self.encoder_cell_size, self.attention_embedding_size])
     self.encoder_embeddings = [math_ops.matmul(state, encoder_embedding_projection) for state in self.encoder_states[-1][0]]
+
+
+  def create_decoder(self):
+    self.attention_states = array_ops.concat(1, self.encoder_states[-1][0])
+
+    decoder_initial_state = tf.constant(0, shape=[self.batch_size, self.decoder_cell_size], dype=float32)
+    self.decoder_states = []
+    self.decoder_stats.append(seq2seq.embedding_attention_decoder(
+        self.tokens, decoder_cell_size, self.attention_states,
+        rnn_cell.GRUCell(self.decoder_cell_size), self.embedding_symbols))
 
 
   def step(self, sess, forward_only):
