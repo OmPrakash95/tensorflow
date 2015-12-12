@@ -7,7 +7,7 @@
 import argparse
 import google
 import kaldi_io
-import numpy
+import numpy as np
 import os
 import re
 import os
@@ -74,10 +74,10 @@ def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=
     mean = mean_var[0, :-1] / count
     var = (mean_var[1, :-1] / count) - mean * mean
 
-    scale = 1.0 / numpy.sqrt(var)
+    scale = 1.0 / np.sqrt(var)
     offset = - mean * scale
 
-    feats_normalized = feats * scale[numpy.newaxis, :] + offset
+    feats_normalized = feats * scale[np.newaxis, :] + offset
 
     # Corresponding text transcript.
     text = utterance_map[uttid]
@@ -86,9 +86,8 @@ def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=
     tokens = [token_model_proto.token_sos] * 2 + [character_to_token_map[c] for c in text] + [token_model_proto.token_eos]
 
     example = tf.train.Example(features=tf.train.Features(feature={
-        'dim_t': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats_normalized.shape[0]])),
-        'dim_w': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats_normalized.shape[1]])),
-        'features': tf.train.Feature(bytes_list=tf.train.BytesList(value=[feats_normalized.tostring()])),
+        'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats_normalized.shape[0]])),
+        'features': tf.train.Feature(bytes_list=tf.train.BytesList(value=[feats_normalized.tostring(order='C')])),
         'tokens': tf.train.Feature(int64_list=tf.train.Int64List(value=tokens)),
         'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[uttid])),
         'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
