@@ -30,109 +30,115 @@ class S4ParseUtterance : public OpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    // Parse our serialized string into our Example proto.
     const Tensor* serialized;
     OP_REQUIRES_OK(ctx, ctx->input("serialized", &serialized));
-    auto serialized_t = serialized->scalar<string>();
-    CHECK_EQ(serialized_t.size(), 1);
+    auto serialized_t = serialized->vec<string>();
+    const int64 batch_size = serialized_t.size();
 
-    Example ex;
-    OP_REQUIRES(
-        ctx, ParseProtoUnlimited(&ex, serialized_t()),
-        errors::InvalidArgument("Could not parse example input, value: '",
-                                serialized_t(), "'"));
-    const auto& feature_dict = ex.features().feature();
-
-    // Extract the features_len.
-    const auto& features_len_iter = feature_dict.find("features_len");
-    CHECK(features_len_iter != feature_dict.end());
-    const int64 features_len = features_len_iter->second.int64_list().value(0);
-
-    Tensor* output_tensor_features_len = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output("features_len", TensorShape(), &output_tensor_features_len));
-    *output_tensor_features_len->flat<int64>().data() = features_len;
-
-    // Extract the features.
-    const auto& features_iter = feature_dict.find("features");
-    CHECK(features_iter != feature_dict.end());
-    const auto& features = features_iter->second.float_list();
-
-    // The features_width is a function of len(features) and features_len.
-    CHECK_EQ(features.value().size() % features_len, 0);
-    const int64 features_width = features.value().size() / features_len;
-
-    // Copy the features across.
     OpOutputList output_list_features;
-    OP_REQUIRES_OK(ctx, ctx->output_list("features", &output_list_features));
-
-    for (int64 t = 0; t < features_len; ++t) {
-      TensorShape feature_shape;
-      feature_shape.AddDim(1);
-      feature_shape.AddDim(features_width);
-
-      Tensor* feature_slice = nullptr;
-      output_list_features.allocate(t, feature_shape, &feature_slice);
-
-      const int64 offset = t * feature_shape.num_elements();
-
-      std::copy_n(features.value().data() + offset, feature_shape.num_elements(), feature_slice->flat<float>().data());
-    }
-
-    // Padding.
-    for (int64 t = features_len; t < features_len_max_; ++t) {
-      TensorShape feature_shape;
-      feature_shape.AddDim(1);
-      feature_shape.AddDim(features_width);
-
-      Tensor* feature_slice = nullptr;
-      output_list_features.allocate(t, feature_shape, &feature_slice);
-
-      std::fill_n(feature_slice->flat<float>().data(), feature_shape.num_elements(), 0.0f);
-    }
-
-    // Copy the tokens.
-    const auto& tokens_iter = feature_dict.find("tokens");
-    CHECK(tokens_iter != feature_dict.end());
-    const auto& tokens = tokens_iter->second.int64_list();
-
-    const int64 tokens_len = tokens.value().size();
-    CHECK(tokens_len);
-
-    Tensor* output_tensor_tokens_len = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output("uttid", TensorShape(), &output_tensor_tokens_len));
-    output_tensor_tokens_len->flat<int64>()(0) = tokens_len;
-
-    OpOutputList output_list_tokens;
-    OP_REQUIRES_OK(ctx, ctx->output_list("tokens", &output_list_tokens));
-
-    for (int64 t = 0; t < features_len; ++t) {
-      TensorShape token_shape;
-      token_shape.AddDim(1);
-      token_shape.AddDim(1);
-
-      Tensor* token_slice = nullptr;
-      output_list_tokens.allocate(t, token_shape, &token_slice);
-
-      token_slice->flat<int64>().data()[0] = tokens.value(t);
-    }
-
-    // Copy the uttid across.
-    const auto& uttid_iter = feature_dict.find("uttid");
-    CHECK(uttid_iter != feature_dict.end());
-    const auto& uttid = features_iter->second.bytes_list().value(0);
-
-    Tensor* output_tensor_uttid = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output("uttid", TensorShape(), &output_tensor_uttid));
-    output_tensor_uttid->flat<string>()(0) = uttid;
-
-    // Copy the text across.
-    const auto& text_iter = feature_dict.find("text");
-    CHECK(text_iter != feature_dict.end());
-    const auto& text = features_iter->second.bytes_list().value(0);
-
+    Tensor* output_tensor_features_len = nullptr;
     Tensor* output_tensor_text = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output("text", TensorShape(), &output_tensor_text));
-    output_tensor_text->flat<string>()(0) = text;
+    OpOutputList output_list_tokens;
+    Tensor* output_tensor_tokens_len = nullptr;
+    Tensor* output_tensor_uttid = nullptr;
+
+    for (int64 b = 0; b < batch_size; ++b) {
+      // Parse our serialized string into our Example proto.
+      Example ex;
+      OP_REQUIRES(
+          ctx, ParseProtoUnlimited(&ex, serialized_t(b)),
+          errors::InvalidArgument("Could not parse example input, value: '",
+                                  serialized_t(b), "'"));
+      const auto& feature_dict = ex.features().feature();
+
+      // Extract the features_len.
+      const auto& features_len_iter = feature_dict.find("features_len");
+      CHECK(features_len_iter != feature_dict.end());
+      const int64 features_len = features_len_iter->second.int64_list().value(0);
+
+      // Extract the features.
+      const auto& features_iter = feature_dict.find("features");
+      CHECK(features_iter != feature_dict.end());
+      const auto& features = features_iter->second.float_list();
+
+      // The features_width is a function of len(features) and features_len.
+      CHECK_EQ(features.value().size() % features_len, 0);
+      const int64 features_width = features.value().size() / features_len;
+
+      if (b == 0) {
+        // Allocate the memory.
+        OP_REQUIRES_OK(ctx, ctx->output_list("features", &output_list_features));
+        for (int64 t = 0; t < features_len_max_; ++t) {
+          TensorShape feature_shape({batch_size, features_width});
+
+          Tensor* feature_slice = nullptr;
+          output_list_features.allocate(t, feature_shape, &feature_slice);
+
+          std::fill_n(feature_slice->flat<float>().data(), feature_shape.num_elements(), 0.0f);
+        }
+
+        TensorShape x({batch_size});
+        OP_REQUIRES_OK(
+            ctx, ctx->allocate_output("features_len", TensorShape({batch_size}), &output_tensor_features_len));
+
+        OP_REQUIRES_OK(
+            ctx, ctx->allocate_output("text", TensorShape({batch_size}), &output_tensor_text));
+
+        OP_REQUIRES_OK(ctx, ctx->output_list("tokens", &output_list_tokens));
+
+        OP_REQUIRES_OK(
+            ctx, ctx->allocate_output("tokens_len", TensorShape({batch_size}), &output_tensor_tokens_len));
+
+        OP_REQUIRES_OK(
+            ctx, ctx->allocate_output("uttid", TensorShape({batch_size}), &output_tensor_uttid));
+
+        for (int64 s = 0; s < tokens_len_max_; ++s) {
+          TensorShape feature_shape({batch_size});
+
+          Tensor* feature_slice = nullptr;
+          output_list_tokens.allocate(s, feature_shape, &feature_slice);
+
+          std::fill_n(feature_slice->flat<int64>().data(), feature_shape.num_elements(), -1);
+        }
+      }
+
+      // Copy the features across.
+      output_tensor_features_len->flat<int64>().data()[b] = features_len;
+      CHECK_LE(features_len, features_len_max_);
+      for (int64 t = 0; t < features_len; ++t) {
+        Tensor* feature_slice = output_list_features[t];
+        std::copy_n(features.value().data() + t * features_width,
+                    features_width,
+                    feature_slice->flat<float>().data() + b * features_width);
+      }
+
+      // Copy the text across.
+      const auto& text_iter = feature_dict.find("text");
+      CHECK(text_iter != feature_dict.end());
+      const auto& text = text_iter->second.bytes_list().value(0);
+
+      output_tensor_text->flat<string>().data()[b] = text;
+      
+      // Copy the tokens.
+      const auto& tokens_iter = feature_dict.find("tokens");
+      CHECK(tokens_iter != feature_dict.end());
+      const auto& tokens = tokens_iter->second.int64_list();
+      const int64 tokens_len = tokens.value().size();
+
+      output_tensor_tokens_len->flat<int64>().data()[b] = tokens_len;
+      CHECK_LE(tokens_len, tokens_len_max_);
+      for (int64 s = 0; s < tokens_len; ++s) {
+        Tensor* token_slice = output_list_tokens[s];
+        token_slice->flat<int64>().data()[b] = tokens_len;
+      }
+
+      // Copy the uttid across.
+      const auto& uttid_iter = feature_dict.find("uttid");
+      CHECK(uttid_iter != feature_dict.end());
+      const auto& uttid = uttid_iter->second.bytes_list().value(0);
+
+      output_tensor_uttid->flat<string>().data()[b] = uttid;
+    }
   }
 
  protected:

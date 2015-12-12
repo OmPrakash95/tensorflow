@@ -29,9 +29,12 @@ class LASModel(object):
 
   def create_graph_inputs(self):
     filename_queue = tf.train.string_input_producer(['speech4/data/train_si284.tfrecords'])
-    features, features_len, text, tokens, tokens_len, uttid = read_and_decode(filename_queue)
+    serialized = read_utterance(filename_queue)
 
-    self.text = text
+    serialized = tf.train.shuffle_batch(
+        [serialized], batch_size=self.batch_size, num_threads=2, capacity=self.batch_size * 4 + 512, min_after_dequeue=512)
+    
+    self.features, self.features_len, self.text, self.tokens, self.tokens_len, self.uttid = s4_parse_utterance(serialized, features_len_max=2560, tokens_len_max=256)
 
 
   def step(self, sess, forward_only):
@@ -39,11 +42,11 @@ class LASModel(object):
 
 
 
-def read_and_decode(filename_queue):
+def read_utterance(filename_queue):
   reader = tf.TFRecordReader()
   _, serialized_example = reader.read(filename_queue)
 
-  return s4_parse_utterance(serialized_example, features_len_max=2560, tokens_len_max=100)
+  return serialized_example
 
 
 def create_model(sess, forward_only):
