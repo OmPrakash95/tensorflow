@@ -5,6 +5,8 @@ import os.path
 import tensorflow as tf
 from tensorflow.python.ops import rnn
 from tensorflow.python.ops import rnn_cell
+from tensorflow.python.ops import math_ops
+from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops.gen_user_ops import s4_parse_utterance
 import tensorflow.python.platform
 import time
@@ -14,6 +16,9 @@ FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_integer('batch_size', 8,
                             """Number of utterances to process in a batch.""")
+
+tf.app.flags.DEFINE_integer('features_width', 123,
+                            """Size of each feature.""")
 
 tf.app.flags.DEFINE_integer('features_len_max', 2560,
                             """Maximum number of features in an utterance.""")
@@ -28,13 +33,15 @@ tf.app.flags.DEFINE_integer('attention_embedding_size', 256,
                             """Attention embedding size.""")
 
 class LASModel(object):
-  def __init__(self, batch_size, features_len_max, tokens_len_max,
+  def __init__(self, batch_size, features_width, features_len_max, tokens_len_max,
       encoder_cell_size, decoder_cell_size, attention_embedding_size):
     self.batch_size = batch_size
+    self.features_width = features_width
     self.features_len_max = features_len_max
     self.tokens_len_max = tokens_len_max
     self.encoder_cell_size = encoder_cell_size
     self.decoder_cell_size = decoder_cell_size
+    self.attention_embedding_size = attention_embedding_size
 
     self.global_step = tf.Variable(0, trainable=False)
 
@@ -43,7 +50,7 @@ class LASModel(object):
 
     # Create the encoder-encoder.
     self.create_encoder()
-    self.create_decoder()
+    # self.create_decoder()
 
     self.saver = tf.train.Saver(tf.all_variables())
 
@@ -58,32 +65,40 @@ class LASModel(object):
         [serialized], batch_size=self.batch_size, num_threads=2, capacity=self.batch_size * 4 + 512, min_after_dequeue=512)
     
     # Parse the batched of serialized strings into the relevant utterance features.
-    self.features, self.features_len, self.text, self.tokens, self.tokens_len, self.tokens_weights self.uttid = s4_parse_utterance(
+    self.features, self.features_len, _, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
         serialized, features_len_max=self.features_len_max, tokens_len_max=self.tokens_len_max)
+
+    for feature in self.features:
+      feature.set_shape([self.batch_size, self.features_width])
 
 
   def create_encoder(self):
-    two = tf.constant(2, shape=[self.batch_size, 1], dtype=tf.float32)
+    start_time = time.time()
 
     self.encoder_states = [[self.features, self.features_len]]
 
-    self.encoder_states.append([rnn.rnn(
-        rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0], dtype=tf.float32,
-                         sequence_length=self.encoder_states[-1][1]), self.encoder_states[-1][1]])
-    self.encoder_states.append([rnn.rnn(
-        rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0], dtype=tf.float32,
-                         sequence_length=self.encoder_states[-1][1]), self.encoder_states[-1][1]])
-
-    self.encoder_states.append([rnn.rnn(
-        rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::2], dtype=tf.float32,
-                         sequence_length=self.encoder_states[-1][1]), tf.div(self.encoder_states[-1][1], two)])
-
-    self.encoder_states.append([rnn.rnn(
-        rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::2], dtype=tf.float32,
-                         sequence_length=self.encoder_states[-1][1]), tf.div(self.encoder_states[-1][1], two)])
+    self.create_encoder_layer(False)
+    self.create_encoder_layer(False)
+    self.create_encoder_layer(True)
+    self.create_encoder_layer(True)
 
     encoder_embedding_projection = tf.get_variable("encoder_embedding_projection", [self.encoder_cell_size, self.attention_embedding_size])
     self.encoder_embeddings = [math_ops.matmul(state, encoder_embedding_projection) for state in self.encoder_states[-1][0]]
+
+    print('create_encoder graph time %f' % (time.time() - start_time))
+
+
+  def create_encoder_layer(self, subsample_input=False):
+    with vs.variable_scope('encoder_layer_%d' % (len(self.encoder_states))):
+      if subsample_input:
+        self.encoder_states.append([rnn.rnn(
+            rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0], dtype=tf.float32,
+                             sequence_length=self.encoder_states[-1][1])[0], self.encoder_states[-1][1]])
+      else:
+        two = tf.constant(2, shape=[self.batch_size, 1], dtype=tf.int64)
+        self.encoder_states.append([rnn.rnn(
+            rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::2], dtype=tf.float32,
+                             sequence_length=self.encoder_states[-1][1])[0], tf.div(self.encoder_states[-1][1], two)])
 
 
   def create_decoder(self):
@@ -101,7 +116,7 @@ class LASModel(object):
 
 
 def create_model(sess, forward_only):
-  model = LASModel(FLAGS.batch_size, FLAGS.features_len_max, FLAGS.tokens_len_max, FLAGS.encoder_cell_size, FLAGS.decoder_cell_size, FLAGS.attention_embedding_size)
+  model = LASModel(FLAGS.batch_size, FLAGS.features_width, FLAGS.features_len_max, FLAGS.tokens_len_max, FLAGS.encoder_cell_size, FLAGS.decoder_cell_size, FLAGS.attention_embedding_size)
   sess.run(tf.initialize_all_variables())
   tf.train.start_queue_runners(sess=sess)
   return model

@@ -84,7 +84,7 @@ def rnn(cell, inputs, initial_state=None, dtype=None,
   outputs = []
   states = []
   with vs.variable_scope(scope or "RNN"):
-    batch_size = array_ops.shape(inputs[0])[0]
+    batch_size = inputs[0].get_shape()[0]
     if initial_state is not None:
       state = initial_state
     else:
@@ -98,6 +98,8 @@ def rnn(cell, inputs, initial_state=None, dtype=None,
                           inputs[0].dtype),
           array_ops.zeros(array_ops.pack([batch_size, cell.state_size]),
                           state.dtype))
+      zero_output_state[0].set_shape([batch_size, cell.output_size])
+      zero_output_state[1].set_shape([batch_size, cell.state_size])
       max_sequence_length = math_ops.reduce_max(sequence_length)
 
     for time, input_ in enumerate(inputs):

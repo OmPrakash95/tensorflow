@@ -1,19 +1,38 @@
+// Copyright 2015 William Chan <williamchan@cmu.edu>.
+
 #include "tensorflow/core/example/example.pb.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
-#include "tensorflow/core/platform/protobuf.h"
-
 #include "tensorflow/core/platform/logging.h"
+#include "tensorflow/core/platform/protobuf.h"
 
 using namespace tensorflow;
 
 namespace {
+REGISTER_OP("S4MaskAttentionEnergies")
+    .Attr("one: int = 1")
+    .Attr("median_window_left: int = 10")
+    .Attr("median_window_right: int = 100")
+    .Attr("mode: {'default', 'sliding_window', 'median'}")
+    .Attr("sliding_window_s_min: int = 0")
+    .Attr("sliding_window_s_max: int = 40")
+    .Attr("sliding_window_v_min: float = 1.2")
+    .Attr("sliding_window_v_max: float = 2.2")
+    .Input("energies: float")
+    .Input("energies_prev: one * float")
+    .Input("energies_len: int64")
+    .Output("masked_energies: float")
+    .Doc(R"doc(
+SPEECH4, parse an utterance!
+)doc");
+
 REGISTER_OP("S4ParseUtterance")
     .Attr("features_len_max: int")
     .Attr("tokens_len_max: int")
     .Input("serialized: string")
     .Output("features: features_len_max * float")
     .Output("features_len: int64")
+    .Output("features_width: int64")
     .Output("text: string")
     .Output("tokens: tokens_len_max * int64")
     .Output("tokens_len: int64")
@@ -31,13 +50,14 @@ class S4ParseUtterance : public OpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    const Tensor* serialized;
+    const Tensor* serialized = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("serialized", &serialized));
     auto serialized_t = serialized->vec<string>();
     const int64 batch_size = serialized_t.size();
 
     OpOutputList output_list_features;
     Tensor* output_tensor_features_len = nullptr;
+    Tensor* output_tensor_features_width = nullptr;
     Tensor* output_tensor_text = nullptr;
     OpOutputList output_list_tokens;
     Tensor* output_tensor_tokens_len = nullptr;
@@ -84,6 +104,10 @@ class S4ParseUtterance : public OpKernel {
             ctx, ctx->allocate_output("features_len", TensorShape({batch_size}), &output_tensor_features_len));
 
         OP_REQUIRES_OK(
+            ctx, ctx->allocate_output("features_width", TensorShape(), &output_tensor_features_width));
+        output_tensor_features_width->flat<int64>().data()[0] = features_width;
+
+        OP_REQUIRES_OK(
             ctx, ctx->allocate_output("text", TensorShape({batch_size}), &output_tensor_text));
 
         OP_REQUIRES_OK(ctx, ctx->output_list("tokens", &output_list_tokens));
@@ -100,8 +124,7 @@ class S4ParseUtterance : public OpKernel {
         OP_REQUIRES_OK(
             ctx, ctx->allocate_output("tokens_len", TensorShape({batch_size}), &output_tensor_tokens_len));
 
-        OP_REQUIRES_OK(ctx, ctx->output_list("tokens", &output_list_tokens_weights));
-
+        OP_REQUIRES_OK(ctx, ctx->output_list("tokens_weights", &output_list_tokens_weights));
         for (int64 s = 0; s < tokens_len_max_; ++s) {
           TensorShape feature_shape({batch_size});
 

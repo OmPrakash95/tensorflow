@@ -93,7 +93,7 @@ class RNNCell(object):
     """
     zeros = array_ops.zeros(
         array_ops.pack([batch_size, self.state_size]), dtype=dtype)
-    zeros.set_shape([None, self.state_size])
+    zeros.set_shape([batch_size, self.state_size])
     return zeros
 
 
