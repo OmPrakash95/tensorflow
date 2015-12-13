@@ -17,6 +17,7 @@ REGISTER_OP("S4ParseUtterance")
     .Output("text: string")
     .Output("tokens: tokens_len_max * int64")
     .Output("tokens_len: int64")
+    .Output("tokens_weights: tokens_len_max * float")
     .Output("uttid: string")
     .Doc(R"doc(
 SPEECH4, parse an utterance!
@@ -41,6 +42,7 @@ class S4ParseUtterance : public OpKernel {
     OpOutputList output_list_tokens;
     Tensor* output_tensor_tokens_len = nullptr;
     Tensor* output_tensor_uttid = nullptr;
+    OpOutputList output_list_tokens_weights;
 
     for (int64 b = 0; b < batch_size; ++b) {
       // Parse our serialized string into our Example proto.
@@ -86,12 +88,6 @@ class S4ParseUtterance : public OpKernel {
 
         OP_REQUIRES_OK(ctx, ctx->output_list("tokens", &output_list_tokens));
 
-        OP_REQUIRES_OK(
-            ctx, ctx->allocate_output("tokens_len", TensorShape({batch_size}), &output_tensor_tokens_len));
-
-        OP_REQUIRES_OK(
-            ctx, ctx->allocate_output("uttid", TensorShape({batch_size}), &output_tensor_uttid));
-
         for (int64 s = 0; s < tokens_len_max_; ++s) {
           TensorShape feature_shape({batch_size});
 
@@ -100,6 +96,23 @@ class S4ParseUtterance : public OpKernel {
 
           std::fill_n(feature_slice->flat<int64>().data(), feature_shape.num_elements(), -1);
         }
+
+        OP_REQUIRES_OK(
+            ctx, ctx->allocate_output("tokens_len", TensorShape({batch_size}), &output_tensor_tokens_len));
+
+        OP_REQUIRES_OK(ctx, ctx->output_list("tokens", &output_list_tokens_weights));
+
+        for (int64 s = 0; s < tokens_len_max_; ++s) {
+          TensorShape feature_shape({batch_size});
+
+          Tensor* feature_slice = nullptr;
+          output_list_tokens_weights.allocate(s, feature_shape, &feature_slice);
+
+          std::fill_n(feature_slice->flat<float>().data(), feature_shape.num_elements(), 0.0f);
+        }
+
+        OP_REQUIRES_OK(
+            ctx, ctx->allocate_output("uttid", TensorShape({batch_size}), &output_tensor_uttid));
       }
 
       // Copy the features across.
@@ -130,6 +143,9 @@ class S4ParseUtterance : public OpKernel {
       for (int64 s = 0; s < tokens_len; ++s) {
         Tensor* token_slice = output_list_tokens[s];
         token_slice->flat<int64>().data()[b] = tokens_len;
+
+        Tensor* weight_slice = output_list_tokens_weights[s];
+        weight_slice->flat<float>().data()[b] = 1.0f;
       }
 
       // Copy the uttid across.

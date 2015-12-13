@@ -58,12 +58,12 @@ class LASModel(object):
         [serialized], batch_size=self.batch_size, num_threads=2, capacity=self.batch_size * 4 + 512, min_after_dequeue=512)
     
     # Parse the batched of serialized strings into the relevant utterance features.
-    self.features, self.features_len, self.text, self.tokens, self.tokens_len, self.uttid = s4_parse_utterance(
+    self.features, self.features_len, self.text, self.tokens, self.tokens_len, self.tokens_weights self.uttid = s4_parse_utterance(
         serialized, features_len_max=self.features_len_max, tokens_len_max=self.tokens_len_max)
 
 
   def create_encoder(self):
-    two = tf.constant([2], dtype=tf.float32)
+    two = tf.constant(2, shape=[self.batch_size, 1], dtype=tf.float32)
 
     self.encoder_states = [[self.features, self.features_len]]
 
@@ -75,11 +75,11 @@ class LASModel(object):
                          sequence_length=self.encoder_states[-1][1]), self.encoder_states[-1][1]])
 
     self.encoder_states.append([rnn.rnn(
-      rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::2], dtype=tf.float32,
+        rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::2], dtype=tf.float32,
                          sequence_length=self.encoder_states[-1][1]), tf.div(self.encoder_states[-1][1], two)])
 
     self.encoder_states.append([rnn.rnn(
-      rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::2], dtype=tf.float32,
+        rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::2], dtype=tf.float32,
                          sequence_length=self.encoder_states[-1][1]), tf.div(self.encoder_states[-1][1], two)])
 
     encoder_embedding_projection = tf.get_variable("encoder_embedding_projection", [self.encoder_cell_size, self.attention_embedding_size])
