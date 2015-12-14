@@ -34,7 +34,7 @@ REGISTER_OP("S4ParseUtterance")
     .Output("features_len: int64")
     .Output("features_width: int64")
     .Output("text: string")
-    .Output("tokens: tokens_len_max * int64")
+    .Output("tokens: tokens_len_max * int32")
     .Output("tokens_len: int64")
     .Output("tokens_weights: tokens_len_max * float")
     .Output("uttid: string")
@@ -76,7 +76,7 @@ class S4ParseUtterance : public OpKernel {
       // Extract the features_len.
       const auto& features_len_iter = feature_dict.find("features_len");
       CHECK(features_len_iter != feature_dict.end());
-      const int64 features_len = features_len_iter->second.int64_list().value(0);
+      int64 features_len = features_len_iter->second.int64_list().value(0);
 
       // Extract the features.
       const auto& features_iter = feature_dict.find("features");
@@ -113,12 +113,12 @@ class S4ParseUtterance : public OpKernel {
         OP_REQUIRES_OK(ctx, ctx->output_list("tokens", &output_list_tokens));
 
         for (int64 s = 0; s < tokens_len_max_; ++s) {
-          TensorShape feature_shape({batch_size});
+          TensorShape token_shape({batch_size});
 
-          Tensor* feature_slice = nullptr;
-          output_list_tokens.allocate(s, feature_shape, &feature_slice);
+          Tensor* token_slice = nullptr;
+          output_list_tokens.allocate(s, token_shape, &token_slice);
 
-          std::fill_n(feature_slice->flat<int64>().data(), feature_shape.num_elements(), -1);
+          std::fill_n(token_slice->flat<int32>().data(), token_shape.num_elements(), -1);
         }
 
         OP_REQUIRES_OK(
@@ -126,12 +126,12 @@ class S4ParseUtterance : public OpKernel {
 
         OP_REQUIRES_OK(ctx, ctx->output_list("tokens_weights", &output_list_tokens_weights));
         for (int64 s = 0; s < tokens_len_max_; ++s) {
-          TensorShape feature_shape({batch_size});
+          TensorShape weight_shape({batch_size});
 
-          Tensor* feature_slice = nullptr;
-          output_list_tokens_weights.allocate(s, feature_shape, &feature_slice);
+          Tensor* weight_slice = nullptr;
+          output_list_tokens_weights.allocate(s, weight_shape, &weight_slice);
 
-          std::fill_n(feature_slice->flat<float>().data(), feature_shape.num_elements(), 0.0f);
+          std::fill_n(weight_slice->flat<float>().data(), weight_shape.num_elements(), 0.0f);
         }
 
         OP_REQUIRES_OK(
@@ -140,7 +140,10 @@ class S4ParseUtterance : public OpKernel {
 
       // Copy the features across.
       output_tensor_features_len->flat<int64>().data()[b] = features_len;
-      CHECK_LE(features_len, features_len_max_);
+      if (features_len > features_len_max_) {
+        LOG(WARNING) << "Utterance has feature_len: " << features_len << " but graph maximum is: " << features_len_max_;
+        features_len = features_len_max_;
+      }
       for (int64 t = 0; t < features_len; ++t) {
         Tensor* feature_slice = output_list_features[t];
         std::copy_n(features.value().data() + t * features_width,
@@ -159,13 +162,16 @@ class S4ParseUtterance : public OpKernel {
       const auto& tokens_iter = feature_dict.find("tokens");
       CHECK(tokens_iter != feature_dict.end());
       const auto& tokens = tokens_iter->second.int64_list();
-      const int64 tokens_len = tokens.value().size();
+      int64 tokens_len = tokens.value().size();
 
       output_tensor_tokens_len->flat<int64>().data()[b] = tokens_len;
-      CHECK_LE(tokens_len, tokens_len_max_);
+      if (tokens_len > tokens_len_max_) {
+        LOG(WARNING) << "Utterance has tokens_len: " << tokens_len << " but graph maximum is: " << tokens_len_max_;
+        tokens_len = tokens_len_max_;
+      }
       for (int64 s = 0; s < tokens_len; ++s) {
         Tensor* token_slice = output_list_tokens[s];
-        token_slice->flat<int64>().data()[b] = tokens_len;
+        token_slice->flat<int32>().data()[b] = tokens_len;
 
         Tensor* weight_slice = output_list_tokens_weights[s];
         weight_slice->flat<float>().data()[b] = 1.0f;

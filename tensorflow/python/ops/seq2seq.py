@@ -360,7 +360,7 @@ def embedding_tied_rnn_seq2seq(encoder_inputs, decoder_inputs, cell,
 
 def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
                       output_size=None, num_heads=1, loop_function=None,
-                      dtype=dtypes.float32, scope=None):
+                      dtype=dtypes.float32, sequence_length=None, scope=None):
   """RNN decoder with attention for the sequence-to-sequence model.
 
   Args:
@@ -392,6 +392,7 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
         new_attn = softmax(V^T * tanh(W * attention_states + U * new_state))
       and then we calculate the output:
         output = linear(cell_output, new_attn).
+    sequence_length: (optional) An int64 vector (tensor) size [batch_size].
     states: The state of each decoder cell in each time-step. This is a list
       with length len(decoder_inputs) -- one item for each time-step.
       Each item is a 2D Tensor of shape [batch_size x cell.state_size].
@@ -411,7 +412,8 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
     output_size = cell.output_size
 
   with vs.variable_scope(scope or "attention_decoder"):
-    batch_size = array_ops.shape(decoder_inputs[0])[0]  # Needed for reshaping.
+    # batch_size = array_ops.shape(decoder_inputs[0])[0]  # Needed for reshaping.
+    batch_size = attention_states.get_shape()[0].value
     attn_length = attention_states.get_shape()[1].value
     attn_size = attention_states.get_shape()[2].value
 
@@ -452,7 +454,7 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
     attns = [array_ops.zeros(batch_attn_size, dtype=dtype)
              for _ in xrange(num_heads)]
     for a in attns:  # Ensure the second shape of attention vectors is set.
-      a.set_shape([None, attn_size])
+      a.set_shape([batch_size, attn_size])
     for i in xrange(len(decoder_inputs)):
       if i > 0:
         vs.get_variable_scope().reuse_variables()
@@ -479,7 +481,7 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
 
 
 def embedding_attention_decoder(decoder_inputs, initial_state, attention_states,
-                                cell, num_symbols, num_heads=1,
+                                cell, num_symbols, embedding_size, num_heads=1,
                                 output_size=None, output_projection=None,
                                 feed_previous=False, dtype=dtypes.float32,
                                 scope=None):
@@ -528,7 +530,7 @@ def embedding_attention_decoder(decoder_inputs, initial_state, attention_states,
 
   with vs.variable_scope(scope or "embedding_attention_decoder"):
     with ops.device("/cpu:0"):
-      embedding = vs.get_variable("embedding", [num_symbols, cell.input_size])
+      embedding = vs.get_variable("embedding", [num_symbols, embedding_size])
 
     def extract_argmax_and_embed(prev, _):
       """Loop_function that extracts the symbol from prev and embeds it."""
@@ -545,6 +547,8 @@ def embedding_attention_decoder(decoder_inputs, initial_state, attention_states,
 
     emb_inp = [
         embedding_ops.embedding_lookup(embedding, i) for i in decoder_inputs]
+    for emb in emb_inp:
+      emb.set_shape([decoder_inputs[0].get_shape()[0].value, embedding_size])
     return attention_decoder(
         emb_inp, initial_state, attention_states, cell, output_size=output_size,
         num_heads=num_heads, loop_function=loop_function)
