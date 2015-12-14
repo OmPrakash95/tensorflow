@@ -664,13 +664,7 @@ def linear(args, output_size, bias, bias_start=0.0, scope=None):
 
   # Calculate the total size of arguments on dimension 1.
   total_arg_size = 0
-  shapes = None
-  try:
-    shapes = [a.get_shape().as_list() for a in args]
-  except:
-    print(len(args))
-    for arg in args:
-      print(arg.get_shape())
+  shapes = [a.get_shape().as_list() for a in args]
   for shape in shapes:
     if len(shape) != 2:
       raise ValueError("Linear is expecting 2D arguments: %s" % str(shapes))
