@@ -237,12 +237,20 @@ def run_train():
   with tf.device(device):
     with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
       model = create_model(sess, False)
-      writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
-      writer.flush()
+
+      summary_op = tf.merge_all_summaries()
+
+      summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
+      summary_writer.flush()
 
       _, _, losses = model.step(sess, False)
+
+      summary_str = sess.run(summary_op)
+      summary_writer.add_summary(summary_str, 0)
+      summary_writer.flush()
+
       print losses
-      print 'step_time: ' + model.step_time_total
+      print 'step_time: ' + str(model.step_time_total)
 
 
 def main(_):
