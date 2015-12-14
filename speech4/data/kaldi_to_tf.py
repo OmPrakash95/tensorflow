@@ -88,7 +88,7 @@ def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=
 
     example = tf.train.Example(features=tf.train.Features(feature={
         'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats_normalized.shape[0]])),
-        'features': tf.train.Feature(bytes_list=tf.train.BytesList(value=[feats_normalized.tostring(order='C')])),
+        'features': tf.train.Feature(float_list=tf.train.FloatList(value=feats_normalized.flatten('C').tolist())),
         'tokens': tf.train.Feature(int64_list=tf.train.Int64List(value=tokens)),
         'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(uttid)])),
         'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))

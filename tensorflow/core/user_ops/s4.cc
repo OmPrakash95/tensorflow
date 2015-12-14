@@ -111,14 +111,13 @@ class S4ParseUtterance : public OpKernel {
             ctx, ctx->allocate_output("text", TensorShape({batch_size}), &output_tensor_text));
 
         OP_REQUIRES_OK(ctx, ctx->output_list("tokens", &output_list_tokens));
-
         for (int64 s = 0; s < tokens_len_max_; ++s) {
           TensorShape token_shape({batch_size});
 
           Tensor* token_slice = nullptr;
           output_list_tokens.allocate(s, token_shape, &token_slice);
 
-          std::fill_n(token_slice->flat<int32>().data(), token_shape.num_elements(), -1);
+          std::fill_n(token_slice->flat<int32>().data(), token_shape.num_elements(), 0);
         }
 
         OP_REQUIRES_OK(
@@ -171,7 +170,7 @@ class S4ParseUtterance : public OpKernel {
       }
       for (int64 s = 0; s < tokens_len; ++s) {
         Tensor* token_slice = output_list_tokens[s];
-        token_slice->flat<int32>().data()[b] = tokens_len;
+        token_slice->flat<int32>().data()[b] = tokens.value(s);
 
         Tensor* weight_slice = output_list_tokens_weights[s];
         weight_slice->flat<float>().data()[b] = 1.0f;
