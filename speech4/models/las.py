@@ -15,6 +15,9 @@ import time
 
 FLAGS = tf.app.flags.FLAGS
 
+tf.app.flags.DEFINE_integer('device', 0,
+                            """The GPU device to use (set to negative to use CPU).""")
+
 tf.app.flags.DEFINE_integer('batch_size', 8,
                             """Number of utterances to process in a batch.""")
 
@@ -60,6 +63,8 @@ class LASModel(object):
     self.attention_embedding_size = attention_embedding_size
 
     self.max_gradient_norm = max_gradient_norm
+
+    self.step_time_total = 0
 
     self.global_step = tf.Variable(0, trainable=False)
 
@@ -166,13 +171,18 @@ class LASModel(object):
 
 
   def create_loss(self):
-    self.losses = []
+    start_time = time.time()
 
+    self.losses = []
     self.losses.append(seq2seq.sequence_loss(
         self.decoder_states[-1], self.tokens[1:], self.tokens_weights[1:], self.vocab_size))
 
+    print('create_loss graph time %f' % (time.time() - start_time))
+
 
   def create_optimizer(self):
+    start_time = time.time()
+
     params = tf.trainable_variables()
 
     self.gradient_norms = []
@@ -186,21 +196,29 @@ class LASModel(object):
     self.updates.append(opt.apply_gradients(
         zip(clipped_gradients, params), global_step=self.global_step))
 
+    print('create_optimizer graph time %f' % (time.time() - start_time))
+
 
   def step(self, sess, forward_only):
+    start_time = time.time()
+
     ret = [None] * 3
     if forward_only:
-      ret = sess.run(self.losses)
+      ret[2] = sess.run(self.losses)
     else:
       temp = sess.run(self.updates + self.gradient_norms + self.losses)
       ret[0] = temp[0:len(self.updates)]
       ret[1] = temp[len(ret[0]):len(ret[0]) + len(self.gradient_norms)]
       ret[2] = temp[len(ret[0]) + len(ret[1]):len(ret[0]) + len(ret[1]) + len(self.losses)]
 
+    self.step_time_total += (time.time() - start_time)
+
     return ret
 
 
 def create_model(sess, forward_only):
+  start_time = time.time()
+
   model = LASModel(
       FLAGS.batch_size, FLAGS.features_width, FLAGS.features_len_max, FLAGS.vocab_size, FLAGS.embedding_size,
       FLAGS.tokens_len_max, FLAGS.encoder_cell_size, FLAGS.decoder_cell_size, FLAGS.attention_embedding_size,
@@ -209,17 +227,22 @@ def create_model(sess, forward_only):
   sess.run(tf.initialize_all_variables())
   tf.train.start_queue_runners(sess=sess)
 
+  print('create_model graph time %f' % (time.time() - start_time))
+
   return model
 
 
 def run_train():
-  with tf.Session() as sess:
-    model = create_model(sess, False)
+  device = '/gpu:%d' % FLAGS.device if FLAGS.device >= 0 else '/cpu:0'
+  with tf.device(device):
+    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
+      model = create_model(sess, False)
+      writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
+      writer.flush()
 
-    writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
-
-    _, _, losses = model.step(sess, False)
-    print losses
+      _, _, losses = model.step(sess, False)
+      print losses
+      print 'step_time: ' + model.step_time_total
 
 
 def main(_):
