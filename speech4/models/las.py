@@ -79,7 +79,7 @@ class LASModel(object):
     self.create_loss()
 
     # Create the optimizer.
-    self.create_optimizer()
+    # self.create_optimizer()
 
     self.saver = tf.train.Saver(tf.all_variables())
 
@@ -92,7 +92,7 @@ class LASModel(object):
 
     serialized = tf.train.shuffle_batch(
         [serialized], batch_size=self.batch_size, num_threads=2, capacity=self.batch_size * 4 + 512,
-        min_after_dequeue=512)
+        min_after_dequeue=512, seed=1000)
     
     # Parse the batched of serialized strings into the relevant utterance features.
     self.features, self.features_len, _, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
@@ -161,13 +161,13 @@ class LASModel(object):
       if attention_states:
         if len(self.decoder_states) == 1:
           self.decoder_states.append(seq2seq.embedding_attention_decoder(
-              self.decoder_states[-1], decoder_initial_state, attention_states, cell, self.embedding_size, self.vocab_size)[0])
+              self.decoder_states[-1], decoder_initial_state, attention_states, cell, self.embedding_size, self.vocab_size, sequence_length=self.tokens_len)[0])
         else:
           self.decoder_states.append(seq2seq.attention_decoder(
-              self.decoder_states[-1], decoder_initial_state, attention_states, cell)[0])
+              self.decoder_states[-1], decoder_initial_state, attention_states, cell, sequence_length=self.tokens_len)[0])
       else:
         self.decoder_states.append(seq2seq.rnn_decoder(
-            self.decoder_states[-1], decoder_initial_state, cell)[0])
+            self.decoder_states[-1], decoder_initial_state, cell, sequence_length=self.tokens_len)[0])
 
 
   def create_loss(self):
@@ -202,16 +202,21 @@ class LASModel(object):
   def step(self, sess, forward_only):
     start_time = time.time()
 
-    ret = [None] * 3
+    ret = [None] * 4
     if forward_only:
-      ret[2] = sess.run(self.losses)
+      temp = sess.run([self.uttid, self.text, self.features_len] + self.losses)
+      ret[0] = temp[0:3]
     else:
-      temp = sess.run(self.updates + self.gradient_norms + self.losses)
-      ret[0] = temp[0:len(self.updates)]
-      ret[1] = temp[len(ret[0]):len(ret[0]) + len(self.gradient_norms)]
-      ret[2] = temp[len(ret[0]) + len(ret[1]):len(ret[0]) + len(ret[1]) + len(self.losses)]
+      temp = sess.run([self.uttid, self.text, self.features_len] + self.updates + self.gradient_norms + self.losses)
+      # temp = sess.run([self.uttid, self.text, self.features_len] + self.encoder_states[-1][0])
+      ret[0] = temp[0:3]
+      ret[1] = temp[len(ret[0])                            :len(ret[0]) + len(self.updates)]
+      ret[2] = temp[len(ret[0]) + len(ret[1])              :len(ret[0]) + len(ret[1]) + len(self.gradient_norms)]
+      ret[3] = temp[len(ret[0]) + len(ret[1]) + len(ret[2]):len(ret[0]) + len(ret[1]) + len(ret[2]) + len(self.losses)]
 
-    self.step_time_total += (time.time() - start_time)
+    step_time = time.time() - start_time
+    print(step_time)
+    self.step_time_total += step_time
 
     return ret
 
@@ -243,7 +248,18 @@ def run_train():
       summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
       summary_writer.flush()
 
-      _, _, losses = model.step(sess, False)
+      input_, _, _, losses = model.step(sess, True)
+      input_, _, _, losses = model.step(sess, True)
+      input_, _, _, losses = model.step(sess, True)
+      input_, _, _, losses = model.step(sess, True)
+      input_, _, _, losses = model.step(sess, True)
+      input_, _, _, losses = model.step(sess, True)
+      input_, _, _, losses = model.step(sess, True)
+      input_, _, _, losses = model.step(sess, True)
+
+      print input_[0]
+      print input_[1]
+      print input_[2]
 
       summary_str = sess.run(summary_op)
       summary_writer.add_summary(summary_str, 0)
