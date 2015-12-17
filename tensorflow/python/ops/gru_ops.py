@@ -10,10 +10,11 @@ from tensorflow.python.ops import common_shapes
 # pylint: disable=wildcard-import
 # 'Constant' gets imported in the module 'array_ops'.
 from tensorflow.python.ops.constant_op import constant
-from tensorflow.python.ops.gen_array_ops import *
+from tensorflow.python.ops import variable_scope as vs
+from tensorflow.python.ops import gen_gru_ops
 
 
-def gru(cell_size, sequence_len, xs, name=none):
+def gru(cell_size, sequence_len, xs, name=None, scope=None):
   r"""gru
 
   args:
@@ -31,6 +32,8 @@ def gru(cell_size, sequence_len, xs, name=none):
     hs: a list with the same number of `tensor` objects as `xs` of `tensor` objects of type `float32`.
   """
   with vs.variable_scope(scope or "Gru"):
+    input_size = xs[0].get_shape()[1].value
+
     wxr = vs.get_variable("wxr", [input_size, cell_size])
     whr = vs.get_variable("whr", [cell_size, cell_size])
     wxz = vs.get_variable("wxz", [input_size, cell_size])
@@ -38,10 +41,16 @@ def gru(cell_size, sequence_len, xs, name=none):
     wxh = vs.get_variable("wxh", [input_size, cell_size])
     whh = vs.get_variable("whh", [cell_size, cell_size])
 
-    return _op_def_lib.apply_op("gru", cell_size=cell_size,
-        sequence_len_max=len(xs), sequence_len=sequence_len, wxr=wxr, whr=whr,
-        wxz=wxz, whz=whz, wxh=wxh, whh=whh, xs=xs, cell_size=cell_size,
-        name=name)
+    return gen_gru_ops.gru(cell_size=cell_size, sequence_len=sequence_len,
+        wxr=wxr, whr=whr, wxz=wxz, whz=whz, wxh=wxh, whh=whh, xs=xs, name=name)
+
+
+@ops.RegisterShape("Gru")
+def _GruShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  cell_size = op.get_attr("cell_size")
+
+  return [tensor_shape.TensorShape([batch_size, cell_size])] * (len(op.inputs) * 5)
 
 
 @ops.RegisterGradient("Gru")

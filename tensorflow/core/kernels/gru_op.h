@@ -5,8 +5,12 @@
 
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "tensorflow/core/framework/tensor_types.h"
+#include "tensorflow/core/public/tensor.h"
 
 namespace tensorflow {
+typedef Eigen::ThreadPoolDevice CPUDevice;
+typedef Eigen::GpuDevice GPUDevice;
+
 namespace functor {
 
 // Helpers to define tensor<T> needed by GruMatMul op.
@@ -42,5 +46,27 @@ struct GruMatMulFunctor {
 };
 
 }  // namespace functor
+
+template <typename Device>
+struct GruActivationSigmoid {
+  void operator()(const Device& d, Tensor* x);
+};
+
+template <typename Device>
+struct GruActivationTanh {
+  void operator()(const Device& d, Tensor* x);
+};
+
+template <typename Device>
+struct GruCWiseMult {
+  void operator()(const GPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c);
+};
+
+template <typename Device>
+struct GruH {
+  void operator()(
+      const Device& d, const Tensor& z, const Tensor& h_prev, const Tensor& g, Tensor* h);
+};
+
 }  // namespace tensorflow
 #endif  // TENSORFLOW_KERNELS_GRU_OP_H_

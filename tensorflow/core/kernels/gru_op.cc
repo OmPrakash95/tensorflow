@@ -7,10 +7,8 @@
 #include "tensorflow/core/kernels/gru_op.h"
 
 #include "tensorflow/core/framework/numeric_op.h"
-#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
-#include "tensorflow/core/public/tensor.h"
 
 #if GOOGLE_CUDA
 #include "tensorflow/stream_executor/stream.h"
@@ -18,9 +16,6 @@
 #endif  // GOOGLE_CUDA
 
 namespace tensorflow {
-
-typedef Eigen::ThreadPoolDevice CPUDevice;
-typedef Eigen::GpuDevice GPUDevice;
 
 namespace functor {
 
@@ -40,14 +35,12 @@ struct GruMatMulFunctor<CPUDevice> {
 
 #if GOOGLE_CUDA
 
-namespace {
 template <typename T>
 perftools::gputools::DeviceMemory<float> AsDeviceMemory(const T* cuda_memory) {
   perftools::gputools::DeviceMemoryBase wrapped(const_cast<T*>(cuda_memory));
   perftools::gputools::DeviceMemory<float> typed(wrapped);
   return typed;
 }
-}  // namespace
 
 #endif  // GOOGLE_CUDA
 
@@ -125,6 +118,38 @@ void GruMatMul(OpKernelContext* ctx, bool a_trans, const Tensor& a,
   LaunchGruMatMul<Device>::launch(ctx, a, b, dim_pair, beta, out);
 }
 
+template <>
+struct GruActivationSigmoid<CPUDevice> {
+  void operator()(const CPUDevice& d, Tensor* x) {
+    x->vec<float>().device(d) = x->vec<float>().sigmoid();
+  }
+};
+
+template <>
+struct GruActivationTanh<CPUDevice> {
+  void operator()(const CPUDevice& d, Tensor* x) {
+    x->vec<float>().device(d) = x->vec<float>().tanh();
+  }
+};
+
+template <>
+struct GruCWiseMult<CPUDevice> {
+  void operator()(const CPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c) {
+    c->vec<float>().device(d) = a.vec<float>() * b.vec<float>();
+  }
+};
+
+template <>
+struct GruH<CPUDevice> {
+  void operator()(
+      const CPUDevice& d, const Tensor& z, const Tensor& h_prev, const Tensor& g, Tensor* h) {
+    h->vec<float>().device(d) =
+        z.vec<float>() * h_prev.vec<float>() +
+        (z.vec<float>().constant(1.0f) - z.vec<float>()) * g.vec<float>();
+  }
+};
+
+// Partial specialization GruMatMulFunctor<Device=CPUDevice, T>.
 template <typename Device>
 class GruOp : public OpKernel {
  public:
@@ -149,13 +174,13 @@ class GruOp : public OpKernel {
         std::max_element(seq_lens_vec.begin(), seq_lens_vec.end()));
     const int64 batch_size = seq_lens_vec.size();
 
-#define INPUT_LIST(T)                                                          \
+  #define INPUT_LIST(T)                                                          \
     OpInputList T;                                                             \
     OP_REQUIRES_OK(ctx, ctx->input_list(#T, &T));
 
     INPUT_LIST(xs);
 
-#define INPUT_TENSOR(T)                                                        \
+  #define INPUT_TENSOR(T)                                                        \
     const Tensor* T = nullptr;                                                 \
     OP_REQUIRES_OK(ctx, ctx->input(#T, &T));
 
@@ -166,7 +191,7 @@ class GruOp : public OpKernel {
     INPUT_TENSOR(wxh);
     INPUT_TENSOR(whh);
 
-#define OUTPUT_LIST(T)                                                         \
+  #define OUTPUT_LIST(T)                                                         \
     OpOutputList T;                                                            \
     OP_REQUIRES_OK(ctx, ctx->output_list(#T, &T));
 
@@ -183,7 +208,7 @@ class GruOp : public OpKernel {
       const Tensor x = xs[t];
       const Tensor* h_prev = t <= 0 ? nullptr : hs[t - 1];
 
-#define OUTPUT_LIST_ALLOCATE(OP_OUTPUT_LIST, NAME, SHAPE)                      \
+  #define OUTPUT_LIST_ALLOCATE(OP_OUTPUT_LIST, NAME, SHAPE)                      \
       Tensor* NAME = nullptr;                                                  \
       OP_OUTPUT_LIST.allocate(t, SHAPE, &NAME);
 
@@ -196,32 +221,26 @@ class GruOp : public OpKernel {
       // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
       GruMatMul<Device>(ctx, false, x, false, *wxr, 0.0f, r);
       if (t >= 0) GruMatMul<Device>(ctx, false, *h_prev, false, *whr, 1.0f, r);
-      r->vec<float>().device(ctx->eigen_device<Device>()) =
-          r->vec<float>().sigmoid();
+      GruActivationSigmoid<Device>()(ctx->eigen_device<Device>(), r);
 
       // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
       GruMatMul<Device>(ctx, false, x, false, *wxz, 0.0f, z);
       if (t >= 0) GruMatMul<Device>(ctx, false, *h_prev, false, *whz, 1.0f, z);
-      z->vec<float>().device(ctx->eigen_device<Device>()) =
-          z->vec<float>().sigmoid();
+      GruActivationSigmoid<Device>()(ctx->eigen_device<Device>(), z);
 
       // rh[t] = r[t] .* h_prev[t]
       // g[t] = tanh(x[t] Wxh + rh[t] Whh)
       if (t >= 0) {
-        rh->vec<float>().device(ctx->eigen_device<Device>()) =
-            r->vec<float>() * h_prev->vec<float>();
+        GruCWiseMult<Device>()(ctx->eigen_device<Device>(), *r, *h_prev, rh);
       } else {
         rh->vec<float>().setZero();
       }
       GruMatMul<Device>(ctx, false, x, false, *wxh, 0.0f, g);
       if (h_prev) GruMatMul<Device>(ctx, false, *rh, false, *whh, 1.0f, g);
-      g->vec<float>().device(ctx->eigen_device<Device>()) =
-          g->vec<float>().tanh();
+      GruActivationTanh<Device>()(ctx->eigen_device<Device>(), g);
 
       // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
-      h->vec<float>().device(ctx->eigen_device<Device>()) =
-          z->vec<float>() * h_prev->vec<float>() +
-          (z->vec<float>().constant(1.0f) - z->vec<float>()) * g->vec<float>();
+      GruH<Device>()(ctx->eigen_device<Device>(), *z, *h_prev, *g, h);
     }
   }
 
@@ -323,44 +342,44 @@ class GruGradOp : public OpKernel {
       OUTPUT_LIST_ALLOCATE(dxs, dx, x.shape());
 
       // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
-      dz.vec<float>().device(ctx->eigen_device<Device>()) =
-          dh.vec<float>() * h_prev->vec<float>() -
-          dh.vec<float>() * g.vec<float>();
+      // dz.vec<float>().device(ctx->eigen_device<Device>()) =
+      //     dh.vec<float>() * h_prev->vec<float>() -
+      //     dh.vec<float>() * g.vec<float>();
 
-      dh_prev.vec<float>().device(ctx->eigen_device<Device>()) =
-          dh_prev.vec<float>() + dh.vec<float>() * z.vec<float>();
+      // dh_prev.vec<float>().device(ctx->eigen_device<Device>()) =
+      //     dh_prev.vec<float>() + dh.vec<float>() * z.vec<float>();
 
-      dg.vec<float>().device(ctx->eigen_device<Device>()) =
-          dh.vec<float>() * (z.vec<float>().constant(1.0f) - z.vec<float>());
+      // dg.vec<float>().device(ctx->eigen_device<Device>()) =
+      //     dh.vec<float>() * (z.vec<float>().constant(1.0f) - z.vec<float>());
 
-      // g[t] = tanh(x[t] Wxh + rh[t] Whh)
-      dg.vec<float>().device(ctx->eigen_device<Device>()) = dg.vec<float>() *
-          (g.vec<float>().constant(1.0f) - g.vec<float>() * g.vec<float>());
-      GruMatMul<Device>(ctx, false, dg, true, *wxh, 0.0f, dx);
-      GruMatMul<Device>(ctx, false, dg, true, *whh, 0.0f, &drh);
+      // // g[t] = tanh(x[t] Wxh + rh[t] Whh)
+      // dg.vec<float>().device(ctx->eigen_device<Device>()) = dg.vec<float>() *
+      //     (g.vec<float>().constant(1.0f) - g.vec<float>() * g.vec<float>());
+      // GruMatMul<Device>(ctx, false, dg, true, *wxh, 0.0f, dx);
+      // GruMatMul<Device>(ctx, false, dg, true, *whh, 0.0f, &drh);
 
-      if (t > 0) {
-        dr.vec<float>().device(ctx->eigen_device<Device>()) =
-            drh.vec<float>() * h_prev->vec<float>();
-        dh_prev.vec<float>().device(ctx->eigen_device<Device>()) =
-            dh_prev.vec<float>() + drh.vec<float>() * r.vec<float>();
-      } else {
-        dr.vec<float>().setZero();
-      }
+      // if (t > 0) {
+      //   dr.vec<float>().device(ctx->eigen_device<Device>()) =
+      //       drh.vec<float>() * h_prev->vec<float>();
+      //   dh_prev.vec<float>().device(ctx->eigen_device<Device>()) =
+      //       dh_prev.vec<float>() + drh.vec<float>() * r.vec<float>();
+      // } else {
+      //   dr.vec<float>().setZero();
+      // }
 
-      // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
-      dz.vec<float>().device(ctx->eigen_device<Device>()) = dz.vec<float>() *
-          z.vec<float>() * (z.vec<float>().constant(1.0f) - z.vec<float>());
-      GruMatMul<Device>(ctx, false, dz, true, *wxz, 1.0f, dx);
-      if (t > 0) GruMatMul<Device>(ctx, false, dz, true, *whz, 1.0f, &dh_prev);
+      // // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
+      // dz.vec<float>().device(ctx->eigen_device<Device>()) = dz.vec<float>() *
+      //     z.vec<float>() * (z.vec<float>().constant(1.0f) - z.vec<float>());
+      // GruMatMul<Device>(ctx, false, dz, true, *wxz, 1.0f, dx);
+      // if (t > 0) GruMatMul<Device>(ctx, false, dz, true, *whz, 1.0f, &dh_prev);
 
-      // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
-      if (t > 0) {
-        dr.vec<float>().device(ctx->eigen_device<Device>()) = dr.vec<float>() *
-            r.vec<float>() * (r.vec<float>().constant(1.0f) - r.vec<float>());
-        GruMatMul<Device>(ctx, false, dr, true, *wxr, 1.0f, dx);
-        GruMatMul<Device>(ctx, false, dr, true, *whr, 1.0f, &dh_prev);
-      }
+      // // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
+      // if (t > 0) {
+      //   dr.vec<float>().device(ctx->eigen_device<Device>()) = dr.vec<float>() *
+      //       r.vec<float>() * (r.vec<float>().constant(1.0f) - r.vec<float>());
+      //   GruMatMul<Device>(ctx, false, dr, true, *wxr, 1.0f, dx);
+      //   GruMatMul<Device>(ctx, false, dr, true, *whr, 1.0f, &dh_prev);
+      // }
     }
 
     for (int64 t = 0; t < sequence_len_max; ++t) {
