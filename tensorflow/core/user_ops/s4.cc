@@ -9,6 +9,7 @@
 using namespace tensorflow;
 
 namespace {
+
 REGISTER_OP("S4MaskAttentionEnergies")
     .Attr("one: int = 1")
     .Attr("median_window_left: int = 10")
