@@ -196,18 +196,19 @@ class GruOp : public OpKernel {
 
       // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
       MatMul<Device>(ctx, false, x, false, *wxr, 0.0f, r);
-      if (h_prev) MatMul<Device>(ctx, false, *h_prev, false, *whr, 1.0f, r);
+      if (t >= 0) MatMul<Device>(ctx, false, *h_prev, false, *whr, 1.0f, r);
       r->vec<float>().device(ctx->eigen_device<Device>()) =
           r->vec<float>().sigmoid();
 
       // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
       MatMul<Device>(ctx, false, x, false, *wxz, 0.0f, z);
-      if (h_prev) MatMul<Device>(ctx, false, *h_prev, false, *whz, 1.0f, z);
+      if (t >= 0) MatMul<Device>(ctx, false, *h_prev, false, *whz, 1.0f, z);
       z->vec<float>().device(ctx->eigen_device<Device>()) =
           z->vec<float>().sigmoid();
 
+      // rh[t] = r[t] .* h_prev[t]
       // g[t] = tanh(x[t] Wxh + rh[t] Whh)
-      if (h_prev) {
+      if (t >= 0) {
         rh->vec<float>().device(ctx->eigen_device<Device>()) =
             r->vec<float>() * h_prev->vec<float>();
       } else {
@@ -215,13 +216,13 @@ class GruOp : public OpKernel {
       }
       MatMul<Device>(ctx, false, x, false, *wxh, 0.0f, g);
       if (h_prev) MatMul<Device>(ctx, false, *rh, false, *whh, 1.0f, g);
-
       g->vec<float>().device(ctx->eigen_device<Device>()) =
           g->vec<float>().tanh();
 
       // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
       h->vec<float>().device(ctx->eigen_device<Device>()) =
-          z->vec<float>() * h_prev->vec<float>() + (z->vec<float>().constant(1.0f) - z->vec<float>()) * g->vec<float>();
+          z->vec<float>() * h_prev->vec<float>() +
+          (z->vec<float>().constant(1.0f) - z->vec<float>()) * g->vec<float>();
     }
   }
 
@@ -346,7 +347,6 @@ class GruGradOp : public OpKernel {
             dh_prev.vec<float>() + drh.vec<float>() * r.vec<float>();
       } else {
         dr.vec<float>().setZero();
-        dh_prev.vec<float>().setZero();
       }
 
       // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
@@ -356,10 +356,12 @@ class GruGradOp : public OpKernel {
       if (t > 0) MatMul<Device>(ctx, false, dz, true, *whz, 1.0f, &dh_prev);
 
       // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
-      dr.vec<float>().device(ctx->eigen_device<Device>()) = dr.vec<float>() *
-          r.vec<float>() * (r.vec<float>().constant(1.0f) - r.vec<float>());
-      MatMul<Device>(ctx, false, dr, true, *wxr, 1.0f, dx);
-      if (t > 0) MatMul<Device>(ctx, false, dr, true, *whr, 1.0f, &dh_prev);
+      if (t > 0) {
+        dr.vec<float>().device(ctx->eigen_device<Device>()) = dr.vec<float>() *
+            r.vec<float>() * (r.vec<float>().constant(1.0f) - r.vec<float>());
+        MatMul<Device>(ctx, false, dr, true, *wxr, 1.0f, dx);
+        MatMul<Device>(ctx, false, dr, true, *whr, 1.0f, &dh_prev);
+      }
     }
   }
 
