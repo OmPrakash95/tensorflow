@@ -35,6 +35,7 @@ tf_gen_op_wrappers_cc(
         "candidate_sampling_ops",
         "control_flow_ops",
         "data_flow_ops",
+        "gru_ops",
         "image_ops",
         "io_ops",
         "linalg_ops",

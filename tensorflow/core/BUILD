@@ -206,6 +206,7 @@ tf_cuda_library(
         ":gpu_runtime",
         ":kernels",
         ":lib",
+        ":user_kernels",
     ],
 )
 
@@ -275,8 +276,6 @@ tf_gpu_kernel_library(
         [
             "kernels/**/*.h",
             "kernels/*.cu.cc",
-            "user_kernels/**/*.h",
-            "user_kernels/*.cu.cc",
         ],
     ),
     visibility = ["//visibility:public"],
@@ -342,6 +341,7 @@ tf_gen_op_libs(
         "candidate_sampling_ops",
         "control_flow_ops",
         "data_flow_ops",
+        "gru_ops",
         "image_ops",
         "io_ops",
         "linalg_ops",
@@ -744,4 +744,52 @@ filegroup(
         ],
     ),
     visibility = ["//tensorflow:__subpackages__"],
+)
+
+tf_cuda_library(
+    name = "user_kernels",
+    srcs = glob(
+        [
+            "user_kernels/**/*.h",
+            "user_kernels/**/*.cc",
+        ],
+        exclude = [
+            "**/*test*",
+            "**/*main.cc",
+            "user_kernels/**/*.cu.cc",
+        ],
+    ),
+    copts = tf_copts(),
+    cuda_deps = [
+        ":user_gpu_kernels",
+    ],
+    linkstatic = 0,
+    visibility = ["//visibility:public"],
+    deps = [
+        "@gemmlowp//:eight_bit_int_gemm",
+        ":core",
+        ":lib",
+        ":ops",
+        ":protos_cc",
+        ":stream_executor",
+        "//tensorflow/models/embedding:word2vec_kernels",
+        "//third_party/eigen3",
+    ],
+    alwayslink = 1,
+)
+
+tf_gpu_kernel_library(
+    name = "user_gpu_kernels",
+    srcs = glob(
+        [
+            "user_kernels/**/*.h",
+            "user_kernels/*.cu.cc",
+        ],
+    ),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":cuda",
+        ":framework",
+        "//third_party/eigen3",
+    ],
 )

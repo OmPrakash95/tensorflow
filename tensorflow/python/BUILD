@@ -415,6 +415,13 @@ tf_gen_op_wrapper_py(
 )
 
 tf_gen_op_wrapper_py(
+    name = "gru_ops",
+    hidden = [
+    ],
+    require_shape_functions = True,
+)
+
+tf_gen_op_wrapper_py(
     name = "image_ops",
     hidden = [
         "ResizeBilinearGrad",
@@ -615,6 +622,7 @@ py_library(
         "ops/gen_state_ops.py",
         "ops/gen_string_ops.py",
         "ops/gen_summary_ops.py",
+        "ops/gru_ops.py",
         "ops/gradients.py",
         "ops/image_grad.py",
         "ops/image_ops.py",
@@ -653,6 +661,7 @@ py_library(
         ":control_flow_ops",
         ":data_flow_ops",
         ":framework",
+        ":gru_ops",
         ":io_ops",
         ":linalg_ops",
         ":logging_ops",
