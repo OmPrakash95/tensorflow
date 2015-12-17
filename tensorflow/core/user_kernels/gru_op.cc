@@ -150,75 +150,76 @@ class GruOp : public OpKernel {
         std::max_element(seq_lens_vec.begin(), seq_lens_vec.end()));
     const int64 batch_size = seq_lens_vec.size();
 
-    // Input.
-    OpInputList xs;
-    OP_REQUIRES_OK(ctx, ctx->input_list("xs", &xs));
+#define INPUT_LIST(T)                                                          \
+    OpInputList T;                                                             \
+    OP_REQUIRES_OK(ctx, ctx->input_list(#T, &T));
 
-    // Weights.
-    const Tensor* wxr = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->input("wxr", &wxr));
-    const Tensor* whr = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->input("whr", &wxr));
-    const Tensor* wxz = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->input("wxz", &wxr));
-    const Tensor* whz = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->input("whz", &wxr));
-    const Tensor* wxh = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->input("wxh", &wxr));
-    const Tensor* whh = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->input("whh", &wxr));
+    INPUT_LIST(xs);
 
-    // Outputs.
-    OpOutputList rs;
-    OP_REQUIRES_OK(ctx, ctx->output_list("rs", &rs));
-    OpOutputList zs;
-    OP_REQUIRES_OK(ctx, ctx->output_list("zs", &zs));
-    OpOutputList rhs;
-    OP_REQUIRES_OK(ctx, ctx->output_list("rhs", &rhs));
-    OpOutputList gs;
-    OP_REQUIRES_OK(ctx, ctx->output_list("gs", &gs));
-    OpOutputList hs;
-    OP_REQUIRES_OK(ctx, ctx->output_list("hs", &hs));
+#define INPUT_TENSOR(T)                                                        \
+    const Tensor* T = nullptr;                                                 \
+    OP_REQUIRES_OK(ctx, ctx->input(#T, &T));
+
+    INPUT_TENSOR(wxr);
+    INPUT_TENSOR(whr);
+    INPUT_TENSOR(wxz);
+    INPUT_TENSOR(whz);
+    INPUT_TENSOR(wxh);
+    INPUT_TENSOR(whh);
+
+#define OUTPUT_LIST(T)                                                         \
+    OpOutputList T;                                                            \
+    OP_REQUIRES_OK(ctx, ctx->output_list(#T, &T));
+
+    OUTPUT_LIST(rs);
+    OUTPUT_LIST(zs);
+    OUTPUT_LIST(rhs);
+    OUTPUT_LIST(gs);
+    OUTPUT_LIST(hs);
 
     if (sequence_len_max >= sequence_len_max_) {
       sequence_len_max = sequence_len_max_;
     }
     for (int64 t = 0; t < sequence_len_max; ++t) {
-      const Tensor* x = &xs[t];
+      const Tensor x = xs[t];
       const Tensor* h_prev = t <= 0 ? nullptr : hs[t - 1];
-      Tensor* r = nullptr;
-      rs.allocate(t, TensorShape({batch_size, cell_size_}), &r);
-      Tensor* z = nullptr;
-      zs.allocate(t, TensorShape({batch_size, cell_size_}), &z);
-      Tensor* rh = nullptr;
-      rhs.allocate(t, TensorShape({batch_size, cell_size_}), &rh);
-      Tensor* g = nullptr;
-      gs.allocate(t, TensorShape({batch_size, cell_size_}), &g);
-      Tensor* h = nullptr;
-      hs.allocate(t, TensorShape({batch_size, cell_size_}), &h);
 
-      MatMul<Device>(ctx, false, *x, false, *wxr, 0.0f, r);
+#define OUTPUT_LIST_ALLOCATE(OP_OUTPUT_LIST, NAME, SHAPE)                      \
+      Tensor* NAME = nullptr;                                                  \
+      OP_OUTPUT_LIST.allocate(t, SHAPE, &NAME);
+
+      OUTPUT_LIST_ALLOCATE(rs, r, TensorShape({batch_size, cell_size_}));
+      OUTPUT_LIST_ALLOCATE(zs, z, TensorShape({batch_size, cell_size_}));
+      OUTPUT_LIST_ALLOCATE(rhs, rh, TensorShape({batch_size, cell_size_}));
+      OUTPUT_LIST_ALLOCATE(gs, g, TensorShape({batch_size, cell_size_}));
+      OUTPUT_LIST_ALLOCATE(hs, h, TensorShape({batch_size, cell_size_}));
+
+      // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
+      MatMul<Device>(ctx, false, x, false, *wxr, 0.0f, r);
       if (h_prev) MatMul<Device>(ctx, false, *h_prev, false, *whr, 1.0f, r);
       r->vec<float>().device(ctx->eigen_device<Device>()) =
           r->vec<float>().sigmoid();
 
-      MatMul<Device>(ctx, false, *x, false, *wxz, 0.0f, r);
-      if (h_prev) MatMul<Device>(ctx, false, *h_prev, false, *whz, 1.0f, r);
+      // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
+      MatMul<Device>(ctx, false, x, false, *wxz, 0.0f, z);
+      if (h_prev) MatMul<Device>(ctx, false, *h_prev, false, *whz, 1.0f, z);
       z->vec<float>().device(ctx->eigen_device<Device>()) =
           z->vec<float>().sigmoid();
 
+      // g[t] = tanh(x[t] Wxh + rh[t] Whh)
       if (h_prev) {
         rh->vec<float>().device(ctx->eigen_device<Device>()) =
             r->vec<float>() * h_prev->vec<float>();
       } else {
         rh->vec<float>().setZero();
       }
-      MatMul<Device>(ctx, false, *x, false, *wxh, 0.0f, r);
-      if (h_prev) MatMul<Device>(ctx, false, *rh, false, *whh, 1.0f, r);
+      MatMul<Device>(ctx, false, x, false, *wxh, 0.0f, g);
+      if (h_prev) MatMul<Device>(ctx, false, *rh, false, *whh, 1.0f, g);
 
       g->vec<float>().device(ctx->eigen_device<Device>()) =
           g->vec<float>().tanh();
 
+      // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
       h->vec<float>().device(ctx->eigen_device<Device>()) =
           z->vec<float>() * h_prev->vec<float>() + (z->vec<float>().constant(1.0f) - z->vec<float>()) * g->vec<float>();
     }
@@ -229,13 +230,152 @@ class GruOp : public OpKernel {
   int64 sequence_len_max_;
 };
 
-REGISTER_KERNEL_BUILDER(Name("AttentionContextReduce")
+REGISTER_KERNEL_BUILDER(Name("GruOp")
                              .Device(DEVICE_CPU),
                         GruOp<CPUDevice>);
 
 #if GOOGLE_CUDA
-REGISTER_KERNEL_BUILDER(Name("AttentionContextReduce")
+REGISTER_KERNEL_BUILDER(Name("GruOp")
                              .Device(DEVICE_GPU),
                         GruOp<GPUDevice>);
 #endif  // GOOGLE_CUDA
+
+template <typename Device>
+class GruGradOp : public OpKernel {
+ public:
+  explicit GruGradOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("cell_size", &cell_size_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("sequence_len_max", &sequence_len_max_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    const Tensor* sequence_len = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("sequence_len", &sequence_len));
+
+    // Get the sequence length in CPU memory.
+    auto sequence_len_t = sequence_len->vec<int64>();
+    std::vector<int64> seq_lens_vec(sequence_len_t.size());
+    ctx->eigen_device<Device>().memcpyDeviceToHost(
+        seq_lens_vec.data(), sequence_len_t.data(),
+        sizeof(int64) * sequence_len_t.size());
+
+    // Maximum number of compute unrolls.
+    int64 sequence_len_max = std::distance(seq_lens_vec.begin(),
+        std::max_element(seq_lens_vec.begin(), seq_lens_vec.end()));
+
+    INPUT_LIST(xs);
+    INPUT_LIST(rs);
+    INPUT_LIST(zs);
+    INPUT_LIST(rhs);
+    INPUT_LIST(gs);
+    INPUT_LIST(hs);
+
+    INPUT_TENSOR(wxr);
+    INPUT_TENSOR(whr);
+    INPUT_TENSOR(wxz);
+    INPUT_TENSOR(whz);
+    INPUT_TENSOR(wxh);
+    INPUT_TENSOR(whh);
+
+#define MUTABLE_INPUT_LIST(T)                                                  \
+    OpMutableInputList T;                                                      \
+    OP_REQUIRES_OK(ctx, ctx->mutable_input_list(#T, &T));
+
+    // Gradients.
+    MUTABLE_INPUT_LIST(drs);
+    MUTABLE_INPUT_LIST(dzs);
+    MUTABLE_INPUT_LIST(drhs);
+    MUTABLE_INPUT_LIST(dgs);
+    MUTABLE_INPUT_LIST(dhs);
+
+#define OUTPUT_TENSOR(NAME, SHAPE)                                             \
+    Tensor* NAME = nullptr;                                                    \
+    ctx->allocate_output(#NAME, SHAPE, &NAME);
+    OUTPUT_TENSOR(dwxr, wxr->shape());
+    OUTPUT_TENSOR(dwhr, whr->shape());
+    OUTPUT_TENSOR(dwxz, wxz->shape());
+    OUTPUT_TENSOR(dwhz, whz->shape());
+    OUTPUT_TENSOR(dwxh, wxh->shape());
+    OUTPUT_TENSOR(dwhh, whh->shape());
+
+    OUTPUT_LIST(dxs);
+
+    if (sequence_len_max >= sequence_len_max_) {
+      sequence_len_max = sequence_len_max_;
+    }
+    for (int64 t = sequence_len_max - 1; t >= 0; --t) {
+      const Tensor x = xs[t];
+      const Tensor r = rs[t];
+      const Tensor z = zs[t];
+      const Tensor rh = rhs[t];
+      const Tensor g = gs[t];
+      const Tensor h = hs[t];
+      const Tensor dh = dhs.at(t, false);
+      Tensor dh_prev = t <= 0 ? dhs.at(0, false) : dhs.at(t - 1, false);
+
+      const Tensor* h_prev = t <= 0 ? nullptr : &hs[t - 1];
+
+      Tensor dr = drs.at(t, false);
+      Tensor dz = dzs.at(t, false);
+      Tensor drh = drhs.at(t, false);
+      Tensor dg = dgs.at(t, false);
+
+      OUTPUT_LIST_ALLOCATE(dxs, dx, x.shape());
+
+      // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
+      dz.vec<float>().device(ctx->eigen_device<Device>()) =
+          dh.vec<float>() * h_prev->vec<float>() -
+          dh.vec<float>() * g.vec<float>();
+
+      dh_prev.vec<float>().device(ctx->eigen_device<Device>()) =
+          dh_prev.vec<float>() + dh.vec<float>() * z.vec<float>();
+
+      dg.vec<float>().device(ctx->eigen_device<Device>()) =
+          dh.vec<float>() * (z.vec<float>().constant(1.0f) - z.vec<float>());
+
+      // g[t] = tanh(x[t] Wxh + rh[t] Whh)
+      dg.vec<float>().device(ctx->eigen_device<Device>()) = dg.vec<float>() *
+          (g.vec<float>().constant(1.0f) - g.vec<float>() * g.vec<float>());
+      MatMul<Device>(ctx, false, dg, true, *wxh, 0.0f, dx);
+      MatMul<Device>(ctx, false, dg, true, *whh, 0.0f, &drh);
+
+      if (t > 0) {
+        dr.vec<float>().device(ctx->eigen_device<Device>()) =
+            drh.vec<float>() * h_prev->vec<float>();
+        dh_prev.vec<float>().device(ctx->eigen_device<Device>()) =
+            dh_prev.vec<float>() + drh.vec<float>() * r.vec<float>();
+      } else {
+        dr.vec<float>().setZero();
+        dh_prev.vec<float>().setZero();
+      }
+
+      // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
+      dz.vec<float>().device(ctx->eigen_device<Device>()) = dz.vec<float>() *
+          z.vec<float>() * (z.vec<float>().constant(1.0f) - z.vec<float>());
+      MatMul<Device>(ctx, false, dz, true, *wxz, 1.0f, dx);
+      if (t > 0) MatMul<Device>(ctx, false, dz, true, *whz, 1.0f, &dh_prev);
+
+      // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
+      dr.vec<float>().device(ctx->eigen_device<Device>()) = dr.vec<float>() *
+          r.vec<float>() * (r.vec<float>().constant(1.0f) - r.vec<float>());
+      MatMul<Device>(ctx, false, dr, true, *wxr, 1.0f, dx);
+      if (t > 0) MatMul<Device>(ctx, false, dr, true, *whr, 1.0f, &dh_prev);
+    }
+  }
+
+ protected:
+  int64 cell_size_;
+  int64 sequence_len_max_;
+};
+
+REGISTER_KERNEL_BUILDER(Name("GruGradOp")
+                             .Device(DEVICE_CPU),
+                        GruGradOp<CPUDevice>);
+
+#if GOOGLE_CUDA
+REGISTER_KERNEL_BUILDER(Name("GruGradOp")
+                             .Device(DEVICE_GPU),
+                        GruGradOp<GPUDevice>);
+#endif  // GOOGLE_CUDA
+
 }  // namespace tensorflow
