@@ -557,6 +557,8 @@ def resize_images(images, new_height, new_width, method=ResizeMethod.BILINEAR):
   _, height, width, depth = _ImageDimensions(images)
 
   if width == new_width and height == new_height:
+    if not is_batch:
+      images = array_ops.squeeze(images, squeeze_dims=[0])
     return images
 
   if method == ResizeMethod.BILINEAR:
@@ -648,7 +650,7 @@ def random_brightness(image, max_delta, seed=None):
 
 
 def random_contrast(image, lower, upper, seed=None):
-  """Adjust the contrase of an image by a random factor.
+  """Adjust the contrast of an image by a random factor.
 
   Equivalent to `adjust_constrast()` but uses a `contrast_factor` randomly
   picked in the interval `[lower, upper]`.

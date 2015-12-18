@@ -383,6 +383,10 @@ class Tensor(object):
         (", dtype=%s" % self._dtype.name) if self._dtype else "",
         (", device=%s" % self.device) if self.device else "")
 
+  def __repr__(self):
+    return "<tf.Tensor '%s' shape=%s dtype=%s>" % (
+        self.name, self.get_shape(), self._dtype.name)
+
   def __hash__(self):
     # Necessary to support Python's collection membership operators
     return id(self)
@@ -3128,6 +3132,9 @@ class GraphKeys(object):
   QUEUE_RUNNERS = "queue_runners"
   # Key to collect table initializers.
   TABLE_INITIALIZERS = "table_initializer"
+  # Key to collect asset filepaths. An asset represents an external resource
+  # like a vocabulary file.
+  ASSET_FILEPATHS = "asset_filepaths"
 
 
 def add_to_collection(name, value):

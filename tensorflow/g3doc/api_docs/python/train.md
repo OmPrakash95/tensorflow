@@ -286,7 +286,7 @@ Construct a new gradient descent optimizer.
 
 *  <b>`learning_rate`</b>: A Tensor or a floating point value.  The learning
     rate to use.
-*  <b>`use_locking`</b>: If True use locks for update operation.s
+*  <b>`use_locking`</b>: If True use locks for update operations.
 *  <b>`name`</b>: Optional name prefix for the operations created when applying
     gradients. Defaults to "GradientDescent".
 
@@ -1306,6 +1306,13 @@ depending on whether or not a `Coordinator` was passed to
 
   A list of Python `Exception` objects.  The list is empty if no exception
   was captured.  (No exceptions are captured when using a Coordinator.)
+
+
+- - -
+
+#### `tf.train.QueueRunner.name` {#QueueRunner.name}
+
+The string name of the underlying Queue.
 
 
 
