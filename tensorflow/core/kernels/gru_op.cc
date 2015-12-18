@@ -400,6 +400,11 @@ class GruGradOp : public OpKernel {
 
     OUTPUT_LIST(dxs);
 
+    for (int64 t = 0; t < sequence_len_max; ++t) {
+      const Tensor x = xs[t];
+      OUTPUT_LIST_ALLOCATE(dxs, dx, x.shape());
+    }
+
     if (sequence_len_max >= sequence_len_max_) {
       sequence_len_max = sequence_len_max_;
     }
@@ -420,7 +425,7 @@ class GruGradOp : public OpKernel {
       Tensor drh = drhs.at(t, false);
       Tensor dg = dgs.at(t, false);
 
-      OUTPUT_LIST_ALLOCATE(dxs, dx, x.shape());
+      Tensor* dx = dxs[t];
 
       // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
       // dz.matrix<float>().device(ctx->eigen_device<Device>()) =

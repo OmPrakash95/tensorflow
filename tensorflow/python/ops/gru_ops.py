@@ -60,25 +60,24 @@ def _GruShape(op):
 def _SinkShape(op):
   return []
 
-# @ops.RegisterGradient("Gru")
-# def _GruGrad(op, grad):
-#   return [None] + GruGrad(cell_size=op.get_attr("cell_size"),
-#       sequence_len_max=op.get_attr("sequence_len_max"),
-#       sequence_len=op.inputs[0],
-#       wxr=op.inputs[1],
-#       whr=op.inputs[2],
-#       wxz=op.inputs[3],
-#       whz=op.inputs[4],
-#       wxh=op.inputs[5],
-#       whh=op.inputs[6],
-#       xs=op.inputs[7],
-#       rs=op.inputs[8],
-#       zs=op.inputs[9],
-#       rhs=op.inputs[10],
-#       gs=op.inputs[11],
-#       hs=op.inputs[12],
-#       drs=grad[0],
-#       dzs=grad[1],
-#       drhs=grad[2],
-#       dgs=grad[3],
-#       dhs=grad[4])
+@ops.RegisterGradient("Gru")
+def _GruGrad(op, grad):
+  return [None] + gen_gru_ops._gru_grad(cell_size=op.get_attr("cell_size"),
+      sequence_len=op.inputs[0],
+      wxr=op.inputs[1],
+      whr=op.inputs[2],
+      wxz=op.inputs[3],
+      whz=op.inputs[4],
+      wxh=op.inputs[5],
+      whh=op.inputs[6],
+      xs=op.inputs[7],
+      rs=op.inputs[8],
+      zs=op.inputs[9],
+      rhs=op.inputs[10],
+      gs=op.inputs[11],
+      hs=op.inputs[12],
+      drs=grad[0],
+      dzs=grad[1],
+      drhs=grad[2],
+      dgs=grad[3],
+      dhs=grad[4])
