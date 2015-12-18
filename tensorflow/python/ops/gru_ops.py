@@ -41,8 +41,11 @@ def gru(cell_size, sequence_len, xs, name=None, scope=None):
     wxh = vs.get_variable("wxh", [input_size, cell_size])
     whh = vs.get_variable("whh", [cell_size, cell_size])
 
-    return gen_gru_ops.gru(cell_size=cell_size, sequence_len=sequence_len,
+    outputs = gen_gru_ops._gru(cell_size=cell_size, sequence_len=sequence_len,
         wxr=wxr, whr=whr, wxz=wxz, whz=whz, wxh=wxh, whh=whh, xs=xs, name=name)
+    for output in outputs:
+      gen_gru_ops.sink(output)
+    return outputs
 
 
 @ops.RegisterShape("Gru")
@@ -50,28 +53,32 @@ def _GruShape(op):
   batch_size = op.inputs[0].get_shape()[0].value
   cell_size = op.get_attr("cell_size")
 
-  return [tensor_shape.TensorShape([batch_size, cell_size])] * (len(op.inputs) * 5)
+  return [tensor_shape.TensorShape([batch_size, cell_size])] * ((len(op.inputs) - 7) * 5)
 
 
-@ops.RegisterGradient("Gru")
-def _GruGrad(op, grad):
-  return [None] + GruGrad(cell_size=op.get_attr("cell_size"),
-      sequence_len_max=op.get_attr("sequence_len_max"),
-      sequence_len=op.inputs[0],
-      wxr=op.inputs[1],
-      whr=op.inputs[2],
-      wxz=op.inputs[3],
-      whz=op.inputs[4],
-      wxh=op.inputs[5],
-      whh=op.inputs[6],
-      xs=op.inputs[7],
-      rs=op.inputs[8],
-      zs=op.inputs[9],
-      rhs=op.inputs[10],
-      gs=op.inputs[11],
-      hs=op.inputs[12],
-      drs=grad[0],
-      dzs=grad[1],
-      drhs=grad[2],
-      dgs=grad[3],
-      dhs=grad[4])
+@ops.RegisterShape("Sink")
+def _SinkShape(op):
+  return []
+
+# @ops.RegisterGradient("Gru")
+# def _GruGrad(op, grad):
+#   return [None] + GruGrad(cell_size=op.get_attr("cell_size"),
+#       sequence_len_max=op.get_attr("sequence_len_max"),
+#       sequence_len=op.inputs[0],
+#       wxr=op.inputs[1],
+#       whr=op.inputs[2],
+#       wxz=op.inputs[3],
+#       whz=op.inputs[4],
+#       wxh=op.inputs[5],
+#       whh=op.inputs[6],
+#       xs=op.inputs[7],
+#       rs=op.inputs[8],
+#       zs=op.inputs[9],
+#       rhs=op.inputs[10],
+#       gs=op.inputs[11],
+#       hs=op.inputs[12],
+#       drs=grad[0],
+#       dzs=grad[1],
+#       drhs=grad[2],
+#       dgs=grad[3],
+#       dhs=grad[4])

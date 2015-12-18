@@ -4,6 +4,7 @@ import numpy as np
 import os.path
 import tensorflow as tf
 from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import gru_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import rnn
 from tensorflow.python.ops import rnn_cell
@@ -121,17 +122,32 @@ class LASModel(object):
     print('create_encoder graph time %f' % (time.time() - start_time))
 
 
-  def create_encoder_layer(self, subsample_input=1):
+  def create_encoder_layer(self, subsample_input=1, use_monolithic=True):
     with vs.variable_scope('encoder_layer_%d' % (len(self.encoder_states))):
       if subsample_input == 1:
-        self.encoder_states.append([rnn.rnn(
-            rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0], dtype=tf.float32,
-                             sequence_length=self.encoder_states[-1][1])[0], self.encoder_states[-1][1]])
+        if use_monolithic:
+          self.encoder_states.append([gru_ops.gru(
+              cell_size=self.encoder_cell_size,
+              sequence_len=self.encoder_states[-1][1],
+              xs=self.encoder_states[-1][0])[-1], self.encoder_states[-1][1]])
+        else:
+          self.encoder_states.append([rnn.rnn(
+              rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0], dtype=tf.float32,
+                               sequence_length=self.encoder_states[-1][1])[-1], self.encoder_states[-1][1]])
       else:
         two = tf.constant(2, shape=[self.batch_size, 1], dtype=tf.int64)
-        self.encoder_states.append([rnn.rnn(
-            rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::subsample_input], dtype=tf.float32,
-                             sequence_length=self.encoder_states[-1][1])[0], tf.div(self.encoder_states[-1][1], two)])
+        if use_monolithic:
+          self.encoder_states.append([gru_ops.gru(
+            cell_size=self.encoder_cell_size,
+            sequence_len=self.encoder_states[-1][1],
+            xs=self.encoder_states[-1][0][0::subsample_input])[-1], tf.div(self.encoder_states[-1][1], two)])
+        else:
+          self.encoder_states.append([rnn.rnn(
+              rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::subsample_input], dtype=tf.float32,
+                               sequence_length=self.encoder_states[-1][1])[0], tf.div(self.encoder_states[-1][1], two)])
+
+      for encoder_state in self.encoder_states[-1][0]:
+        encoder_state.set_shape([self.batch_size, self.encoder_cell_size])
 
 
   def create_decoder(self):
@@ -161,7 +177,9 @@ class LASModel(object):
       if attention_states:
         if len(self.decoder_states) == 1:
           self.decoder_states.append(seq2seq.embedding_attention_decoder(
-              self.decoder_states[-1], decoder_initial_state, attention_states, cell, self.embedding_size, self.vocab_size, sequence_length=self.tokens_len)[0])
+              self.decoder_states[-1], decoder_initial_state, attention_states,
+              cell, self.embedding_size, self.vocab_size,
+              sequence_length=self.tokens_len)[0])
         else:
           self.decoder_states.append(seq2seq.attention_decoder(
               self.decoder_states[-1], decoder_initial_state, attention_states, cell, sequence_length=self.tokens_len)[0])
@@ -204,7 +222,7 @@ class LASModel(object):
 
     ret = [None] * 4
     if forward_only:
-      temp = sess.run([self.uttid, self.text, self.features_len] + self.losses)
+      temp = sess.run([self.uttid, self.text, self.features_len] + self.encoder_states[1][0])
       ret[0] = temp[0:3]
     else:
       temp = sess.run([self.uttid, self.text, self.features_len] + self.updates + self.gradient_norms + self.losses)

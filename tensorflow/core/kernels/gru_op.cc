@@ -53,8 +53,8 @@ struct LaunchGruMatMulCPU {
       const Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1>& dim_pair,
       float beta, Tensor* out) {
     functor::GruMatMulFunctor<CPUDevice>()(ctx->eigen_device<CPUDevice>(),
-                                               out->matrix<float>(), a.matrix<float>(),
-                                               b.matrix<float>(), dim_pair, beta);
+        out->matrix<float>(), a.matrix<float>(), b.matrix<float>(), dim_pair,
+        beta);
   }
 };
 
@@ -119,23 +119,70 @@ void GruMatMul(OpKernelContext* ctx, bool a_trans, const Tensor& a,
 }
 
 template <>
+struct GruDeviceSynchronize<CPUDevice> {
+  void operator()(const CPUDevice& d) {}
+};
+
+template <>
+struct GruDeviceSynchronize<GPUDevice> {
+  void operator()(const GPUDevice& d) {
+    d.synchronize();
+  }
+};
+
+template <>
+struct GruSetZero<CPUDevice> {
+  void operator()(const CPUDevice& d, Tensor* x) {
+    x->matrix<float>().device(d) = x->matrix<float>().constant(0.0f);
+  }
+};
+
+template <>
+struct GruSetZero<GPUDevice> {
+  void operator()(const GPUDevice& d, Tensor* x) {
+    GruSetZeroGPU(d, x);
+  }
+};
+
+template <>
 struct GruActivationSigmoid<CPUDevice> {
   void operator()(const CPUDevice& d, Tensor* x) {
-    x->vec<float>().device(d) = x->vec<float>().sigmoid();
+    x->matrix<float>().device(d) = x->matrix<float>().sigmoid();
+  }
+};
+
+template <>
+struct GruActivationSigmoid<GPUDevice> {
+  void operator()(const GPUDevice& d, Tensor* x) {
+    GruActivationSigmoidGPU(d, x);
   }
 };
 
 template <>
 struct GruActivationTanh<CPUDevice> {
   void operator()(const CPUDevice& d, Tensor* x) {
-    x->vec<float>().device(d) = x->vec<float>().tanh();
+    x->matrix<float>().device(d) = x->matrix<float>().tanh();
+  }
+};
+
+template <>
+struct GruActivationTanh<GPUDevice> {
+  void operator()(const GPUDevice& d, Tensor* x) {
+    GruActivationTanhGPU(d, x);
   }
 };
 
 template <>
 struct GruCWiseMult<CPUDevice> {
   void operator()(const CPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c) {
-    c->vec<float>().device(d) = a.vec<float>() * b.vec<float>();
+    c->matrix<float>().device(d) = a.matrix<float>() * b.matrix<float>();
+  }
+};
+
+template <>
+struct GruCWiseMult<GPUDevice> {
+  void operator()(const GPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c) {
+    GruCWiseMultGPU(d, a, b, c);
   }
 };
 
@@ -143,9 +190,17 @@ template <>
 struct GruH<CPUDevice> {
   void operator()(
       const CPUDevice& d, const Tensor& z, const Tensor& h_prev, const Tensor& g, Tensor* h) {
-    h->vec<float>().device(d) =
-        z.vec<float>() * h_prev.vec<float>() +
-        (z.vec<float>().constant(1.0f) - z.vec<float>()) * g.vec<float>();
+    h->matrix<float>().device(d) =
+        z.matrix<float>() * h_prev.matrix<float>() +
+        (z.matrix<float>().constant(1.0f) - z.matrix<float>()) * g.matrix<float>();
+  }
+};
+
+template <>
+struct GruH<GPUDevice> {
+  void operator()(
+      const GPUDevice& d, const Tensor& z, const Tensor& h_prev, const Tensor& g, Tensor* h) {
+    GruHGPU(d, z, h_prev, g, h);
   }
 };
 
@@ -159,28 +214,33 @@ class GruOp : public OpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    LOG(INFO) << "OK...";
     const Tensor* sequence_len = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("sequence_len", &sequence_len));
 
+    LOG(INFO) << "OK...";
     // Get the sequence length in CPU memory.
     auto sequence_len_t = sequence_len->vec<int64>();
-    std::vector<int64> seq_lens_vec(sequence_len_t.size());
+    std::vector<int64> seq_lens_vector(sequence_len_t.size());
     ctx->eigen_device<Device>().memcpyDeviceToHost(
-        seq_lens_vec.data(), sequence_len_t.data(),
+        seq_lens_vector.data(), sequence_len_t.data(),
         sizeof(int64) * sequence_len_t.size());
+    GruDeviceSynchronize<Device>()(ctx->eigen_device<Device>());
+    LOG(INFO) << "OK...";
 
     // Maximum number of compute unrolls.
-    int64 sequence_len_max = std::distance(seq_lens_vec.begin(),
-        std::max_element(seq_lens_vec.begin(), seq_lens_vec.end()));
-    const int64 batch_size = seq_lens_vec.size();
+    int64 sequence_len_max =
+        *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
+    const int64 batch_size = seq_lens_vector.size();
 
-  #define INPUT_LIST(T)                                                          \
+  #define INPUT_LIST(T)                                                        \
     OpInputList T;                                                             \
     OP_REQUIRES_OK(ctx, ctx->input_list(#T, &T));
 
+    LOG(INFO) << "OK...";
     INPUT_LIST(xs);
 
-  #define INPUT_TENSOR(T)                                                        \
+  #define INPUT_TENSOR(T)                                                      \
     const Tensor* T = nullptr;                                                 \
     OP_REQUIRES_OK(ctx, ctx->input(#T, &T));
 
@@ -191,7 +251,14 @@ class GruOp : public OpKernel {
     INPUT_TENSOR(wxh);
     INPUT_TENSOR(whh);
 
-  #define OUTPUT_LIST(T)                                                         \
+    CHECK_EQ(wxr->dims(), 2);
+    CHECK_EQ(whr->dims(), 2);
+    CHECK_EQ(wxz->dims(), 2);
+    CHECK_EQ(whz->dims(), 2);
+    CHECK_EQ(wxh->dims(), 2);
+    CHECK_EQ(whh->dims(), 2);
+
+  #define OUTPUT_LIST(T)                                                       \
     OpOutputList T;                                                            \
     OP_REQUIRES_OK(ctx, ctx->output_list(#T, &T));
 
@@ -201,22 +268,34 @@ class GruOp : public OpKernel {
     OUTPUT_LIST(gs);
     OUTPUT_LIST(hs);
 
-    if (sequence_len_max >= sequence_len_max_) {
-      sequence_len_max = sequence_len_max_;
-    }
-    for (int64 t = 0; t < sequence_len_max; ++t) {
-      const Tensor x = xs[t];
-      const Tensor* h_prev = t <= 0 ? nullptr : hs[t - 1];
-
-  #define OUTPUT_LIST_ALLOCATE(OP_OUTPUT_LIST, NAME, SHAPE)                      \
+    LOG(INFO) << "OK...";
+    for (int64 t = 0; t < sequence_len_max_; ++t) {
+  #define OUTPUT_LIST_ALLOCATE(OP_OUTPUT_LIST, NAME, SHAPE)                    \
       Tensor* NAME = nullptr;                                                  \
-      OP_OUTPUT_LIST.allocate(t, SHAPE, &NAME);
+      OP_OUTPUT_LIST.allocate(t, SHAPE, &NAME);                                \
+      GruSetZero<Device>()(ctx->eigen_device<Device>(), NAME);
 
       OUTPUT_LIST_ALLOCATE(rs, r, TensorShape({batch_size, cell_size_}));
       OUTPUT_LIST_ALLOCATE(zs, z, TensorShape({batch_size, cell_size_}));
       OUTPUT_LIST_ALLOCATE(rhs, rh, TensorShape({batch_size, cell_size_}));
       OUTPUT_LIST_ALLOCATE(gs, g, TensorShape({batch_size, cell_size_}));
       OUTPUT_LIST_ALLOCATE(hs, h, TensorShape({batch_size, cell_size_}));
+    }
+
+    if (sequence_len_max >= sequence_len_max_) {
+      sequence_len_max = sequence_len_max_;
+    }
+    LOG(INFO) << sequence_len_max;
+    for (int64 t = 0; t < sequence_len_max; ++t) {
+      const Tensor x = xs[t];
+      CHECK_EQ(x.dims(), 2);
+      const Tensor* h_prev = t <= 0 ? nullptr : hs[t - 1];
+
+      Tensor* r = rs[t];
+      Tensor* z = zs[t];
+      Tensor* rh = rhs[t];
+      Tensor* g = gs[t];
+      Tensor* h = hs[t];
 
       // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
       GruMatMul<Device>(ctx, false, x, false, *wxr, 0.0f, r);
@@ -233,7 +312,7 @@ class GruOp : public OpKernel {
       if (t >= 0) {
         GruCWiseMult<Device>()(ctx->eigen_device<Device>(), *r, *h_prev, rh);
       } else {
-        rh->vec<float>().setZero();
+        rh->matrix<float>().setZero();
       }
       GruMatMul<Device>(ctx, false, x, false, *wxh, 0.0f, g);
       if (h_prev) GruMatMul<Device>(ctx, false, *rh, false, *whh, 1.0f, g);
@@ -249,12 +328,12 @@ class GruOp : public OpKernel {
   int64 sequence_len_max_;
 };
 
-REGISTER_KERNEL_BUILDER(Name("GruOp")
+REGISTER_KERNEL_BUILDER(Name("Gru")
                              .Device(DEVICE_CPU),
                         GruOp<CPUDevice>);
 
 #if GOOGLE_CUDA
-REGISTER_KERNEL_BUILDER(Name("GruOp")
+REGISTER_KERNEL_BUILDER(Name("Gru")
                              .Device(DEVICE_GPU),
                         GruOp<GPUDevice>);
 #endif  // GOOGLE_CUDA
@@ -273,14 +352,15 @@ class GruGradOp : public OpKernel {
 
     // Get the sequence length in CPU memory.
     auto sequence_len_t = sequence_len->vec<int64>();
-    std::vector<int64> seq_lens_vec(sequence_len_t.size());
+    std::vector<int64> seq_lens_vector(sequence_len_t.size());
     ctx->eigen_device<Device>().memcpyDeviceToHost(
-        seq_lens_vec.data(), sequence_len_t.data(),
+        seq_lens_vector.data(), sequence_len_t.data(),
         sizeof(int64) * sequence_len_t.size());
+    GruDeviceSynchronize<Device>()(ctx->eigen_device<Device>());
 
     // Maximum number of compute unrolls.
-    int64 sequence_len_max = std::distance(seq_lens_vec.begin(),
-        std::max_element(seq_lens_vec.begin(), seq_lens_vec.end()));
+    int64 sequence_len_max =
+        *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
 
     INPUT_LIST(xs);
     INPUT_LIST(rs);
@@ -342,41 +422,41 @@ class GruGradOp : public OpKernel {
       OUTPUT_LIST_ALLOCATE(dxs, dx, x.shape());
 
       // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
-      // dz.vec<float>().device(ctx->eigen_device<Device>()) =
-      //     dh.vec<float>() * h_prev->vec<float>() -
-      //     dh.vec<float>() * g.vec<float>();
+      // dz.matrix<float>().device(ctx->eigen_device<Device>()) =
+      //     dh.matrix<float>() * h_prev->matrix<float>() -
+      //     dh.matrix<float>() * g.matrix<float>();
 
-      // dh_prev.vec<float>().device(ctx->eigen_device<Device>()) =
-      //     dh_prev.vec<float>() + dh.vec<float>() * z.vec<float>();
+      // dh_prev.matrix<float>().device(ctx->eigen_device<Device>()) =
+      //     dh_prev.matrix<float>() + dh.matrix<float>() * z.matrix<float>();
 
-      // dg.vec<float>().device(ctx->eigen_device<Device>()) =
-      //     dh.vec<float>() * (z.vec<float>().constant(1.0f) - z.vec<float>());
+      // dg.matrix<float>().device(ctx->eigen_device<Device>()) =
+      //     dh.matrix<float>() * (z.matrix<float>().constant(1.0f) - z.matrix<float>());
 
       // // g[t] = tanh(x[t] Wxh + rh[t] Whh)
-      // dg.vec<float>().device(ctx->eigen_device<Device>()) = dg.vec<float>() *
-      //     (g.vec<float>().constant(1.0f) - g.vec<float>() * g.vec<float>());
+      // dg.matrix<float>().device(ctx->eigen_device<Device>()) = dg.matrix<float>() *
+      //     (g.matrix<float>().constant(1.0f) - g.matrix<float>() * g.matrix<float>());
       // GruMatMul<Device>(ctx, false, dg, true, *wxh, 0.0f, dx);
       // GruMatMul<Device>(ctx, false, dg, true, *whh, 0.0f, &drh);
 
       // if (t > 0) {
-      //   dr.vec<float>().device(ctx->eigen_device<Device>()) =
-      //       drh.vec<float>() * h_prev->vec<float>();
-      //   dh_prev.vec<float>().device(ctx->eigen_device<Device>()) =
-      //       dh_prev.vec<float>() + drh.vec<float>() * r.vec<float>();
+      //   dr.matrix<float>().device(ctx->eigen_device<Device>()) =
+      //       drh.matrix<float>() * h_prev->matrix<float>();
+      //   dh_prev.matrix<float>().device(ctx->eigen_device<Device>()) =
+      //       dh_prev.matrix<float>() + drh.matrix<float>() * r.matrix<float>();
       // } else {
-      //   dr.vec<float>().setZero();
+      //   dr.matrix<float>().setZero();
       // }
 
       // // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
-      // dz.vec<float>().device(ctx->eigen_device<Device>()) = dz.vec<float>() *
-      //     z.vec<float>() * (z.vec<float>().constant(1.0f) - z.vec<float>());
+      // dz.matrix<float>().device(ctx->eigen_device<Device>()) = dz.matrix<float>() *
+      //     z.matrix<float>() * (z.matrix<float>().constant(1.0f) - z.matrix<float>());
       // GruMatMul<Device>(ctx, false, dz, true, *wxz, 1.0f, dx);
       // if (t > 0) GruMatMul<Device>(ctx, false, dz, true, *whz, 1.0f, &dh_prev);
 
       // // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
       // if (t > 0) {
-      //   dr.vec<float>().device(ctx->eigen_device<Device>()) = dr.vec<float>() *
-      //       r.vec<float>() * (r.vec<float>().constant(1.0f) - r.vec<float>());
+      //   dr.matrix<float>().device(ctx->eigen_device<Device>()) = dr.matrix<float>() *
+      //       r.matrix<float>() * (r.matrix<float>().constant(1.0f) - r.matrix<float>());
       //   GruMatMul<Device>(ctx, false, dr, true, *wxr, 1.0f, dx);
       //   GruMatMul<Device>(ctx, false, dr, true, *whr, 1.0f, &dh_prev);
       // }
@@ -405,12 +485,12 @@ class GruGradOp : public OpKernel {
   int64 sequence_len_max_;
 };
 
-REGISTER_KERNEL_BUILDER(Name("GruGradOp")
+REGISTER_KERNEL_BUILDER(Name("GruGrad")
                              .Device(DEVICE_CPU),
                         GruGradOp<CPUDevice>);
 
 #if GOOGLE_CUDA
-REGISTER_KERNEL_BUILDER(Name("GruGradOp")
+REGISTER_KERNEL_BUILDER(Name("GruGrad")
                              .Device(DEVICE_GPU),
                         GruGradOp<GPUDevice>);
 #endif  // GOOGLE_CUDA

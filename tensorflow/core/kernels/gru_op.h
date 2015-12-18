@@ -48,6 +48,16 @@ struct GruMatMulFunctor {
 }  // namespace functor
 
 template <typename Device>
+struct GruDeviceSynchronize {
+  void operator()(const Device& d);
+};
+
+template <typename Device>
+struct GruSetZero {
+  void operator()(const Device& d, Tensor* x);
+};
+
+template <typename Device>
 struct GruActivationSigmoid {
   void operator()(const Device& d, Tensor* x);
 };
@@ -67,6 +77,12 @@ struct GruH {
   void operator()(
       const Device& d, const Tensor& z, const Tensor& h_prev, const Tensor& g, Tensor* h);
 };
+
+void GruSetZeroGPU(const GPUDevice& d, Tensor* x);
+void GruActivationSigmoidGPU(const GPUDevice& d, Tensor* x);
+void GruActivationTanhGPU(const GPUDevice& d, Tensor* x);
+void GruCWiseMultGPU(const GPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c);
+void GruHGPU(const GPUDevice& d, const Tensor& z, const Tensor& h_prev, const Tensor& g, Tensor* h);
 
 }  // namespace tensorflow
 #endif  // TENSORFLOW_KERNELS_GRU_OP_H_

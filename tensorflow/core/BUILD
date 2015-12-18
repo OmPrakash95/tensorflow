@@ -422,7 +422,6 @@ tf_gen_op_libs(
         "no_op",
         "parsing_ops",
         "random_ops",
-        "sink_ops",
         "sendrecv_ops",
         "sparse_ops",
         "state_ops",

@@ -53,7 +53,14 @@ REGISTER_OP("GruGrad")
     .Output("dwhh: float")
     .Output("dxs: sequence_len_max * float")
     .Doc(R"doc(
-GRU
+GRU Gradient
+)doc");
+
+REGISTER_OP("Sink")
+    .Attr("sinks: int")
+    .Input("input: sinks * float")
+    .Doc(R"doc(
+Sink NoOp
 )doc");
 
 }  // end namespace tensorflow

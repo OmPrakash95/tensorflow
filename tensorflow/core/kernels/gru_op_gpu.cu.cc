@@ -6,56 +6,31 @@
 
 namespace tensorflow {
 // typedef Eigen::GpuDevice GPUDevice;
-// 
-// template <>
-// struct GruMatMulFunctor<GPUDevice> {
-//   void operator()(
-//       const GPUDevice& d, typename GruMatMulTypes<float>::out_type out,
-//       typename GruMatMulTypes<float>::in_type in0,
-//       typename GruMatMulTypes<float>::in_type in1,
-//       const Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1>& dim_pair,
-//       float beta) {
-//     GruMatMul<GPUDevice>(d, To32Bit(out), To32Bit(in0), To32Bit(in1), dim_pair, beta);
-//   }
-// };
-// 
-// template struct GruMatMulFunctor<GPUDevice>;
 
-template <>
-struct GruActivationSigmoid<GPUDevice> {
-  void operator()(const GPUDevice& d, Tensor* x) {
-    x->vec<float>().device(d) = x->vec<float>().sigmoid();
-  }
-};
+void GruSetZeroGPU(const GPUDevice& d, Tensor* x) {
+  x->matrix<float>().device(d) = x->matrix<float>().constant(0.0f);
+}
 
-template <>
-struct GruActivationTanh<GPUDevice> {
-  void operator()(const GPUDevice& d, Tensor* x) {
-    x->vec<float>().device(d) = x->vec<float>().tanh();
-  }
-};
+void GruActivationSigmoidGPU(const GPUDevice& d, Tensor* x) {
+  x->matrix<float>().device(d) = x->matrix<float>().sigmoid();
+}
 
-template <>
-struct GruCWiseMult<GPUDevice> {
-  void operator()(const GPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c) {
-    c->vec<float>().device(d) = a.vec<float>() * b.vec<float>();
-  }
-};
+void GruActivationTanhGPU(const GPUDevice& d, Tensor* x) {
+  x->matrix<float>().device(d) = x->matrix<float>().tanh();
+}
 
-template <>
-struct GruH<GPUDevice> {
-  void operator()(
-      const GPUDevice& d, const Tensor& z, const Tensor& h_prev, const Tensor& g, Tensor* h) {
-    h->vec<float>().device(d) =
-        z.vec<float>() * h_prev.vec<float>() +
-        (z.vec<float>().constant(1.0f) - z.vec<float>()) * g.vec<float>();
-  }
-};
+void GruCWiseMultGPU(const GPUDevice& d, const Tensor& a, const Tensor& b,
+    Tensor* c) {
+  c->matrix<float>().device(d) = a.matrix<float>() * b.matrix<float>();
+}
 
-template struct GruActivationSigmoid<GPUDevice>;
-template struct GruActivationTanh<GPUDevice>;
-template struct GruCWiseMult<GPUDevice>;
-template struct GruH<GPUDevice>;
+void GruHGPU(
+    const GPUDevice& d, const Tensor& z, const Tensor& h_prev,
+    const Tensor& g, Tensor* h) {
+  h->matrix<float>().device(d) =
+      z.matrix<float>() * h_prev.matrix<float>() +
+      (z.matrix<float>().constant(1.0f) - z.matrix<float>()) * g.matrix<float>();
+}
 
 }  // end namespace tensorflow
 

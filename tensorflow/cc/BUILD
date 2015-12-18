@@ -44,7 +44,6 @@ tf_gen_op_wrappers_cc(
         "parsing_ops",
         "random_ops",
         "sendrecv_ops",
-        "sink_ops",
         "sparse_ops",
         "state_ops",
         "string_ops",
