@@ -124,23 +124,19 @@ class LASModel(object):
 
   def create_encoder_layer(self, subsample_input=1, use_monolithic=True):
     with vs.variable_scope('encoder_layer_%d' % (len(self.encoder_states))):
-      if subsample_input == 1:
-        if use_monolithic:
-          self.encoder_states.append([gru_ops.gru(
-              cell_size=self.encoder_cell_size,
-              sequence_len=self.encoder_states[-1][1],
-              xs=self.encoder_states[-1][0])[-1], self.encoder_states[-1][1]])
-        else:
-          self.encoder_states.append([rnn.rnn(
-              rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0], dtype=tf.float32,
-                               sequence_length=self.encoder_states[-1][1])[-1], self.encoder_states[-1][1]])
-      else:
-        two = tf.constant(2, shape=[self.batch_size, 1], dtype=tf.int64)
+      if use_monolithic:
+        factor = tf.constant(subsample_input, shape=[self.batch_size], dtype=tf.int64)
+        factor = tf.div(self.encoder_states[-1][1], factor)
         if use_monolithic:
           self.encoder_states.append([gru_ops.gru(
             cell_size=self.encoder_cell_size,
             sequence_len=self.encoder_states[-1][1],
-            xs=self.encoder_states[-1][0][0::subsample_input])[-1], tf.div(self.encoder_states[-1][1], two)])
+            xs=self.encoder_states[-1][0][0::subsample_input])[-1], factor])
+      else:
+        if subsample_input == 1:
+          self.encoder_states.append([rnn.rnn(
+              rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0], dtype=tf.float32,
+                               sequence_length=self.encoder_states[-1][1])[-1], self.encoder_states[-1][1]])
         else:
           self.encoder_states.append([rnn.rnn(
               rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::subsample_input], dtype=tf.float32,
@@ -222,7 +218,7 @@ class LASModel(object):
 
     ret = [None] * 4
     if forward_only:
-      temp = sess.run([self.uttid, self.text, self.features_len] + self.encoder_states[1][0])
+      temp = sess.run([self.uttid, self.text, self.features_len] + self.encoder_states[-1][0])
       ret[0] = temp[0:3]
     else:
       temp = sess.run([self.uttid, self.text, self.features_len] + self.updates + self.gradient_norms + self.losses)
