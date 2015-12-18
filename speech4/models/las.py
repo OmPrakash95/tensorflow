@@ -124,23 +124,19 @@ class LASModel(object):
 
   def create_encoder_layer(self, subsample_input=1, use_monolithic=True):
     with vs.variable_scope('encoder_layer_%d' % (len(self.encoder_states))):
+      sequence_len_factor = tf.constant(subsample_input, shape=[self.batch_size], dtype=tf.int64)
+      sequence_len = tf.div(self.encoder_states[-1][1], sequence_len_factor)
       if use_monolithic:
-        factor = tf.constant(subsample_input, shape=[self.batch_size], dtype=tf.int64)
-        factor = tf.div(self.encoder_states[-1][1], factor)
         if use_monolithic:
           self.encoder_states.append([gru_ops.gru(
             cell_size=self.encoder_cell_size,
-            sequence_len=self.encoder_states[-1][1],
-            xs=self.encoder_states[-1][0][0::subsample_input])[-1], factor])
+            sequence_len=sequence_len,
+            xs=self.encoder_states[-1][0][0::subsample_input])[-1], sequence_len])
       else:
-        if subsample_input == 1:
-          self.encoder_states.append([rnn.rnn(
-              rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0], dtype=tf.float32,
-                               sequence_length=self.encoder_states[-1][1])[-1], self.encoder_states[-1][1]])
-        else:
-          self.encoder_states.append([rnn.rnn(
-              rnn_cell.GRUCell(self.encoder_cell_size), self.encoder_states[-1][0][0::subsample_input], dtype=tf.float32,
-                               sequence_length=self.encoder_states[-1][1])[0], tf.div(self.encoder_states[-1][1], two)])
+        self.encoder_states.append([rnn.rnn(
+            rnn_cell.GRUCell(self.encoder_cell_size),
+            self.encoder_states[-1][0][0::subsample_input], dtype=tf.float32,
+            sequence_length=sequence_len)[0], sequence_len])
 
       for encoder_state in self.encoder_states[-1][0]:
         encoder_state.set_shape([self.batch_size, self.encoder_cell_size])
