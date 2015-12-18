@@ -25,11 +25,16 @@ void GruCWiseMultGPU(const GPUDevice& d, const Tensor& a, const Tensor& b,
 }
 
 void GruHGPU(
-    const GPUDevice& d, const Tensor& z, const Tensor& h_prev,
+    const GPUDevice& d, const Tensor& z, const Tensor* h_prev,
     const Tensor& g, Tensor* h) {
-  h->matrix<float>().device(d) =
-      z.matrix<float>() * h_prev.matrix<float>() +
-      (z.matrix<float>().constant(1.0f) - z.matrix<float>()) * g.matrix<float>();
+  if (h_prev) {
+    h->matrix<float>().device(d) =
+        z.matrix<float>() * h_prev->matrix<float>() +
+        (z.matrix<float>().constant(1.0f) - z.matrix<float>()) * g.matrix<float>();
+  } else {
+    h->matrix<float>().device(d) =
+        (z.matrix<float>().constant(1.0f) - z.matrix<float>()) * g.matrix<float>();
+  }
 }
 
 }  // end namespace tensorflow
