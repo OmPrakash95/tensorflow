@@ -417,6 +417,8 @@ tf_gen_op_wrapper_py(
 tf_gen_op_wrapper_py(
     name = "gru_ops",
     hidden = [
+        "Gru",
+        "GruGrad",
     ],
     require_shape_functions = True,
 )
@@ -612,6 +614,7 @@ py_library(
         "ops/gen_attention_ops.py",
         "ops/gen_control_flow_ops.py",
         "ops/gen_data_flow_ops.py",
+        "ops/gen_gru_ops.py",
         "ops/gen_image_ops.py",
         "ops/gen_io_ops.py",
         "ops/gen_linalg_ops.py",
@@ -622,8 +625,8 @@ py_library(
         "ops/gen_state_ops.py",
         "ops/gen_string_ops.py",
         "ops/gen_summary_ops.py",
-        "ops/gru_ops.py",
         "ops/gradients.py",
+        "ops/gru_ops.py",
         "ops/image_grad.py",
         "ops/image_ops.py",
         "ops/init_ops.py",
