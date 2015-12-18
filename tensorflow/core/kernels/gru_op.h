@@ -68,21 +68,59 @@ struct GruActivationTanh {
 };
 
 template <typename Device>
+struct GruActivationSigmoidGradient {
+  void operator()(const Device& d, const Tensor& x, Tensor* dx);
+};
+
+template <typename Device>
+struct GruActivationTanhGradient {
+  void operator()(const Device& d, const Tensor& x, Tensor* dx);
+};
+
+template <typename Device>
 struct GruCWiseMult {
-  void operator()(const GPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c);
+  void operator()(const GPUDevice& d, const Tensor& a, const Tensor& b,
+      float beta, Tensor* c);
 };
 
 template <typename Device>
 struct GruH {
   void operator()(
-      const Device& d, const Tensor& z, const Tensor* h_prev, const Tensor& g, Tensor* h);
+      const Device& d, const Tensor& z, const Tensor* h_prev, const Tensor& g,
+      Tensor* h);
+};
+
+template <typename Device>
+struct GruDz {
+  void operator()(
+      const Device& d, const Tensor& dh, const Tensor* h_prev, const Tensor& g,
+      Tensor* dz);
+};
+
+template <typename Device>
+struct GruDg {
+  void operator()(
+      const Device& d, const Tensor& dh, const Tensor& z, Tensor* dg);
 };
 
 void GruSetZeroGPU(const GPUDevice& d, Tensor* x);
 void GruActivationSigmoidGPU(const GPUDevice& d, Tensor* x);
 void GruActivationTanhGPU(const GPUDevice& d, Tensor* x);
-void GruCWiseMultGPU(const GPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c);
-void GruHGPU(const GPUDevice& d, const Tensor& z, const Tensor* h_prev, const Tensor& g, Tensor* h);
+void GruActivationSigmoidGradientGPU(
+    const GPUDevice& d, const Tensor& x, Tensor* dx);
+void GruActivationTanhGradientGPU(
+    const GPUDevice& d, const Tensor& x, Tensor* dx);
+void GruCWiseMultGPU(
+    const GPUDevice& d, const Tensor& a, const Tensor& b, float beta, Tensor* c);
+
+void GruHGPU(
+    const GPUDevice& d, const Tensor& z, const Tensor* h_prev, const Tensor& g,
+    Tensor* h);
+void GruDzGPU(
+    const GPUDevice& d, const Tensor& dh, const Tensor* h_prev, const Tensor& g,
+    Tensor* dz);
+void GruDgGPU(
+    const GPUDevice& d, const Tensor& dh, const Tensor& z, Tensor* dg);
 
 }  // namespace tensorflow
 #endif  // TENSORFLOW_KERNELS_GRU_OP_H_

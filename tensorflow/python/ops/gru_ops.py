@@ -60,9 +60,12 @@ def _GruShape(op):
 def _SinkShape(op):
   return []
 
+
 @ops.RegisterGradient("Gru")
-def _GruGrad(op, grad):
-  return [None] + gen_gru_ops._gru_grad(cell_size=op.get_attr("cell_size"),
+def _GruGrad(op, *grad):
+  outputs = zip(*[iter(op.outputs)] * (len(op.outputs) / 5))
+  grads = zip(*[iter(grad)] * (len(grad) / 5))
+  gru_grads = gen_gru_ops._gru_grad(cell_size=op.get_attr("cell_size"),
       sequence_len=op.inputs[0],
       wxr=op.inputs[1],
       whr=op.inputs[2],
@@ -70,14 +73,33 @@ def _GruGrad(op, grad):
       whz=op.inputs[4],
       wxh=op.inputs[5],
       whh=op.inputs[6],
-      xs=op.inputs[7],
-      rs=op.inputs[8],
-      zs=op.inputs[9],
-      rhs=op.inputs[10],
-      gs=op.inputs[11],
-      hs=op.inputs[12],
-      drs=grad[0],
-      dzs=grad[1],
-      drhs=grad[2],
-      dgs=grad[3],
-      dhs=grad[4])
+      xs=op.inputs[7:],
+      rs=outputs[0],
+      zs=outputs[1],
+      rhs=outputs[2],
+      gs=outputs[3],
+      hs=outputs[4],
+      drs=grads[0],
+      dzs=grads[1],
+      drhs=grads[2],
+      dgs=grads[3],
+      dhs=grads[4])
+
+  gru_grads_ = [None]
+  for gru_grad in gru_grads:
+    if isinstance(gru_grad, list):
+      gru_grads_ += gru_grad
+    else:
+      gru_grads_ += [gru_grad]
+  return gru_grads_
+
+
+@ops.RegisterShape("GruGrad")
+def _GruGradShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  input_size = op.inputs[1].get_shape()[0].value
+  cell_size = op.get_attr("cell_size")
+
+  return [tensor_shape.TensorShape([input_size, cell_size]),
+          tensor_shape.TensorShape([cell_size, cell_size])] * 3 + [
+          tensor_shape.TensorShape([batch_size, cell_size])] * ((len(op.inputs) - 7) / 11)

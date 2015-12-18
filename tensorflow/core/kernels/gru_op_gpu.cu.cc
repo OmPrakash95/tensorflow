@@ -19,9 +19,24 @@ void GruActivationTanhGPU(const GPUDevice& d, Tensor* x) {
   x->matrix<float>().device(d) = x->matrix<float>().tanh();
 }
 
+void GruActivationSigmoidGradientGPU(const GPUDevice& d, const Tensor& x, Tensor* dx) {
+  dx->matrix<float>().device(d) = dx->matrix<float>() *
+      x.matrix<float>() * (x.matrix<float>().constant(1.0f) - x.matrix<float>());
+}
+
+void GruActivationTanhGradientGPU(const GPUDevice& d, const Tensor& x, Tensor* dx) {
+  dx->matrix<float>().device(d) = dx->matrix<float>() *
+      (x.matrix<float>().constant(1.0f) - x.matrix<float>() * x.matrix<float>());
+}
+
 void GruCWiseMultGPU(const GPUDevice& d, const Tensor& a, const Tensor& b,
-    Tensor* c) {
-  c->matrix<float>().device(d) = a.matrix<float>() * b.matrix<float>();
+    float beta, Tensor* c) {
+  if (beta == 0.0f) {
+    c->matrix<float>().device(d) = a.matrix<float>() * b.matrix<float>();
+  } else if (beta == 1.0f) {
+    c->matrix<float>().device(d) = c->matrix<float>() +
+        a.matrix<float>() * b.matrix<float>();
+  }
 }
 
 void GruHGPU(
@@ -35,6 +50,24 @@ void GruHGPU(
     h->matrix<float>().device(d) =
         (z.matrix<float>().constant(1.0f) - z.matrix<float>()) * g.matrix<float>();
   }
+}
+
+void GruDzGPU(
+    const GPUDevice& d, const Tensor& dh, const Tensor* h_prev, const Tensor& g,
+    Tensor* dz) {
+  if (h_prev) {
+    dz->matrix<float>().device(d) =
+        dh.matrix<float>() * h_prev->matrix<float>() -
+        dh.matrix<float>() * g.matrix<float>();
+  } else {
+    dz->matrix<float>().device(d) = dh.matrix<float>() * g.matrix<float>();
+  }
+}
+
+void GruDgGPU(
+    const GPUDevice& d, const Tensor& dh, const Tensor& z, Tensor* dg) {
+  dg->matrix<float>().device(d) =
+      dh.matrix<float>() * (z.matrix<float>().constant(1.0f) - z.matrix<float>());
 }
 
 }  // end namespace tensorflow
