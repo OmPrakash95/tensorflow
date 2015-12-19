@@ -4,6 +4,59 @@
 
 namespace tensorflow {
 
+REGISTER_OP("GruCell")
+    .Attr("cell_size: int")
+    .Input("sequence_len: int64")
+    .Input("wxr: float")
+    .Input("whr: float")
+    .Input("wxz: float")
+    .Input("whz: float")
+    .Input("wxh: float")
+    .Input("whh: float")
+    .Input("h_prev: float")
+    .Input("x: float")
+    .Output("r: float")
+    .Output("z: float")
+    .Output("rh: float")
+    .Output("g: float")
+    .Output("h: float")
+    .Doc(R"doc(
+GRU Cell
+)doc");
+
+REGISTER_OP("GruCellGrad")
+    .Attr("cell_size: int")
+    .Input("sequence_len: int64")
+    .Input("wxr: float")
+    .Input("whr: float")
+    .Input("wxz: float")
+    .Input("whz: float")
+    .Input("wxh: float")
+    .Input("whh: float")
+    .Input("h_prev: float")
+    .Input("x: float")
+    .Input("r: float")
+    .Input("z: float")
+    .Input("rh: float")
+    .Input("hh: float")
+    .Input("h: float")
+    .Input("dr: float")
+    .Input("dz: float")
+    .Input("drh: float")
+    .Input("dg: float")
+    .Input("dh: float")
+    .Output("dwxr: float")
+    .Output("dwhr: float")
+    .Output("dwxz: float")
+    .Output("dwhz: float")
+    .Output("dwxh: float")
+    .Output("dwhh: float")
+    .Output("dx: float")
+    .Output("dh_prev: float")
+    .Doc(R"doc(
+GRU Cell Gradient
+)doc");
+
 REGISTER_OP("Gru")
     .Attr("cell_size: int")
     .Attr("sequence_len_max: int")

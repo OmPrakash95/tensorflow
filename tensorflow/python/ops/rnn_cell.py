@@ -26,6 +26,7 @@ from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import clip_ops
 from tensorflow.python.ops import embedding_ops
+from tensorflow.python.ops import gru_ops
 from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import nn_ops
@@ -151,6 +152,31 @@ class GRUCell(RNNCell):
       with vs.variable_scope("Candidate"):
         c = tanh(linear([inputs, r * state], self._num_units, True))
       new_h = u * state + (1 - u) * c
+    return new_h, new_h
+
+
+class GRUCellv2(RNNCell):
+  def __init__(self, num_units, sequence_len=None):
+    self._num_units = num_units
+    self._sequence_len = sequence_len
+
+  @property
+  def input_size(self):
+    return self._num_units
+
+  @property
+  def output_size(self):
+    return self._num_units
+
+  @property
+  def state_size(self):
+    return self._num_units
+
+  def __call__(self, inputs, state, scope=None):
+    if isinstance(inputs, (list, tuple)):
+      inputs = array_ops.concat(1, inputs)
+    _, _, _, _, new_h = gru_ops.gru_cell(
+        self._num_units, self._sequence_len, h_prev=state, x=inputs, scope=scope)
     return new_h, new_h
 
 

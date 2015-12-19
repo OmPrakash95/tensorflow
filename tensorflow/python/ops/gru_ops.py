@@ -14,6 +14,90 @@ from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import gen_gru_ops
 
 
+def gru_cell(cell_size, sequence_len, h_prev, x, name=None, scope=None):
+  r"""GRU Cell
+
+  Args:
+    sequence_len: A `Tensor` of type `int64`.
+    wxr: A `Tensor` of type `float32`.
+    whr: A `Tensor` of type `float32`.
+    wxz: A `Tensor` of type `float32`.
+    whz: A `Tensor` of type `float32`.
+    wxh: A `Tensor` of type `float32`.
+    whh: A `Tensor` of type `float32`.
+    h_prev: A `Tensor` of type `float32`.
+    x: A `Tensor` of type `float32`.
+    cell_size: An `int`.
+    name: A name for the operation (optional).
+
+  Returns:
+    A tuple of `Tensor` objects (r, z, rh, g, h).
+    r: A `Tensor` of type `float32`.
+    z: A `Tensor` of type `float32`.
+    rh: A `Tensor` of type `float32`.
+    g: A `Tensor` of type `float32`.
+    h: A `Tensor` of type `float32`.
+  """
+  with vs.variable_scope(scope or "GruCell"):
+    input_size = x.get_shape()[1].value
+
+    wxr = vs.get_variable("wxr", [input_size, cell_size])
+    whr = vs.get_variable("whr", [cell_size, cell_size])
+    wxz = vs.get_variable("wxz", [input_size, cell_size])
+    whz = vs.get_variable("whz", [cell_size, cell_size])
+    wxh = vs.get_variable("wxh", [input_size, cell_size])
+    whh = vs.get_variable("whh", [cell_size, cell_size])
+
+    return gen_gru_ops._gru_cell(cell_size=cell_size, sequence_len=sequence_len,
+        wxr=wxr, whr=whr, wxz=wxz, whz=whz, wxh=wxh, whh=whh, h_prev=h_prev,
+        x=x, name=name)
+
+
+@ops.RegisterShape("GruCell")
+def _GruCellShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  cell_size = op.get_attr("cell_size")
+
+  return [tensorflow.TensorShape([batch_size, cell_size])] * 5
+
+
+@ops.RegisterGradient("GruCell")
+def _GruCellGrad(op, *grad):
+  gru_grads = gen_gru_ops._gru_cell_grad(cell_size=op.get_attr("cell_size"),
+      sequence_len=op.inputs[0],
+      wxr=op.inputs[1],
+      whr=op.inputs[2],
+      wxz=op.inputs[3],
+      whz=op.inputs[4],
+      wxh=op.inputs[5],
+      whh=op.inputs[6],
+      h_prev=op.inputs[7],
+      x=op.inputs[8],
+      r=op.outputs[0],
+      z=op.outputs[1],
+      rh=op.outputs[2],
+      hh=op.outputs[3],
+      h=op.outputs[4],
+      dr=grad[0],
+      dz=grad[1],
+      drh=grad[2],
+      dg=grad[3],
+      dh=grad[4])
+  return [None] * 9
+
+
+@ops.RegisterShape("GruCellGrad")
+def _GruCellGradShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  input_size = op.inputs[1].get_shape()[0].value
+  cell_size = op.get_attr("cell_size")
+
+  return [tensor_shape.TensorShape([input_size, cell_size]),
+          tensor_shape.TensorShape([cell_size, cell_size])] * 3 + [
+          tensor_shape.TensorShape([batch_size, input_size])] + [
+          tensor_shape.TensorShape([batch_size, cell_size])]
+
+
 def gru(cell_size, sequence_len, xs, name=None, scope=None):
   r"""gru
 
