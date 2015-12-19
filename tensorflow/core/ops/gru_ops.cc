@@ -47,8 +47,8 @@ REGISTER_OP("GruCellGrad")
     .Output("dwhz: float")
     .Output("dwxh: float")
     .Output("dwhh: float")
-    .Output("dx: float")
     .Output("dh_prev: float")
+    .Output("dx: float")
     .Doc(R"doc(
 GRU Cell Gradient
 )doc");
