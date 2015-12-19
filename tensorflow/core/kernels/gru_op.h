@@ -58,6 +58,13 @@ struct GruSetZero {
 };
 
 template <typename Device>
+struct GruPadTime {
+  void operator()(
+      const Device& d, const Tensor& sequence_len, const int64 sequence_idx,
+      float value, Tensor* x);
+};
+
+template <typename Device>
 struct GruActivationSigmoid {
   void operator()(const Device& d, Tensor* x);
 };
@@ -104,6 +111,9 @@ struct GruDg {
 };
 
 void GruSetZeroGPU(const GPUDevice& d, Tensor* x);
+void GruPadTimeGPU(
+    const GPUDevice& d, const Tensor& sequence_len, const int64 sequence_idx,
+    float value, Tensor* x);
 void GruActivationSigmoidGPU(const GPUDevice& d, Tensor* x);
 void GruActivationTanhGPU(const GPUDevice& d, Tensor* x);
 void GruActivationSigmoidGradientGPU(

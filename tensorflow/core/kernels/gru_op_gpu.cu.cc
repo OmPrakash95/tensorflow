@@ -11,6 +11,14 @@ void GruSetZeroGPU(const GPUDevice& d, Tensor* x) {
   x->matrix<float>().device(d) = x->matrix<float>().constant(0.0f);
 }
 
+void GruPadTimeGPU(
+    const GPUDevice& d, const Tensor& sequence_len, const int64 sequence_idx,
+    float value, Tensor* x) {
+  x->matrix<float>().device(d) = x->matrix<float>() *
+      (sequence_len.vec<int64>().cast<float>().constant(value) < sequence_len.vec<int64>().cast<float>())
+      .broadcast(Eigen::array<int, 2>({1, static_cast<int>(x->dim_size(1))}));
+};
+
 void GruActivationSigmoidGPU(const GPUDevice& d, Tensor* x) {
   x->matrix<float>().device(d) = x->matrix<float>().sigmoid();
 }

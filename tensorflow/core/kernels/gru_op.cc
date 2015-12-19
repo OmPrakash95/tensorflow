@@ -145,6 +145,26 @@ struct GruSetZero<GPUDevice> {
 };
 
 template <>
+struct GruPadTime<CPUDevice> {
+  void operator()(
+      const CPUDevice& d, const Tensor& sequence_len, const int64 sequence_idx,
+      float value, Tensor* x) {
+    x->matrix<float>().device(d) = x->matrix<float>() *
+        (sequence_len.vec<int64>().cast<float>().constant(value) < sequence_len.vec<int64>().cast<float>())
+        .broadcast(Eigen::array<int, 2>({1, static_cast<int>(x->dim_size(1))}));
+  }
+};
+
+template <>
+struct GruPadTime<GPUDevice> {
+  void operator()(
+      const GPUDevice& d, const Tensor& sequence_len, const int64 sequence_idx,
+      float value, Tensor* x) {
+    GruPadTimeGPU(d, sequence_len, sequence_idx, value, x);
+  }
+};
+
+template <>
 struct GruActivationSigmoid<CPUDevice> {
   void operator()(const CPUDevice& d, Tensor* x) {
     x->matrix<float>().device(d) = x->matrix<float>().sigmoid();
@@ -397,6 +417,8 @@ class GruOp : public OpKernel {
 
       // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
       GruH<Device>()(ctx->eigen_device<Device>(), *z, h_prev, *g, h);
+
+      GruPadTime<Device>()(ctx->eigen_device<Device>(), *sequence_len, t, 0.0f, h);
     }
   }
 
