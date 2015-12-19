@@ -63,7 +63,7 @@ def _GruCellShape(op):
 
 @ops.RegisterGradient("GruCell")
 def _GruCellGrad(op, *grad):
-  gru_grads = gen_gru_ops._gru_cell_grad(cell_size=op.get_attr("cell_size"),
+  gru_grads =  gen_gru_ops._gru_cell_grad(cell_size=op.get_attr("cell_size"),
       sequence_len=op.inputs[0],
       wxr=op.inputs[1],
       whr=op.inputs[2],
@@ -78,12 +78,15 @@ def _GruCellGrad(op, *grad):
       rh=op.outputs[2],
       hh=op.outputs[3],
       h=op.outputs[4],
-      dr=grad[0],
-      dz=grad[1],
-      drh=grad[2],
-      dg=grad[3],
       dh=grad[4])
-  return [None] * 9
+
+  gru_grads_ = [None]
+  for gru_grad in gru_grads:
+    if isinstance(gru_grad, list):
+      gru_grads_ += gru_grad
+    else:
+      gru_grads_ += [gru_grad]
+  return gru_grads_
 
 
 @ops.RegisterShape("GruCellGrad")

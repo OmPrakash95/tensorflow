@@ -89,15 +89,17 @@ class PTBModel(object):
 
     self._input_data = tf.placeholder(tf.int32, [batch_size, num_steps])
     self._targets = tf.placeholder(tf.int32, [batch_size, num_steps])
+    self._sequence_len = tf.placeholder(tf.int64, [batch_size])
 
     # Slightly better results can be obtained with forget gate biases
     # initialized to 1 but the hyperparameters of the model would need to be
     # different than reported in the paper.
-    lstm_cell = rnn_cell.BasicLSTMCell(size, forget_bias=0.0)
-    if is_training and config.keep_prob < 1:
-      lstm_cell = rnn_cell.DropoutWrapper(
-          lstm_cell, output_keep_prob=config.keep_prob)
-    cell = rnn_cell.MultiRNNCell([lstm_cell] * config.num_layers)
+    # lstm_cell = rnn_cell.BasicLSTMCell(size, forget_bias=0.0)
+    # lstm_cell = rnn_cell.GRUCell(size)
+    lstm_cell = rnn_cell.GRUCellv2(size, self._sequence_len)
+    cell = rnn_cell.MultiRNNCell([lstm_cell])
+    # cell = rnn_cell.GRUCellv2(lstm_cell, sequence_len=self._sequence_len)
+    # cell = rnn_cell.GRUCell(lstm_cell)
 
     self._initial_state = cell.zero_state(batch_size, tf.float32)
 
@@ -159,6 +161,10 @@ class PTBModel(object):
   @property
   def targets(self):
     return self._targets
+
+  @property
+  def sequence_len(self):
+    return self._sequence_len
 
   @property
   def initial_state(self):
@@ -236,11 +242,12 @@ def run_epoch(session, m, data, eval_op, verbose=False):
   costs = 0.0
   iters = 0
   state = m.initial_state.eval()
-  for step, (x, y) in enumerate(reader.ptb_iterator(data, m.batch_size,
+  for step, (x, y, z) in enumerate(reader.ptb_iterator(data, m.batch_size,
                                                     m.num_steps)):
     cost, state, _ = session.run([m.cost, m.final_state, eval_op],
                                  {m.input_data: x,
                                   m.targets: y,
+                                  m.sequence_len: z,
                                   m.initial_state: state})
     costs += cost
     iters += m.num_steps

@@ -416,6 +416,8 @@ tf_gen_op_wrapper_py(
     name = "gru_ops",
     hidden = [
         "Gru",
+        "GruCell",
+        "GruCellGrad",
         "GruGrad",
     ],
     require_shape_functions = True,

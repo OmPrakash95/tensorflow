@@ -147,10 +147,10 @@ class GRUCell(RNNCell):
       with vs.variable_scope("Gates"):  # Reset gate and update gate.
         # We start with bias of 1.0 to not reset and not udpate.
         r, u = array_ops.split(1, 2, linear([inputs, state],
-                                            2 * self._num_units, True, 1.0))
+                                            2 * self._num_units, False, 1.0))
         r, u = sigmoid(r), sigmoid(u)
       with vs.variable_scope("Candidate"):
-        c = tanh(linear([inputs, r * state], self._num_units, True))
+        c = tanh(linear([inputs, r * state], self._num_units, False))
       new_h = u * state + (1 - u) * c
     return new_h, new_h
 
@@ -176,7 +176,8 @@ class GRUCellv2(RNNCell):
     if isinstance(inputs, (list, tuple)):
       inputs = array_ops.concat(1, inputs)
     _, _, _, _, new_h = gru_ops.gru_cell(
-        self._num_units, self._sequence_len, h_prev=state, x=inputs, scope=scope)
+        cell_size=self._num_units, sequence_len=self._sequence_len,
+        h_prev=state, x=inputs, scope=scope)
     return new_h, new_h
 
 
