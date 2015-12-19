@@ -451,13 +451,13 @@ class GruCellGradOp : public OpKernel {
     GruMatMul<Device>(ctx, false, dr, true, *whr, 1.0f, dh_prev);
 
     // Gradients wrt to weights.
-    GruMatMul<Device>(ctx, true, *x, false, dr, 1.0f, dwxr);
-    GruMatMul<Device>(ctx, true, *x, false, dz, 1.0f, dwxz);
-    GruMatMul<Device>(ctx, true, *x, false, dg, 1.0f, dwxh);
+    GruMatMul<Device>(ctx, true, *x, false, dr, 0.0f, dwxr);
+    GruMatMul<Device>(ctx, true, *x, false, dz, 0.0f, dwxz);
+    GruMatMul<Device>(ctx, true, *x, false, dg, 0.0f, dwxh);
 
-    GruMatMul<Device>(ctx, true, *h_prev, false, dr, 1.0f, dwhr);
-    GruMatMul<Device>(ctx, true, *h_prev, false, dz, 1.0f, dwhz);
-    GruMatMul<Device>(ctx, true, *rh, false, dg, 1.0f, dwhh);
+    GruMatMul<Device>(ctx, true, *h_prev, false, dr, 0.0f, dwhr);
+    GruMatMul<Device>(ctx, true, *h_prev, false, dz, 0.0f, dwhz);
+    GruMatMul<Device>(ctx, true, *rh, false, dg, 0.0f, dwhh);
   }
 
  private:
