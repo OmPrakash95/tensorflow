@@ -407,7 +407,7 @@ class GruCellGradOp : public OpKernel {
 #define ALLOCATE_TEMP(NAME, SHAPE)                                             \
     Tensor NAME;                                                               \
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT, SHAPE, &NAME));           \
-    GruSetZero<Device>()(ctx->eigen_device<Device>(), NAME);
+    GruSetZero<Device>()(ctx->eigen_device<Device>(), &NAME);
 
     ALLOCATE_TEMP(dr, h->shape());
     ALLOCATE_TEMP(dz, h->shape());
@@ -429,7 +429,7 @@ class GruCellGradOp : public OpKernel {
 
     // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
     GruDz<Device>()(ctx->eigen_device<Device>(), *dh, h_prev, *hh, &dz);
-    GruCWiseMult<Device>()(ctx->eigen_device<Device>(), *dh, *z, 1.0f, dh_prev);
+    GruCWiseMult<Device>()(ctx->eigen_device<Device>(), *dh, *z, 0.0f, dh_prev);
     GruDg<Device>()(ctx->eigen_device<Device>(), *dh, *z, &dg);
 
     // // g[t] = tanh(x[t] Wxh + rh[t] Whh)
@@ -442,13 +442,13 @@ class GruCellGradOp : public OpKernel {
 
     // // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
     GruActivationSigmoidGradient<Device>()(ctx->eigen_device<Device>(), *z, &dz);
-    GruMatMul<Device>(ctx, false, dz, true, *wxz, 0.0f, dx);
-    GruMatMul<Device>(ctx, false, dz, true, *whz, 0.0f, dh_prev);
+    GruMatMul<Device>(ctx, false, dz, true, *wxz, 1.0f, dx);
+    GruMatMul<Device>(ctx, false, dz, true, *whz, 1.0f, dh_prev);
 
     // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
     GruActivationSigmoidGradient<Device>()(ctx->eigen_device<Device>(), *r, &dr);
-    GruMatMul<Device>(ctx, false, dr, true, *wxr, 0.0f, dx);
-    GruMatMul<Device>(ctx, false, dr, true, *whr, 0.0f, dh_prev);
+    GruMatMul<Device>(ctx, false, dr, true, *wxr, 1.0f, dx);
+    GruMatMul<Device>(ctx, false, dr, true, *whr, 1.0f, dh_prev);
 
     // Gradients wrt to weights.
     GruMatMul<Device>(ctx, true, *x, false, dr, 1.0f, dwxr);
