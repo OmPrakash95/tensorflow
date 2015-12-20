@@ -166,8 +166,9 @@ def tied_rnn_seq2seq(encoder_inputs, decoder_inputs, cell,
                        loop_function=loop_function, scope=scope)
 
 
-def embedding_rnn_decoder(decoder_inputs, initial_state, cell, num_symbols,
-                          output_projection=None, feed_previous=False,
+def embedding_rnn_decoder(decoder_inputs, initial_state, cell,
+                          embedding_size, num_symbols, output_projection=None,
+                          feed_previous=False, sequence_length=None,
                           scope=None):
   """RNN decoder with embedding and a pure-decoding option.
 
@@ -202,7 +203,7 @@ def embedding_rnn_decoder(decoder_inputs, initial_state, cell, num_symbols,
   if output_projection is not None:
     proj_weights = ops.convert_to_tensor(
         output_projection[0], dtype=dtypes.float32)
-    proj_weights.get_shape().assert_is_compatible_with([cell.output_size,
+    proj_weights.get_shape().assert_is_compatible_with([embedding_size,
                                                         num_symbols])
     proj_biases = ops.convert_to_tensor(
         output_projection[1], dtype=dtypes.float32)
@@ -227,7 +228,8 @@ def embedding_rnn_decoder(decoder_inputs, initial_state, cell, num_symbols,
     emb_inp = [
         embedding_ops.embedding_lookup(embedding, i) for i in decoder_inputs]
     return rnn_decoder(emb_inp, initial_state, cell,
-                       loop_function=loop_function)
+                       loop_function=loop_function,
+                       sequence_length=sequence_length)
 
 
 def embedding_rnn_seq2seq(encoder_inputs, decoder_inputs, cell,

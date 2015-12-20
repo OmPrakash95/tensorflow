@@ -47,7 +47,7 @@ tf.app.flags.DEFINE_integer('attention_embedding_size', 512,
 tf.app.flags.DEFINE_float('max_gradient_norm', 1000,
                            """Maximum gradient norm.""")
 
-tf.app.flags.DEFINE_float('learning_rate', 0.001,
+tf.app.flags.DEFINE_float('learning_rate', 0.1,
                            """Learning rate.""")
 
 tf.app.flags.DEFINE_string('logdir', '/tmp',
@@ -122,6 +122,8 @@ class LASModel(object):
     # Add the shape to the features.
     for feature in self.features:
       feature.set_shape([self.batch_size, self.features_width])
+    for token in self.tokens:
+      token.set_shape([self.batch_size])
 
 
   def create_encoder(self):
@@ -134,11 +136,6 @@ class LASModel(object):
     self.create_encoder_layer(subsample_input=2)
     self.create_encoder_layer(subsample_input=2)
 
-    # encoder_embedding_projection = tf.get_variable(
-    #     "encoder_embedding_projection", [self.encoder_cell_size, self.attention_embedding_size])
-    # self.encoder_embeddings = [
-    #     math_ops.matmul(state, encoder_embedding_projection) for state in self.encoder_states[-1][0]]
-
     print('create_encoder graph time %f' % (time.time() - start_time))
 
 
@@ -147,8 +144,7 @@ class LASModel(object):
       sequence_len_factor = tf.constant(subsample_input, shape=[self.batch_size], dtype=tf.int64)
       sequence_len = tf.div(self.encoder_states[-1][1], sequence_len_factor)
       if use_monolithic:
-        if use_monolithic:
-          self.encoder_states.append([gru_ops.gru(
+        self.encoder_states.append([gru_ops.gru(
             cell_size=self.encoder_cell_size,
             sequence_len=sequence_len,
             xs=self.encoder_states[-1][0][0::subsample_input])[-1], sequence_len])
@@ -168,10 +164,12 @@ class LASModel(object):
     self.decoder_states = []
     self.decoder_states.append(self.tokens[:-1])
 
-    attention_states = [
-        array_ops.reshape(e, [-1, 1, self.encoder_cell_size])
-        for e in self.encoder_states[-1][0]]
-    attention_states = array_ops.concat(1, attention_states)
+    attention_states = []
+    if len(self.encoder_states) > 1:
+      attention_states = [
+          array_ops.reshape(e, [-1, 1, self.encoder_cell_size])
+          for e in self.encoder_states[-1][0]]
+      attention_states = array_ops.concat(1, attention_states)
 
     self.create_decoder_layer(attention_states=attention_states)
     self.create_decoder_layer(output_projection=True)
@@ -204,9 +202,15 @@ class LASModel(object):
               cell, attention_states_sequence_len=self.encoder_states[-1][1],
               sequence_length=self.tokens_len)[0])
       else:
-        self.decoder_states.append(seq2seq.rnn_decoder(
-            self.decoder_states[-1], decoder_initial_state, cell,
-            sequence_length=self.tokens_len)[0])
+        if len(self.decoder_states) == 1:
+          self.decoder_states.append(seq2seq.embedding_rnn_decoder(
+              self.decoder_states[-1], decoder_initial_state, cell,
+              self.embedding_size, self.vocab_size,
+              sequence_length=self.tokens_len)[0])
+        else:
+          self.decoder_states.append(seq2seq.rnn_decoder(
+              self.decoder_states[-1], decoder_initial_state, cell,
+              sequence_length=self.tokens_len)[0])
 
 
   def create_loss(self):
@@ -241,13 +245,17 @@ class LASModel(object):
     start_time = time.time()
 
     params = tf.trainable_variables()
+    for param in params:
+      print(param.name + ': ' + str(param.get_shape()))
 
     self.gradient_norms = []
     self.updates = []
-    opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+    # opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+    opt = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
 
     gradients = tf.gradients(self.losses, params)
-    clipped_gradients, norm = tf.clip_by_global_norm(gradients, self.max_gradient_norm)
+    clipped_gradients, norm = tf.clip_by_global_norm(
+        gradients, self.max_gradient_norm)
 
     self.gradient_norms.append(norm)
     self.updates.append(opt.apply_gradients(
@@ -268,7 +276,7 @@ class LASModel(object):
     if forward_only:
       uttid, text, logperp = sess.run([self.uttid, self.text] + self.losses)
     else:
-      uttid, text, logperp = sess.run([self.uttid, self.text] + self.losses)
+      uttid, text, logperp, _ = sess.run([self.uttid, self.text] + self.losses + self.updates)
 
     print logperp
     tf.scalar_summary('logperp', logperp)
