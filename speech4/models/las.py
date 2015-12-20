@@ -35,22 +35,28 @@ tf.app.flags.DEFINE_integer('vocab_size', 64,
 tf.app.flags.DEFINE_integer('embedding_size', 32,
                             """Token vocabulary size.""")
 
-tf.app.flags.DEFINE_integer('encoder_cell_size', 256,
+tf.app.flags.DEFINE_integer('encoder_cell_size', 512,
                             """Encoder cell size.""")
-tf.app.flags.DEFINE_integer('decoder_cell_size', 256,
+tf.app.flags.DEFINE_integer('decoder_cell_size', 512,
                             """Decoder cell size.""")
-tf.app.flags.DEFINE_integer('attention_embedding_size', 256,
+tf.app.flags.DEFINE_integer('attention_embedding_size', 512,
                             """Attention embedding size.""")
 
 tf.app.flags.DEFINE_float('max_gradient_norm', 1000,
                            """Maximum gradient norm.""")
 
+tf.app.flags.DEFINE_float('learning_rate', 0.001,
+                           """Learning rate.""")
+
 tf.app.flags.DEFINE_string('logdir', '/tmp',
                            """Path to our outputs and logs.""")
 
 class LASModel(object):
-  def __init__(self, batch_size, features_width, features_len_max, vocab_size, embedding_size, tokens_len_max,
-      encoder_cell_size, decoder_cell_size, attention_embedding_size, max_gradient_norm):
+  def __init__(self, dataset, batch_size, features_width, features_len_max,
+      vocab_size, embedding_size, tokens_len_max, encoder_cell_size,
+      decoder_cell_size, attention_embedding_size, max_gradient_norm,
+      learning_rate):
+    self.dataset = dataset
     self.batch_size = batch_size
     
     self.features_width = features_width
@@ -64,7 +70,9 @@ class LASModel(object):
     self.attention_embedding_size = attention_embedding_size
 
     self.max_gradient_norm = max_gradient_norm
+    self.learning_rate = learning_rate
 
+    self.step_total = 0
     self.step_time_total = 0
 
     self.global_step = tf.Variable(0, trainable=False)
@@ -80,13 +88,23 @@ class LASModel(object):
     self.create_loss()
 
     # Create the optimizer.
-    # self.create_optimizer()
+    self.create_optimizer()
 
     self.saver = tf.train.Saver(tf.all_variables())
 
 
   def create_graph_inputs(self):
-    filename_queue = tf.train.string_input_producer(['speech4/data/train_si284.tfrecords'])
+    dataset_map = {}
+    if self.dataset == 'train_si284':
+      self.dataset = 'speech4/data/train_si284.tfrecords'
+      self.dataset_size = 37416
+    elif self.dataset == 'test_dev93':
+      self.dataset = 'speech4/data/test_dev93.tfrecords'
+      self.dataset_size = 503
+    elif self.dataset == 'test_eval92':
+      self.dataset = 'speech4/data/test_eval92.tfrecords'
+      self.dataset_size = 333
+    filename_queue = tf.train.string_input_producer([self.dataset])
 
     reader = tf.TFRecordReader()
     _, serialized = reader.read(filename_queue)
@@ -148,7 +166,9 @@ class LASModel(object):
     self.decoder_states = []
     self.decoder_states.append(self.tokens[:-1])
 
-    attention_states = [array_ops.reshape(e, [-1, 1, self.encoder_cell_size]) for e in self.encoder_states[-1][0]]
+    attention_states = [
+        array_ops.reshape(e, [-1, 1, self.encoder_cell_size])
+        for e in self.encoder_states[-1][0]]
     attention_states = array_ops.concat(1, attention_states)
 
     self.create_decoder_layer(attention_states=attention_states)
@@ -157,12 +177,15 @@ class LASModel(object):
     print('create_decoder graph time %f' % (time.time() - start_time))
 
 
-  def create_decoder_layer(self, attention_states=None, output_projection=None, scope=None):
+  def create_decoder_layer(
+      self, attention_states=None, output_projection=None, scope=None):
     with vs.variable_scope('decoder_layer_%d' % (len(self.decoder_states))):
-      decoder_initial_state = tf.constant(0, shape=[self.batch_size, self.decoder_cell_size], dtype=tf.float32)
+      decoder_initial_state = tf.constant(
+          0, shape=[self.batch_size, self.decoder_cell_size], dtype=tf.float32)
       decoder_initial_state.set_shape([self.batch_size, self.decoder_cell_size])
 
-      cell = rnn_cell.GRUCell(self.decoder_cell_size)
+      # cell = rnn_cell.GRUCell(self.decoder_cell_size)
+      cell = rnn_cell.GRUCellv2(self.decoder_cell_size, sequence_len=self.tokens_len)
       if output_projection == True:
         cell = rnn_cell.OutputProjectionWrapper(cell, self.vocab_size)
 
@@ -171,13 +194,17 @@ class LASModel(object):
           self.decoder_states.append(seq2seq.embedding_attention_decoder(
               self.decoder_states[-1], decoder_initial_state, attention_states,
               cell, self.embedding_size, self.vocab_size,
+              attention_states_sequence_len=self.encoder_states[-1][1],
               sequence_length=self.tokens_len)[0])
         else:
           self.decoder_states.append(seq2seq.attention_decoder(
-              self.decoder_states[-1], decoder_initial_state, attention_states, cell, sequence_length=self.tokens_len)[0])
+              self.decoder_states[-1], decoder_initial_state, attention_states,
+              cell, attention_states_sequence_len=self.encoder_states[-1][1],
+              sequence_length=self.tokens_len)[0])
       else:
         self.decoder_states.append(seq2seq.rnn_decoder(
-            self.decoder_states[-1], decoder_initial_state, cell, sequence_length=self.tokens_len)[0])
+            self.decoder_states[-1], decoder_initial_state, cell,
+            sequence_length=self.tokens_len)[0])
 
 
   def create_loss(self):
@@ -197,7 +224,7 @@ class LASModel(object):
 
     self.gradient_norms = []
     self.updates = []
-    opt = tf.train.GradientDescentOptimizer(0.001)
+    opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
 
     gradients = tf.gradients(self.losses, params)
     clipped_gradients, norm = tf.clip_by_global_norm(gradients, self.max_gradient_norm)
@@ -209,35 +236,39 @@ class LASModel(object):
     print('create_optimizer graph time %f' % (time.time() - start_time))
 
 
-  def step(self, sess, forward_only):
+  def step(self, sess, forward_only, epoch=False):
+    if epoch:
+      steps_per_epoch = self.dataset_size // self.batch_size
+
+      for s in range(steps_per_epoch):
+        self.step(sess, forward_only, epoch=False)
+
     start_time = time.time()
 
-    ret = [None] * 4
+    ret = None
     if forward_only:
-      temp = sess.run([self.uttid, self.text, self.features_len] + self.encoder_states[-1][0])
-      ret[0] = temp[0:3]
+      ret = sess.run([self.uttid, self.text, self.features_len] + self.losses)
     else:
-      temp = sess.run([self.uttid, self.text, self.features_len] + self.updates + self.gradient_norms + self.losses)
-      # temp = sess.run([self.uttid, self.text, self.features_len] + self.encoder_states[-1][0])
-      ret[0] = temp[0:3]
-      ret[1] = temp[len(ret[0])                            :len(ret[0]) + len(self.updates)]
-      ret[2] = temp[len(ret[0]) + len(ret[1])              :len(ret[0]) + len(ret[1]) + len(self.gradient_norms)]
-      ret[3] = temp[len(ret[0]) + len(ret[1]) + len(ret[2]):len(ret[0]) + len(ret[1]) + len(ret[2]) + len(self.losses)]
+      ret = sess.run([self.uttid, self.text, self.features_len] + self.losses)
+
+    loss = ret[-1]
+    tf.scalar_summary('loss', loss)
 
     step_time = time.time() - start_time
-    print(step_time)
+
+    self.step_total += 1
     self.step_time_total += step_time
 
-    return ret
 
-
-def create_model(sess, forward_only):
+def create_model(sess, dataset, forward_only):
   start_time = time.time()
 
   model = LASModel(
-      FLAGS.batch_size, FLAGS.features_width, FLAGS.features_len_max, FLAGS.vocab_size, FLAGS.embedding_size,
-      FLAGS.tokens_len_max, FLAGS.encoder_cell_size, FLAGS.decoder_cell_size, FLAGS.attention_embedding_size,
-      FLAGS.max_gradient_norm)
+      dataset, FLAGS.batch_size, FLAGS.features_width, FLAGS.features_len_max,
+      FLAGS.vocab_size, FLAGS.embedding_size, FLAGS.tokens_len_max,
+      FLAGS.encoder_cell_size, FLAGS.decoder_cell_size,
+      FLAGS.attention_embedding_size, FLAGS.max_gradient_norm,
+      FLAGS.learning_rate)
 
   sess.run(tf.initialize_all_variables())
   tf.train.start_queue_runners(sess=sess)
@@ -251,32 +282,17 @@ def run_train():
   device = '/gpu:%d' % FLAGS.device if FLAGS.device >= 0 else '/cpu:0'
   with tf.device(device):
     with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
-      model = create_model(sess, False)
+      model = create_model(sess, 'train_si284', False)
 
       summary_op = tf.merge_all_summaries()
 
       summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
       summary_writer.flush()
 
-      input_, _, _, losses = model.step(sess, True)
-      input_, _, _, losses = model.step(sess, True)
-      input_, _, _, losses = model.step(sess, True)
-      input_, _, _, losses = model.step(sess, True)
-      input_, _, _, losses = model.step(sess, True)
-      input_, _, _, losses = model.step(sess, True)
-      input_, _, _, losses = model.step(sess, True)
-      input_, _, _, losses = model.step(sess, True)
-
-      print input_[0]
-      print input_[1]
-      print input_[2]
+      model.step(sess, False, epoch=True)
 
       summary_str = sess.run(summary_op)
       summary_writer.add_summary(summary_str, 0)
-      summary_writer.flush()
-
-      print losses
-      print 'step_time: ' + str(model.step_time_total)
 
 
 def main(_):

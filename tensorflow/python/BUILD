@@ -415,6 +415,7 @@ tf_gen_op_wrapper_py(
 tf_gen_op_wrapper_py(
     name = "gru_ops",
     hidden = [
+        "AttentionMask",
         "Gru",
         "GruCell",
         "GruCellGrad",
