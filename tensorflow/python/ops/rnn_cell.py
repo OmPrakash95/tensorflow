@@ -22,6 +22,7 @@ import math
 
 from six.moves import xrange  # pylint: disable=redefined-builtin
 
+from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import clip_ops
@@ -156,8 +157,11 @@ class GRUCell(RNNCell):
 
 
 class GRUCellv2(RNNCell):
-  def __init__(self, num_units, sequence_len=None):
+  def __init__(self, num_units, batch_size=None, sequence_len=None):
     self._num_units = num_units
+    if sequence_len == None:
+      sequence_len = array_ops.ones(
+          array_ops.pack([batch_size, num_units]), dtype=dtypes.int64)
     self._sequence_len = sequence_len
 
   @property

@@ -14,6 +14,34 @@ from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import gen_gru_ops
 
 
+def attention_mask(attention_states_sequence_len, input, name=None):
+  r"""AttentionMask
+
+  Args:
+    attention_states_sequence_len: A `Tensor` of type `int64`.
+    input: A `Tensor` of type `float32`.
+    name: A name for the operation (optional).
+
+  Returns:
+    A `Tensor` of type `float32`.
+  """
+  return gen_gru_ops._attention_mask(
+      attention_states_sequence_len=attention_states_sequence_len, input=input,
+      fill_value=-np.finfo(np.float32).max, name=name)
+
+
+@ops.RegisterShape("AttentionMask")
+def _AttentionMaskShape(op):
+  return [op.inputs[1].get_shape()]
+
+
+@ops.RegisterGradient("AttentionMask")
+def _AttentionMaskGrad(op, *grad):
+  attention_mask_grad = gen_gru_ops._attention_mask(
+      attention_states_sequence_len=op.inputs[0], input=grad[0], fill_value=0.0)
+  return [None] + [attention_mask_grad]
+
+
 def gru_cell(cell_size, sequence_len, h_prev, x, name=None, scope=None):
   r"""GRU Cell
 
@@ -128,11 +156,8 @@ def gru(cell_size, sequence_len, xs, name=None, scope=None):
     wxh = vs.get_variable("wxh", [input_size, cell_size])
     whh = vs.get_variable("whh", [cell_size, cell_size])
 
-    outputs = gen_gru_ops._gru(cell_size=cell_size, sequence_len=sequence_len,
+    return gen_gru_ops._gru(cell_size=cell_size, sequence_len=sequence_len,
         wxr=wxr, whr=whr, wxz=wxz, whz=whz, wxh=wxh, whh=whh, xs=xs, name=name)
-    for output in outputs:
-      gen_gru_ops.sink(output)
-    return outputs
 
 
 @ops.RegisterShape("Gru")

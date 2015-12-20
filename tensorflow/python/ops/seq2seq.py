@@ -25,6 +25,7 @@ from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import embedding_ops
+from tensorflow.python.ops import gru_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import nn_ops
 from tensorflow.python.ops import rnn
@@ -34,7 +35,7 @@ from tensorflow.python.ops import variable_scope as vs
 
 
 def rnn_decoder(decoder_inputs, initial_state, cell, loop_function=None,
-                scope=None):
+                sequence_length=None, scope=None):
   """RNN decoder for the sequence-to-sequence model.
 
   Args:
@@ -61,9 +62,22 @@ def rnn_decoder(decoder_inputs, initial_state, cell, loop_function=None,
        states can be the same. They are different for LSTM cells though.)
   """
   with vs.variable_scope(scope or "rnn_decoder"):
+    batch_size = decoder_inputs[0].get_shape()[0].value
+
     states = [initial_state]
     outputs = []
     prev = None
+
+    if sequence_length:  # Prepare variables
+      zero_output_state = (
+          array_ops.zeros(array_ops.pack([batch_size, cell.output_size]),
+                          dtypes.float32),
+          array_ops.zeros(array_ops.pack([batch_size, cell.state_size]),
+                          dtypes.float32))
+      zero_output_state[0].set_shape([batch_size, cell.output_size])
+      zero_output_state[1].set_shape([batch_size, cell.state_size])
+      max_sequence_length = math_ops.reduce_max(sequence_length)
+
     for i in xrange(len(decoder_inputs)):
       inp = decoder_inputs[i]
       if loop_function is not None and prev is not None:
@@ -72,7 +86,18 @@ def rnn_decoder(decoder_inputs, initial_state, cell, loop_function=None,
           inp = array_ops.stop_gradient(loop_function(prev, i))
       if i > 0:
         vs.get_variable_scope().reuse_variables()
-      output, new_state = cell(inp, states[-1])
+
+      def output_state():
+        return cell(inp, states[-1])
+
+      if sequence_length:
+        (output, new_state) = control_flow_ops.cond(
+            i >= max_sequence_length,
+            lambda: zero_output_state, output_state)
+      else:
+        (output, new_state) = output_state()
+      
+
       outputs.append(output)
       states.append(new_state)
       if loop_function is not None:
@@ -360,7 +385,8 @@ def embedding_tied_rnn_seq2seq(encoder_inputs, decoder_inputs, cell,
 
 def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
                       output_size=None, num_heads=1, loop_function=None,
-                      dtype=dtypes.float32, sequence_length=None, scope=None):
+                      dtype=dtypes.float32, attention_states_sequence_len=None,
+                      sequence_length=None, scope=None):
   """RNN decoder with attention for the sequence-to-sequence model.
 
   Args:
@@ -379,6 +405,7 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
         * i is an integer, the step number (when advanced control is needed),
         * next is a 2D Tensor of shape [batch_size x cell.input_size].
     dtype: The dtype to use for the RNN initial state (default: tf.float32).
+    sequence_length: (optional) An int64 vector (tensor) size [batch_size].
     scope: VariableScope for the created subgraph; default: "attention_decoder".
 
   Returns:
@@ -392,7 +419,6 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
         new_attn = softmax(V^T * tanh(W * attention_states + U * new_state))
       and then we calculate the output:
         output = linear(cell_output, new_attn).
-    sequence_length: (optional) An int64 vector (tensor) size [batch_size].
     states: The state of each decoder cell in each time-step. This is a list
       with length len(decoder_inputs) -- one item for each time-step.
       Each item is a 2D Tensor of shape [batch_size x cell.state_size].
@@ -428,6 +454,19 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
       hidden_features.append(nn_ops.conv2d(hidden, k, [1, 1, 1, 1], "SAME"))
       v.append(vs.get_variable("AttnV_%d" % a, [attention_vec_size]))
 
+    if sequence_length:  # Prepare variables
+      zero_output_state = (
+          array_ops.zeros(array_ops.pack([batch_size, output_size]),
+                          dtype),
+          array_ops.zeros(array_ops.pack([batch_size, cell.state_size]),
+                          dtype),
+          array_ops.zeros(array_ops.pack([batch_size, attention_vec_size]),
+                          dtype))
+      zero_output_state[0].set_shape([batch_size, output_size])
+      zero_output_state[1].set_shape([batch_size, cell.state_size])
+      zero_output_state[2].set_shape([batch_size, attention_vec_size])
+      max_sequence_length = math_ops.reduce_max(sequence_length)
+
     states = [initial_state]
 
     def attention(query):
@@ -440,6 +479,9 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
           # Attention mask is a softmax of v^T * tanh(...).
           s = math_ops.reduce_sum(
               v[a] * math_ops.tanh(hidden_features[a] + y), [2, 3])
+          # Attention mask.
+          if attention_states_sequence_len:
+            s = gru_ops.attention_mask(attention_states_sequence_len, s)
           a = nn_ops.softmax(s)
           # Now calculate the attention-weighted vector d.
           d = math_ops.reduce_sum(
@@ -463,15 +505,26 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
       if loop_function is not None and prev is not None:
         with vs.variable_scope("loop_function", reuse=True):
           inp = array_ops.stop_gradient(loop_function(prev, i))
-      # Merge input and previous attentions into one vector of the right size.
-      x = rnn_cell.linear([inp] + attns, cell.input_size, True)
-      # Run the RNN.
-      cell_output, new_state = cell(x, states[-1])
+      def output_state():
+        # Merge input and previous attentions into one vector of the right size.
+        x = rnn_cell.linear([inp] + attns, cell.input_size, True)
+        # Run the RNN.
+        cell_output, new_state = cell(x, states[-1])
+        # Run the attention mechanism.
+        new_attns = attention(new_state)
+        with vs.variable_scope("AttnOutputProjection"):
+          output = rnn_cell.linear([cell_output] + new_attns, output_size, True)
+        return (output, new_state, new_attns[0])
+
+      if sequence_length:
+        (output, new_state, attns) = control_flow_ops.cond(
+            i >= max_sequence_length,
+            lambda: zero_output_state, output_state)
+      else:
+        (output, new_state, attns) = output_state()
+      attns = [attns]
+
       states.append(new_state)
-      # Run the attention mechanism.
-      attns = attention(new_state)
-      with vs.variable_scope("AttnOutputProjection"):
-        output = rnn_cell.linear([cell_output] + attns, output_size, True)
       if loop_function is not None:
         # We do not propagate gradients over the loop function.
         prev = array_ops.stop_gradient(output)
@@ -481,10 +534,11 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
 
 
 def embedding_attention_decoder(decoder_inputs, initial_state, attention_states,
-                                cell, num_symbols, embedding_size, num_heads=1,
+                                cell, embedding_size, num_symbols, num_heads=1,
                                 output_size=None, output_projection=None,
                                 feed_previous=False, dtype=dtypes.float32,
-                                scope=None):
+                                attention_states_sequence_len=None,
+                                sequence_length=None, scope=None):
   """RNN decoder with embedding and attention and a pure-decoding option.
 
   Args:
@@ -506,6 +560,7 @@ def embedding_attention_decoder(decoder_inputs, initial_state, attention_states,
       during training to emulate http://arxiv.org/pdf/1506.03099v2.pdf.
       If False, decoder_inputs are used as given (the standard decoder case).
     dtype: The dtype to use for the RNN initial states (default: tf.float32).
+    sequence_length: (optional) An int64 vector (tensor) size [batch_size].
     scope: VariableScope for the created subgraph; defaults to
       "embedding_attention_decoder".
 
@@ -551,7 +606,9 @@ def embedding_attention_decoder(decoder_inputs, initial_state, attention_states,
       emb.set_shape([decoder_inputs[0].get_shape()[0].value, embedding_size])
     return attention_decoder(
         emb_inp, initial_state, attention_states, cell, output_size=output_size,
-        num_heads=num_heads, loop_function=loop_function)
+        num_heads=num_heads, loop_function=loop_function,
+        attention_states_sequence_len=attention_states_sequence_len,
+        sequence_length=sequence_length)
 
 
 def embedding_attention_seq2seq(encoder_inputs, decoder_inputs, cell,

@@ -145,6 +145,27 @@ struct GruSetZero<GPUDevice> {
 };
 
 template <>
+struct AttentionMask<CPUDevice> {
+  void operator()(
+      const CPUDevice& d, float fill_value, const Tensor& sequence_len,
+      const Tensor& input, Tensor* output) {
+    generator::AttentionMaskGenerator generator(
+        fill_value, sequence_len.vec<int64>(), input.matrix<float>());
+    output->matrix<float>().device(d) = input.matrix<float>().generate(generator);
+  }
+};
+
+template <>
+struct AttentionMask<GPUDevice> {
+  void operator()(
+      const GPUDevice& d, float fill_value, const Tensor& sequence_len,
+      const Tensor& input, Tensor* output) {
+    AttentionMaskGPU(d, fill_value, sequence_len, input, output);
+  }
+};
+
+
+template <>
 struct GruPadTime<CPUDevice> {
   void operator()(
       const CPUDevice& d, const Tensor& sequence_len, const int64 sequence_idx,
@@ -308,6 +329,39 @@ struct GruDg<GPUDevice> {
 };
 
 template <typename Device>
+class AttentionMaskOp : public OpKernel {
+ public:
+  explicit AttentionMaskOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("fill_value", &fill_value_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+  #define INPUT_TENSOR(T)                                                      \
+    const Tensor* T = nullptr;                                                 \
+    OP_REQUIRES_OK(ctx, ctx->input(#T, &T));
+
+    INPUT_TENSOR(attention_states_sequence_len);
+    const int64 batch_size = attention_states_sequence_len->NumElements();
+
+    INPUT_TENSOR(input);
+
+#define OUTPUT_TENSOR(NAME, SHAPE)                                             \
+    Tensor* NAME = nullptr;                                                    \
+    ctx->allocate_output(#NAME, SHAPE, &NAME);                                 \
+    GruSetZero<Device>()(ctx->eigen_device<Device>(), NAME);
+
+    OUTPUT_TENSOR(output, input->shape());
+
+    AttentionMask<Device>()(
+        ctx->eigen_device<Device>(), fill_value_, *attention_states_sequence_len,
+        *input, output);
+  }
+
+ private:
+  float fill_value_;
+};
+
+template <typename Device>
 class GruCellOp : public OpKernel {
  public:
   explicit GruCellOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -315,14 +369,8 @@ class GruCellOp : public OpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    const Tensor* sequence_len = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->input("sequence_len", &sequence_len));
-
+    INPUT_TENSOR(sequence_len);
     const int64 batch_size = sequence_len->NumElements();
-
-  #define INPUT_TENSOR(T)                                                      \
-    const Tensor* T = nullptr;                                                 \
-    OP_REQUIRES_OK(ctx, ctx->input(#T, &T));
 
     INPUT_TENSOR(h_prev);
     INPUT_TENSOR(x);
@@ -333,11 +381,6 @@ class GruCellOp : public OpKernel {
     INPUT_TENSOR(whz);
     INPUT_TENSOR(wxh);
     INPUT_TENSOR(whh);
-
-#define OUTPUT_TENSOR(NAME, SHAPE)                                             \
-    Tensor* NAME = nullptr;                                                    \
-    ctx->allocate_output(#NAME, SHAPE, &NAME);                                 \
-    GruSetZero<Device>()(ctx->eigen_device<Device>(), NAME);
 
     OUTPUT_TENSOR(r, TensorShape({batch_size, cell_size_}));
     OUTPUT_TENSOR(z, TensorShape({batch_size, cell_size_}));
@@ -432,7 +475,7 @@ class GruCellGradOp : public OpKernel {
     GruCWiseMult<Device>()(ctx->eigen_device<Device>(), *dh, *z, 0.0f, dh_prev);
     GruDg<Device>()(ctx->eigen_device<Device>(), *dh, *z, &dg);
 
-    // // g[t] = tanh(x[t] Wxh + rh[t] Whh)
+    // g[t] = tanh(x[t] Wxh + rh[t] Whh)
     GruActivationTanhGradient<Device>()(ctx->eigen_device<Device>(), *hh, &dg);
     GruMatMul<Device>(ctx, false, dg, true, *wxh, 0.0f, dx);
     GruMatMul<Device>(ctx, false, dg, true, *whh, 0.0f, &drh);
@@ -440,7 +483,7 @@ class GruCellGradOp : public OpKernel {
     GruCWiseMult<Device>()(ctx->eigen_device<Device>(), drh, *h_prev, 0.0f, &dr);
     GruCWiseMult<Device>()(ctx->eigen_device<Device>(), drh, *r, 1.0f, dh_prev);
 
-    // // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
+    // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
     GruActivationSigmoidGradient<Device>()(ctx->eigen_device<Device>(), *z, &dz);
     GruMatMul<Device>(ctx, false, dz, true, *wxz, 1.0f, dx);
     GruMatMul<Device>(ctx, false, dz, true, *whz, 1.0f, dh_prev);
@@ -571,6 +614,17 @@ class GruOp : public OpKernel {
   int64 sequence_len_max_;
 };
 
+REGISTER_KERNEL_BUILDER(Name("AttentionMask")
+                             .Device(DEVICE_CPU),
+                        AttentionMaskOp<CPUDevice>);
+
+#if GOOGLE_CUDA
+REGISTER_KERNEL_BUILDER(Name("AttentionMask")
+                             .Device(DEVICE_GPU),
+                        AttentionMaskOp<GPUDevice>);
+#endif  // GOOGLE_CUDA
+
+
 REGISTER_KERNEL_BUILDER(Name("GruCell")
                              .Device(DEVICE_CPU),
                         GruCellOp<CPUDevice>);
@@ -679,14 +733,12 @@ class GruGradOp : public OpKernel {
 
       // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
       GruDz<Device>()(ctx->eigen_device<Device>(), dh, h_prev, g, &dz);
-
       if (t > 0) {
         GruCWiseMult<Device>()(ctx->eigen_device<Device>(), dh, z, 1.0f, &dh_prev);
       }
-
       GruDg<Device>()(ctx->eigen_device<Device>(), dh, z, &dg);
 
-      // // g[t] = tanh(x[t] Wxh + rh[t] Whh)
+      // g[t] = tanh(x[t] Wxh + rh[t] Whh)
       GruActivationTanhGradient<Device>()(ctx->eigen_device<Device>(), g, &dg);
       GruMatMul<Device>(ctx, false, dg, true, *wxh, 0.0f, dx);
       GruMatMul<Device>(ctx, false, dg, true, *whh, 0.0f, &drh);
@@ -698,7 +750,7 @@ class GruGradOp : public OpKernel {
         GruSetZero<Device>()(ctx->eigen_device<Device>(), &dr);
       }
 
-      // // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
+      // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
       GruActivationSigmoidGradient<Device>()(ctx->eigen_device<Device>(), z, &dz);
       GruMatMul<Device>(ctx, false, dz, true, *wxz, 1.0f, dx);
       if (t > 0) GruMatMul<Device>(ctx, false, dz, true, *whz, 1.0f, &dh_prev);

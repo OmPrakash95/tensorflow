@@ -11,6 +11,14 @@ void GruSetZeroGPU(const GPUDevice& d, Tensor* x) {
   x->matrix<float>().device(d) = x->matrix<float>().constant(0.0f);
 }
 
+void AttentionMaskGPU(
+    const GPUDevice& d, float fill_value, const Tensor& sequence_len,
+    const Tensor& input, Tensor* output) {
+  generator::AttentionMaskGenerator generator(
+      fill_value, sequence_len.vec<int64>(), input.matrix<float>());
+  output->matrix<float>().device(d) = input.matrix<float>().generate(generator);
+}
+
 void GruPadTimeGPU(
     const GPUDevice& d, const Tensor& sequence_len, const int64 sequence_idx,
     float value, Tensor* x) {
