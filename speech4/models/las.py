@@ -6,9 +6,11 @@ import tensorflow as tf
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import gru_ops
 from tensorflow.python.ops import math_ops
+from tensorflow.python.ops import nn_ops
 from tensorflow.python.ops import rnn
 from tensorflow.python.ops import rnn_cell
 from tensorflow.python.ops import seq2seq
+from tensorflow.python.ops import sparse_ops
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops.gen_user_ops import s4_parse_utterance
 import time
@@ -211,8 +213,26 @@ class LASModel(object):
     start_time = time.time()
 
     self.losses = []
-    self.losses.append(seq2seq.sequence_loss(
-        self.decoder_states[-1], self.tokens[1:], self.tokens_weights[1:], self.vocab_size))
+
+    logits = self.decoder_states[-1]
+    targets = self.tokens[:-1]
+    weights = self.tokens_weights[:-1]
+    with tf.op_scope(logits + targets + weights, "sequence_loss"):
+      log_perp_list = []
+      for idx, (logit, target, weight) in enumerate(zip(logits, targets, weights)):
+        indices = target + self.vocab_size * math_ops.range(self.batch_size)
+        with tf.device("/cpu:0"):
+          target_dense = sparse_ops.sparse_to_dense(
+              indices,
+              array_ops.expand_dims(self.batch_size * self.vocab_size, 0),
+              1.0, 0.0)
+        target = array_ops.reshape(target_dense, [self.batch_size, self.vocab_size])
+        xent = nn_ops.softmax_cross_entropy_with_logits(
+            logit, target, name="CrossEntropyLoss{0}".format(idx))
+        log_perp_list.append(xent * weight)
+      log_perps = math_ops.add_n(log_perp_list) / (math_ops.add_n(weights) + 1e-12)
+      log_perps = math_ops.reduce_sum(log_perps) / math_ops.cast(self.batch_size, tf.float32)
+      self.losses.append(log_perps)
 
     print('create_loss graph time %f' % (time.time() - start_time))
 
@@ -245,14 +265,13 @@ class LASModel(object):
 
     start_time = time.time()
 
-    ret = None
     if forward_only:
-      ret = sess.run([self.uttid, self.text, self.features_len] + self.losses)
+      uttid, text, logperp = sess.run([self.uttid, self.text] + self.losses)
     else:
-      ret = sess.run([self.uttid, self.text, self.features_len] + self.losses)
+      uttid, text, logperp = sess.run([self.uttid, self.text] + self.losses)
 
-    loss = ret[-1]
-    tf.scalar_summary('loss', loss)
+    print logperp
+    tf.scalar_summary('logperp', logperp)
 
     step_time = time.time() - start_time
 
