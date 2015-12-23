@@ -345,9 +345,8 @@ class LASModel(object):
     self.losses = []
 
     logits = self.decoder_states[-1]
-    print 'WARNING *** GIVING GROUOND TRUTH TO DECODER !!! *** WARNING'
-    targets = self.tokens[:-1]
-    weights = self.tokens_weights[:-1]
+    targets = self.tokens[1:]
+    weights = self.tokens_weights[1:]
     with tf.op_scope(logits + targets + weights, "sequence_loss"):
       log_perp_list = []
       for idx, (logit, target, weight) in enumerate(zip(logits, targets, weights)):
@@ -414,10 +413,11 @@ class LASModel(object):
       logperp = outputs[2]
 
     perplexity = np.exp(logperp)
-    print perplexity
+    print 'perplexity: %f' % perplexity
     tf.scalar_summary('perplexity', perplexity)
 
     step_time = time.time() - start_time
+    print 'step_time: %f' % step_time
 
     self.step_total += 1
     self.step_time_total += step_time
