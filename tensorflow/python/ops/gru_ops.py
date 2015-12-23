@@ -91,7 +91,7 @@ def _GruCellShape(op):
 
 @ops.RegisterGradient("GruCell")
 def _GruCellGrad(op, *grad):
-  gru_grads =  gen_gru_ops._gru_cell_grad(cell_size=op.get_attr("cell_size"),
+  gru_grads = gen_gru_ops._gru_cell_grad(cell_size=op.get_attr("cell_size"),
       sequence_len=op.inputs[0],
       wxr=op.inputs[1],
       whr=op.inputs[2],
@@ -125,8 +125,8 @@ def _GruCellGradShape(op):
 
   return [tensor_shape.TensorShape([input_size, cell_size]),
           tensor_shape.TensorShape([cell_size, cell_size])] * 3 + [
-          tensor_shape.TensorShape([batch_size, input_size])] + [
-          tensor_shape.TensorShape([batch_size, cell_size])]
+          tensor_shape.TensorShape([batch_size, cell_size])] + [
+          tensor_shape.TensorShape([batch_size, input_size])]
 
 
 def gru(cell_size, sequence_len, xs, name=None, scope=None):

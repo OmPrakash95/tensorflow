@@ -160,8 +160,7 @@ class GRUCellv2(RNNCell):
   def __init__(self, num_units, batch_size=None, sequence_len=None):
     self._num_units = num_units
     if sequence_len == None:
-      sequence_len = array_ops.ones(
-          array_ops.pack([batch_size, num_units]), dtype=dtypes.int64)
+      sequence_len = array_ops.ones([batch_size], dtype=dtypes.int64)
     self._sequence_len = sequence_len
 
   @property
@@ -177,8 +176,7 @@ class GRUCellv2(RNNCell):
     return self._num_units
 
   def __call__(self, inputs, state, scope=None):
-    if isinstance(inputs, (list, tuple)):
-      inputs = array_ops.concat(1, inputs)
+    assert not isinstance(inputs, (list, tuple))
     _, _, _, _, new_h = gru_ops.gru_cell(
         cell_size=self._num_units, sequence_len=self._sequence_len,
         h_prev=state, x=inputs, scope=scope)

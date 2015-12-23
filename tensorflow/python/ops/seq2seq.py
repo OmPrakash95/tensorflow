@@ -96,7 +96,8 @@ def rnn_decoder(decoder_inputs, initial_state, cell, loop_function=None,
             lambda: zero_output_state, output_state)
       else:
         (output, new_state) = output_state()
-      
+      output.set_shape([batch_size, cell.output_size])
+      new_state.set_shape([batch_size, cell.state_size])
 
       outputs.append(output)
       states.append(new_state)
@@ -524,6 +525,8 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
             lambda: zero_output_state, output_state)
       else:
         (output, new_state, attns) = output_state()
+      output.set_shape([batch_size, cell.output_size])
+      new_state.set_shape([batch_size, cell.state_size])
       attns = [attns]
 
       states.append(new_state)
