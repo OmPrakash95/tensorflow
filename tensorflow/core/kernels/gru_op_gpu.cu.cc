@@ -11,6 +11,10 @@ void GruSetZeroGPU(const GPUDevice& d, Tensor* x) {
   x->matrix<float>().device(d) = x->matrix<float>().constant(0.0f);
 }
 
+void GruAddGPU(const GPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c) {
+  c->matrix<float>().device(d) = a.matrix<float>() + b.matrix<float>();
+}
+
 void AttentionMaskGPU(
     const GPUDevice& d, float fill_value, const Tensor& sequence_len,
     const Tensor& input, Tensor* output) {

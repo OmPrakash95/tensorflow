@@ -4,7 +4,9 @@ import numpy as np
 import os.path
 import tensorflow as tf
 from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import clip_ops
 from tensorflow.python.ops import embedding_ops
+from tensorflow.python.ops import gradients
 from tensorflow.python.ops import gru_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import nn_ops
@@ -22,7 +24,7 @@ FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_integer('device', 0,
                             """The GPU device to use (set to negative to use CPU).""")
 
-tf.app.flags.DEFINE_integer('batch_size', 8,
+tf.app.flags.DEFINE_integer('batch_size', 16,
                             """Number of utterances to process in a batch.""")
 
 tf.app.flags.DEFINE_integer('features_width', 123,
@@ -38,14 +40,14 @@ tf.app.flags.DEFINE_integer('vocab_size', 64,
 tf.app.flags.DEFINE_integer('embedding_size', 32,
                             """Token vocabulary size.""")
 
-tf.app.flags.DEFINE_integer('encoder_cell_size', 256,
+tf.app.flags.DEFINE_integer('encoder_cell_size', 512,
                             """Encoder cell size.""")
-tf.app.flags.DEFINE_integer('decoder_cell_size', 200,
+tf.app.flags.DEFINE_integer('decoder_cell_size', 512,
                             """Decoder cell size.""")
 tf.app.flags.DEFINE_integer('attention_embedding_size', 128,
                             """Attention embedding size.""")
 
-tf.app.flags.DEFINE_float('max_gradient_norm', 10.0,
+tf.app.flags.DEFINE_float('max_gradient_norm', 5.0,
                            """Maximum gradient norm.""")
 
 tf.app.flags.DEFINE_float('learning_rate', 1.0,
@@ -145,10 +147,15 @@ class LASModel(object):
       sequence_len_factor = tf.constant(subsample_input, shape=[self.batch_size], dtype=tf.int64)
       sequence_len = tf.div(self.encoder_states[-1][1], sequence_len_factor)
       if use_monolithic:
+        xs = self.encoder_states[-1][0]
+        if subsample_input > 1:
+          xs = [xs[i:i + subsample_input] for i in range(0, len(xs), subsample_input)]
+          xs = [array_ops.concat(1, x) for x in xs]
+        print xs
         self.encoder_states.append([gru_ops.gru(
             cell_size=self.encoder_cell_size,
             sequence_len=sequence_len,
-            xs=self.encoder_states[-1][0][0::subsample_input])[-1], sequence_len])
+            xs=xs)[-1], sequence_len])
       else:
         self.encoder_states.append([rnn.rnn(
             rnn_cell.GRUCell(self.encoder_cell_size),
@@ -173,7 +180,7 @@ class LASModel(object):
       attention_states = array_ops.concat(1, attention_states)
 
     #self.create_decoder_layer(attention_states=attention_states)
-    #self.create_decoder_layer(output_projection=True)
+    #self.create_decoder_layer_v1(output_projection=True)
     self.create_decoder_sequence(attention_states=attention_states)
 
     print('create_decoder graph time %f' % (time.time() - start_time))
@@ -186,8 +193,8 @@ class LASModel(object):
           0, shape=[self.batch_size, self.decoder_cell_size], dtype=tf.float32)
       decoder_initial_state.set_shape([self.batch_size, self.decoder_cell_size])
 
-      #cell = rnn_cell.GRUCell(self.decoder_cell_size)
-      cell = rnn_cell.GRUCellv2(self.decoder_cell_size, sequence_len=self.tokens_len)
+      cell = rnn_cell.GRUCell(self.decoder_cell_size)
+      #cell = rnn_cell.GRUCellv2(self.decoder_cell_size, sequence_len=self.tokens_len)
       if output_projection == True:
         cell = rnn_cell.OutputProjectionWrapper(cell, self.vocab_size)
 
@@ -223,7 +230,7 @@ class LASModel(object):
 
       encoder_states = array_ops.reshape(
           attention_states, [-1, attn_length, 1, attn_size])
-      with vs.variable_scope("attention"):
+      with vs.variable_scope("encoder_embedding"):
         k = vs.get_variable("W", [1, 1, attn_size, self.attention_embedding_size])
       encoder_embedding = nn_ops.conv2d(encoder_states, k, [1, 1, 1, 1], "SAME")
 
@@ -238,14 +245,14 @@ class LASModel(object):
         (outputs, states, attentions) = self.create_decoder_cell(
             decoder_time_idx, states, attentions, encoder_states,
             encoder_embedding)
-        
+ 
         # Logit.
         with vs.variable_scope("Logit"):
           logit = nn_ops.xw_plus_b(
               outputs[-1],
               vs.get_variable("Matrix", [outputs[-1].get_shape()[1].value, self.vocab_size]),
-              vs.get_variable("Bias", [self.vocab_size]))
-          self.decoder_states.append([logit])
+              vs.get_variable("Bias", [self.vocab_size]), name="Logit_%d" % decoder_time_idx)
+          self.decoder_states.append(logit)
 
 
   def create_decoder_cell(
@@ -299,7 +306,7 @@ class LASModel(object):
       def create_gru_cell(attention):
         stack_idx = len(new_states)
 
-        with vs.variable_scope("gru_cell_%d" % stack_idx):
+        with vs.variable_scope("gru_cell"):
           # If empty, create new state.
           if len(states):
             state = states[stack_idx]
@@ -319,7 +326,7 @@ class LASModel(object):
 
           # Create our GRU cell.
           _, _, _, _, h = gru_ops.gru_cell(
-              decoder_cell_size, self.tokens_len, state, x)
+              decoder_cell_size, self.tokens_len, state, x, time_idx=decoder_time_idx)
           h.set_shape([batch_size, decoder_cell_size])
 
           new_states.append(h)
@@ -333,8 +340,10 @@ class LASModel(object):
             new_attentions.append(None)
           new_outputs.append(h)
 
-      create_gru_cell(attention=True)
-      create_gru_cell(attention=False)
+      with vs.variable_scope("1"):
+        create_gru_cell(attention=True)
+      with vs.variable_scope("2"):
+        create_gru_cell(attention=False)
 
       return new_outputs, new_states, new_attentions
 
@@ -344,25 +353,12 @@ class LASModel(object):
 
     self.losses = []
 
-    logits = self.decoder_states[-1]
+    self.logits = self.decoder_states
     targets = self.tokens[1:]
     weights = self.tokens_weights[1:]
-    with tf.op_scope(logits + targets + weights, "sequence_loss"):
-      log_perp_list = []
-      for idx, (logit, target, weight) in enumerate(zip(logits, targets, weights)):
-        indices = target + self.vocab_size * math_ops.range(self.batch_size)
-        with tf.device("/cpu:0"):
-          target_dense = sparse_ops.sparse_to_dense(
-              indices,
-              array_ops.expand_dims(self.batch_size * self.vocab_size, 0),
-              1.0, 0.0)
-        target = array_ops.reshape(target_dense, [self.batch_size, self.vocab_size])
-        xent = nn_ops.softmax_cross_entropy_with_logits(
-            logit, target, name="CrossEntropyLoss{0}".format(idx))
-        log_perp_list.append(xent * weight)
-      log_perps = math_ops.add_n(log_perp_list) / (math_ops.add_n(weights) + 1e-12)
-      log_perps = math_ops.reduce_sum(log_perps) / math_ops.cast(self.batch_size, tf.float32)
-      self.losses.append(log_perps)
+
+    log_perps = seq2seq.sequence_loss(self.logits, targets, weights, self.vocab_size)
+    self.losses.append(log_perps)
 
     print('create_loss graph time %f' % (time.time() - start_time))
 
@@ -371,28 +367,59 @@ class LASModel(object):
     start_time = time.time()
 
     params = tf.trainable_variables()
-    for param in params:
-      print('param: ' + param.name + ': ' + str(param.get_shape()))
+    for idx, param in enumerate(params):
+      print('param %d: %s %s' % (idx, param.name, str(param.get_shape())))
 
-    self.gradient_norms = []
     self.updates = []
-    # opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-    opt = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
 
-    gradients = tf.gradients(self.losses, params)
-    for idx, gradient in enumerate(gradients):
-      if isinstance(gradient, tf.Tensor):
-        gradients[idx] = tf.Print(gradient, [gradient], message=str(params[idx].name))
+    grads = tf.gradients(self.losses, params)
     if self.max_gradient_norm:
-      _gradients, norm = tf.clip_by_global_norm(
-          gradients, self.max_gradient_norm)
-      norm = tf.Print(norm, [norm])
-      self.gradient_norms.append(norm)
+      cgrads, norm = clip_ops.clip_by_global_norm(
+          grads, self.max_gradient_norm, use_norm=norm, name="clip_gradients")
+      self.gradient_norm = norm
 
+    #opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+    opt = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
     self.updates.append(opt.apply_gradients(
-        zip(gradients, params), global_step=self.global_step))
+        zip(cgrads, params), global_step=self.global_step))
 
     print('create_optimizer graph time %f' % (time.time() - start_time))
+
+
+  def run_graph(self, sess, targets):
+    fetches = []
+    for name, target in targets.iteritems():
+      if isinstance(target, (list, tuple)):
+        fetches.extend(target)
+      else:
+        fetches.append(target)
+    r = sess.run(fetches)
+
+    f = {}
+    start = 0
+    for name, target in targets.iteritems():
+      length = 1
+      if isinstance(target, (list, tuple)):
+        length = len(target)
+      end = start + length
+      if isinstance(target, (list, tuple)):
+        f[name] = r[start:end]
+      else:
+        f[name] = r[start]
+      start = end
+    return f
+
+
+  def compute_accuracy(self, logits, targets, weights):
+    assert len(logits) == len(targets)
+    assert len(logits) == len(weights)
+    correct = 0.0
+    count = 0.0
+    for logit, target, weight in zip(logits, targets, weights):
+      correct = correct + (np.equal(logit.argmax(axis=1), np.array(target)).astype(float) * weight).sum()
+      count = count + weight.sum()
+
+    return correct / count
 
 
   def step(self, sess, forward_only, epoch=False):
@@ -404,29 +431,42 @@ class LASModel(object):
 
     start_time = time.time()
 
-    if forward_only:
-      uttid, text, logperp = sess.run([self.uttid, self.text] + self.losses)
-    else:
-      outputs = sess.run([self.uttid, self.text] + self.losses + self.updates)
-      uttid = outputs[0]
-      text = outputs[1]
-      logperp = outputs[2]
+    targets = {}
+    targets['uttid'] = self.uttid
+    targets['text'] = self.text
+    targets['tokens'] = self.tokens
+    targets['tokens_weights'] = self.tokens_weights
+    targets['logperp'] = self.losses
+    targets['logits'] = self.logits
+
+    if not forward_only:
+      targets['gradient_norm'] = self.gradient_norm
+      targets['updates'] = self.updates
+
+    fetches = self.run_graph(sess, targets)
+
+    logperp = fetches['logperp'][0]
+    accuracy = self.compute_accuracy(
+        fetches['logits'], fetches['tokens'][1:], fetches['tokens_weights'][1:])
 
     perplexity = np.exp(logperp)
-    print 'perplexity: %f' % perplexity
+    gradient_norm = fetches['gradient_norm']
+    
+    tf.scalar_summary('accuracy', accuracy)
     tf.scalar_summary('perplexity', perplexity)
 
     step_time = time.time() - start_time
-    print 'step_time: %f' % step_time
-
     self.step_total += 1
     self.step_time_total += step_time
+
+    print 'step_total %d, step_time: %f, accuracy %f, perplexity %f, gradient_norm %f' % (
+        self.step_total, step_time, accuracy, perplexity, gradient_norm)
 
 
 def create_model(sess, dataset, forward_only):
   start_time = time.time()
 
-  # initializer = tf.random_normal_initializer(0.0, 0.1)
+  #initializer = tf.random_normal_initializer(0.0, 0.1)
   initializer = tf.random_uniform_initializer(-0.1, 0.1)
   with tf.variable_scope("model", initializer=initializer):
     model = LASModel(

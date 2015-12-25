@@ -83,6 +83,11 @@ struct GruSetZero {
 };
 
 template <typename Device>
+struct GruAdd {
+  void operator()(const Device& d, const Tensor& a, const Tensor& b, Tensor* c);
+};
+
+template <typename Device>
 struct AttentionMask {
   void operator()(
       const Device& d, float fill_value, const Tensor& sequence_len,
@@ -143,6 +148,7 @@ struct GruDg {
 };
 
 void GruSetZeroGPU(const GPUDevice& d, Tensor* x);
+void GruAddGPU(const GPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c);
 void AttentionMaskGPU(
     const GPUDevice& d, float fill_value, const Tensor& sequence_len,
     const Tensor& input, Tensor* output);

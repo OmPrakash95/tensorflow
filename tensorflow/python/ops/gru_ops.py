@@ -42,7 +42,7 @@ def _AttentionMaskGrad(op, *grad):
   return [None] + [attention_mask_grad]
 
 
-def gru_cell(cell_size, sequence_len, h_prev, x, name=None, scope=None):
+def gru_cell(cell_size, sequence_len, h_prev, x, name=None, scope=None, time_idx=None):
   r"""GRU Cell
 
   Args:
@@ -78,7 +78,7 @@ def gru_cell(cell_size, sequence_len, h_prev, x, name=None, scope=None):
 
     return gen_gru_ops._gru_cell(cell_size=cell_size, sequence_len=sequence_len,
         wxr=wxr, whr=whr, wxz=wxz, whz=whz, wxh=wxh, whh=whh, h_prev=h_prev,
-        x=x, name=name)
+        x=x, name=name, time_idx=time_idx)
 
 
 @ops.RegisterShape("GruCell")
@@ -106,7 +106,8 @@ def _GruCellGrad(op, *grad):
       rh=op.outputs[2],
       hh=op.outputs[3],
       h=op.outputs[4],
-      dh=grad[4])
+      dh=grad[4],
+      time_idx=op.get_attr("time_idx"))
 
   gru_grads_ = [None]
   for gru_grad in gru_grads:
@@ -191,10 +192,6 @@ def _GruGrad(op, *grad):
       rhs=outputs[2],
       gs=outputs[3],
       hs=outputs[4],
-      drs=grads[0],
-      dzs=grads[1],
-      drhs=grads[2],
-      dgs=grads[3],
       dhs=grads[4])
 
   gru_grads_ = [None]
@@ -214,4 +211,4 @@ def _GruGradShape(op):
 
   return [tensor_shape.TensorShape([input_size, cell_size]),
           tensor_shape.TensorShape([cell_size, cell_size])] * 3 + [
-          tensor_shape.TensorShape([batch_size, cell_size])] * ((len(op.inputs) - 7) / 11)
+          tensor_shape.TensorShape([batch_size, input_size])] * ((len(op.inputs) - 7) / 7)

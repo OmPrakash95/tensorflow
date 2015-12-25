@@ -195,7 +195,7 @@ class LASModel(object):
 
     gradients = tf.gradients(self.losses, params)
     if self.max_gradient_norm:
-      _gradients, norm = tf.clip_by_global_norm(
+      gradients, norm = tf.clip_by_global_norm(
           gradients, self.max_gradient_norm)
       self.gradient_norms.append(norm)
 
@@ -260,8 +260,11 @@ class LASModel(object):
       targets['logperp'] = self.losses
       targets['logits'] = self.logits
       targets['updates'] = self.updates
+      targets['gradient_norms'] = self.gradient_norms
 
       fetches = self.run_graph(sess, targets)
+
+      print fetches['gradient_norms']
 
       logperp = fetches['logperp'][0]
       accuracy = self.compute_accuracy(
