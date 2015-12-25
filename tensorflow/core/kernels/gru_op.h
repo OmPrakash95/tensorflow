@@ -83,6 +83,30 @@ struct GruSetZero {
 };
 
 template <typename Device>
+struct GruCopy {
+  void operator()(const Device& d, const Tensor& x, Tensor* y);
+};
+
+template <typename Device>
+struct GruWxhrz {
+  void operator()(
+      const Device& d, const Tensor& wxr, const Tensor& whr, const Tensor& wxz,
+      const Tensor& whz, Tensor* w);
+};
+
+template <typename Device>
+struct GruXH {
+  void operator()(
+      const Device& d, const Tensor& x, const Tensor* h, Tensor* xh);
+};
+
+template <typename Device>
+struct GruRZ {
+  void operator()(
+      const Device& d, const Tensor& rz, Tensor* r, Tensor* z);
+};
+
+template <typename Device>
 struct GruAdd {
   void operator()(const Device& d, const Tensor& a, const Tensor& b, Tensor* c);
 };
@@ -148,6 +172,14 @@ struct GruDg {
 };
 
 void GruSetZeroGPU(const GPUDevice& d, Tensor* x);
+void GruCopyGPU(const GPUDevice& d, const Tensor& x, Tensor* y);
+void GruWxhrzGPU(
+    const GPUDevice& d, const Tensor& wxr, const Tensor& whr, const Tensor& wxz,
+    const Tensor& whz, Tensor* w);
+void GruXHGPU(
+    const GPUDevice& d, const Tensor& x, const Tensor* h, Tensor* xh);
+void GruRZGPU(
+    const GPUDevice& d, const Tensor& rz, Tensor* r, Tensor* z);
 void GruAddGPU(const GPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c);
 void AttentionMaskGPU(
     const GPUDevice& d, float fill_value, const Tensor& sequence_len,

@@ -145,6 +145,105 @@ struct GruSetZero<GPUDevice> {
 };
 
 template <>
+struct GruCopy<CPUDevice> {
+  void operator()(const CPUDevice& d, const Tensor& x, Tensor* y) {
+    y->matrix<float>().device(d) = x.matrix<float>();
+  }
+};
+
+template <>
+struct GruCopy<GPUDevice> {
+  void operator()(const GPUDevice& d, const Tensor& x, Tensor* y) {
+    GruCopyGPU(d, x, y);
+  }
+};
+
+template <>
+struct GruWxhrz<CPUDevice> {
+  void operator()(
+      const CPUDevice& d, const Tensor& wxr, const Tensor& whr, const Tensor& wxz,
+      const Tensor& whz, Tensor* w) {
+  const int x_size = wxr.dim_size(0);
+  const int h_size = whr.dim_size(0);
+
+  w->matrix<float>().slice(
+      Eigen::array<int, 2>(0, 0),           Eigen::array<int, 2>(x_size, h_size)).device(d) =
+      wxr.matrix<float>();
+  w->matrix<float>().slice(
+      Eigen::array<int, 2>(x_size, 0),      Eigen::array<int, 2>(h_size, h_size)).device(d) =
+      whr.matrix<float>();
+
+  w->matrix<float>().slice(
+      Eigen::array<int, 2>(0, h_size),      Eigen::array<int, 2>(x_size, h_size)).device(d) =
+      wxz.matrix<float>();
+  w->matrix<float>().slice(
+      Eigen::array<int, 2>(x_size, h_size), Eigen::array<int, 2>(h_size, h_size)).device(d) =
+      whz.matrix<float>();
+  }
+};
+
+template <>
+struct GruWxhrz<GPUDevice> {
+  void operator()(
+      const GPUDevice& d, const Tensor& wxr, const Tensor& whr, const Tensor& wxz,
+      const Tensor& whz, Tensor* w) {
+    GruWxhrzGPU(d, wxr, whr, wxz, whz, w);
+  }
+};
+
+template <>
+struct GruXH<CPUDevice> {
+  void operator()(
+      const CPUDevice& d, const Tensor& x, const Tensor* h, Tensor* xh) {
+    const int batch_size = x.dim_size(0);
+    const int x_size = x.dim_size(1);
+
+    xh->matrix<float>().slice(
+        Eigen::array<int, 2>({0, 0}),      Eigen::array<int, 2>({batch_size, x_size})).device(d) =
+        x.matrix<float>();
+    if (h) {
+      const int h_size = h->dim_size(1);
+      xh->matrix<float>().slice(
+          Eigen::array<int, 2>({0, x_size}), Eigen::array<int, 2>({batch_size, h_size})).device(d) =
+          h->matrix<float>();
+    }
+  }
+};
+
+template <>
+struct GruXH<GPUDevice> {
+  void operator()(
+      const GPUDevice& d, const Tensor& x, const Tensor* h, Tensor* xh) {
+    GruXHGPU(d, x, h, xh);
+  }
+};
+
+template <>
+struct GruRZ<CPUDevice> {
+  void operator()(
+      const CPUDevice& d, const Tensor& rz, Tensor* r, Tensor* z) {
+    const int batch_size = rz.dim_size(0);
+    const int h_size = r->dim_size(1);
+
+    r->matrix<float>().device(d) =
+        rz.matrix<float>().slice(
+            Eigen::array<int, 2>({0, 0}),      Eigen::array<int, 2>({batch_size, h_size}));
+    z->matrix<float>().device(d) =
+        rz.matrix<float>().slice(
+            Eigen::array<int, 2>({0, h_size}), Eigen::array<int, 2>({batch_size, h_size}));
+  }
+};
+
+template <>
+struct GruRZ<GPUDevice> {
+  void operator()(
+      const GPUDevice& d, const Tensor& rz, Tensor* r, Tensor* h) {
+    GruRZGPU(d, rz, r, h);
+  }
+};
+
+
+template <>
 struct GruAdd<CPUDevice> {
   void operator()(const CPUDevice& d, const Tensor& a, const Tensor& b, Tensor* c) {
     c->matrix<float>().device(d) = a.matrix<float>() + b.matrix<float>();
@@ -594,6 +693,17 @@ class GruOp : public OpKernel {
     INPUT_TENSOR(wxh);
     INPUT_TENSOR(whh);
 
+    // Fused matrix mult is faster.
+    const int64 input_size = wxr->dim_size(0);
+    ALLOCATE_TEMP(
+        wxhrz, TensorShape({cell_size_ + input_size, cell_size_ * 2}));
+    ALLOCATE_TEMP(
+        xh, TensorShape({batch_size, input_size + cell_size_}));
+    ALLOCATE_TEMP(
+        rz, TensorShape({batch_size, cell_size_ * 2}));
+    GruWxhrz<Device>()(
+        ctx->eigen_device<Device>(), *wxr, *whr, *wxz, *whz, &wxhrz);
+
   #define OUTPUT_LIST(T)                                                       \
     OpOutputList T;                                                            \
     OP_REQUIRES_OK(ctx, ctx->output_list(#T, &T));
@@ -630,14 +740,18 @@ class GruOp : public OpKernel {
       Tensor* g = gs[t];
       Tensor* h = hs[t];
 
+      GruXH<Device>()(ctx->eigen_device<Device>(), x, h_prev, &xh);
+      GruMatMul<Device>(ctx, false, xh, false, wxhrz, 0.0f, &rz);
+      GruRZ<Device>()(ctx->eigen_device<Device>(), rz, r, z);
+
       // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
-      GruMatMul<Device>(ctx, false, x, false, *wxr, 0.0f, r);
-      if (t > 0) GruMatMul<Device>(ctx, false, *h_prev, false, *whr, 1.0f, r);
+      // GruMatMul<Device>(ctx, false, x, false, *wxr, 0.0f, r);
+      // if (t > 0) GruMatMul<Device>(ctx, false, *h_prev, false, *whr, 1.0f, r);
       GruActivationSigmoid<Device>()(ctx->eigen_device<Device>(), r);
 
       // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
-      GruMatMul<Device>(ctx, false, x, false, *wxz, 0.0f, z);
-      if (t > 0) GruMatMul<Device>(ctx, false, *h_prev, false, *whz, 1.0f, z);
+      // GruMatMul<Device>(ctx, false, x, false, *wxz, 0.0f, z);
+      // if (t > 0) GruMatMul<Device>(ctx, false, *h_prev, false, *whz, 1.0f, z);
       GruActivationSigmoid<Device>()(ctx->eigen_device<Device>(), z);
 
       // rh[t] = r[t] .* h_prev[t]
@@ -703,7 +817,6 @@ class GruGradOp : public OpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
-    LOG(INFO) << "OK...";
     const Tensor* sequence_len = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("sequence_len", &sequence_len));
 

@@ -85,8 +85,8 @@ class S4ParseUtterance : public OpKernel {
       const auto& features = features_iter->second.float_list();
 
       // The features_width is a function of len(features) and features_len.
-      CHECK_EQ(features.value().size() % features_len, 0);
-      const int64 features_width = features.value().size() / features_len;
+      if (features.value().size()) CHECK_EQ(features.value().size() % features_len, 0);
+      const int64 features_width = features_len ? features.value().size() / features_len : 0;
 
       if (b == 0) {
         // Allocate the memory.
@@ -141,7 +141,7 @@ class S4ParseUtterance : public OpKernel {
       // Copy the features across.
       output_tensor_features_len->flat<int64>().data()[b] = features_len;
       if (features_len > features_len_max_) {
-        LOG(WARNING) << "Utterance has feature_len: " << features_len << " but graph maximum is: " << features_len_max_;
+        // LOG(WARNING) << "Utterance has feature_len: " << features_len << " but graph maximum is: " << features_len_max_;
         features_len = features_len_max_;
       }
       for (int64 t = 0; t < features_len; ++t) {
@@ -166,7 +166,7 @@ class S4ParseUtterance : public OpKernel {
 
       output_tensor_tokens_len->flat<int64>().data()[b] = tokens_len;
       if (tokens_len > tokens_len_max_) {
-        LOG(WARNING) << "Utterance has tokens_len: " << tokens_len << " but graph maximum is: " << tokens_len_max_;
+        // LOG(WARNING) << "Utterance has tokens_len: " << tokens_len << " but graph maximum is: " << tokens_len_max_;
         tokens_len = tokens_len_max_;
       }
       for (int64 s = 0; s < tokens_len; ++s) {

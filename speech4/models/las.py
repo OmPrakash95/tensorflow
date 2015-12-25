@@ -40,17 +40,17 @@ tf.app.flags.DEFINE_integer('vocab_size', 64,
 tf.app.flags.DEFINE_integer('embedding_size', 32,
                             """Token vocabulary size.""")
 
-tf.app.flags.DEFINE_integer('encoder_cell_size', 512,
+tf.app.flags.DEFINE_integer('encoder_cell_size', 256,
                             """Encoder cell size.""")
-tf.app.flags.DEFINE_integer('decoder_cell_size', 512,
+tf.app.flags.DEFINE_integer('decoder_cell_size', 256,
                             """Decoder cell size.""")
 tf.app.flags.DEFINE_integer('attention_embedding_size', 128,
                             """Attention embedding size.""")
 
-tf.app.flags.DEFINE_float('max_gradient_norm', 5.0,
+tf.app.flags.DEFINE_float('max_gradient_norm', 10.0,
                            """Maximum gradient norm.""")
 
-tf.app.flags.DEFINE_float('learning_rate', 1.0,
+tf.app.flags.DEFINE_float('learning_rate', 0.1,
                            """Learning rate.""")
 
 tf.app.flags.DEFINE_string('logdir', '/tmp',
@@ -147,15 +147,13 @@ class LASModel(object):
       sequence_len_factor = tf.constant(subsample_input, shape=[self.batch_size], dtype=tf.int64)
       sequence_len = tf.div(self.encoder_states[-1][1], sequence_len_factor)
       if use_monolithic:
-        xs = self.encoder_states[-1][0]
-        if subsample_input > 1:
-          xs = [xs[i:i + subsample_input] for i in range(0, len(xs), subsample_input)]
-          xs = [array_ops.concat(1, x) for x in xs]
-        print xs
+        # xs = self.encoder_states[-1][0]
+        # if subsample_input > 1:
+        #   xs = [xs[i:i + subsample_input] for i in range(0, len(xs), subsample_input)]
+        #   xs = [array_ops.concat(1, x) for x in xs]
+        xs = self.encoder_states[-1][0][0::subsample_input]
         self.encoder_states.append([gru_ops.gru(
-            cell_size=self.encoder_cell_size,
-            sequence_len=sequence_len,
-            xs=xs)[-1], sequence_len])
+            cell_size=self.encoder_cell_size, sequence_len=sequence_len, xs=xs)[-1], sequence_len])
       else:
         self.encoder_states.append([rnn.rnn(
             rnn_cell.GRUCell(self.encoder_cell_size),
@@ -306,39 +304,38 @@ class LASModel(object):
       def create_gru_cell(attention):
         stack_idx = len(new_states)
 
-        with vs.variable_scope("gru_cell"):
-          # If empty, create new state.
-          if len(states):
-            state = states[stack_idx]
+        # If empty, create new state.
+        if len(states):
+          state = states[stack_idx]
+        else:
+          state = array_ops.zeros([batch_size, decoder_cell_size], tf.float32)
+
+        # The input to this layer is the output of the previous layer.
+        x = new_outputs[stack_idx - 1]
+        # If the previous timestep has an attention context, concat it.
+        if attention:
+          if len(attentions):
+            x = array_ops.concat(1, [x, attentions[stack_idx]])
           else:
-            state = array_ops.zeros([batch_size, decoder_cell_size], tf.float32)
+            x = array_ops.concat(1, [x, array_ops.zeros([
+                batch_size, self.encoder_cell_size], tf.float32)])
+          x.set_shape([batch_size, new_outputs[stack_idx - 1].get_shape()[1].value + self.encoder_cell_size])
 
-          # The input to this layer is the output of the previous layer.
-          x = new_outputs[stack_idx - 1]
-          # If the previous timestep has an attention context, concat it.
-          if attention:
-            if len(attentions):
-              x = array_ops.concat(1, [x, attentions[stack_idx]])
-            else:
-              x = array_ops.concat(1, [x, array_ops.zeros([
-                  batch_size, self.encoder_cell_size], tf.float32)])
-            x.set_shape([batch_size, new_outputs[stack_idx - 1].get_shape()[1].value + self.encoder_cell_size])
+        # Create our GRU cell.
+        _, _, _, _, h = gru_ops.gru_cell(
+            decoder_cell_size, self.tokens_len, state, x, time_idx=decoder_time_idx)
+        h.set_shape([batch_size, decoder_cell_size])
 
-          # Create our GRU cell.
-          _, _, _, _, h = gru_ops.gru_cell(
-              decoder_cell_size, self.tokens_len, state, x, time_idx=decoder_time_idx)
-          h.set_shape([batch_size, decoder_cell_size])
-
-          new_states.append(h)
-          if attention:
-            c = create_attention(h)
-            new_attentions.append(c)
-            h = array_ops.concat(1, [h, c])
-            h.set_shape(
-                [batch_size, self.decoder_cell_size + self.encoder_cell_size])
-          else:
-            new_attentions.append(None)
-          new_outputs.append(h)
+        new_states.append(h)
+        if attention:
+          c = create_attention(h)
+          new_attentions.append(c)
+          h = array_ops.concat(1, [h, c])
+          h.set_shape(
+              [batch_size, self.decoder_cell_size + self.encoder_cell_size])
+        else:
+          new_attentions.append(None)
+        new_outputs.append(h)
 
       with vs.variable_scope("1"):
         create_gru_cell(attention=True)
@@ -375,7 +372,7 @@ class LASModel(object):
     grads = tf.gradients(self.losses, params)
     if self.max_gradient_norm:
       cgrads, norm = clip_ops.clip_by_global_norm(
-          grads, self.max_gradient_norm, use_norm=norm, name="clip_gradients")
+          grads, self.max_gradient_norm, name="clip_gradients")
       self.gradient_norm = norm
 
     #opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
