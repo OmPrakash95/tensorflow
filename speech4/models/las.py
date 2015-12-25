@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import math
 import numpy as np
 import os.path
 import tensorflow as tf
@@ -22,6 +23,9 @@ import time
 FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_integer('device', 0,
+                            """The GPU device to use (set to negative to use CPU).""")
+
+tf.app.flags.DEFINE_string('ckpt', '',
                             """The GPU device to use (set to negative to use CPU).""")
 
 tf.app.flags.DEFINE_integer('batch_size', 16,
@@ -47,21 +51,23 @@ tf.app.flags.DEFINE_integer('decoder_cell_size', 256,
 tf.app.flags.DEFINE_integer('attention_embedding_size', 128,
                             """Attention embedding size.""")
 
-tf.app.flags.DEFINE_float('max_gradient_norm', 10.0,
+tf.app.flags.DEFINE_float('max_gradient_norm', 1.0,
                            """Maximum gradient norm.""")
 
-tf.app.flags.DEFINE_float('learning_rate', 0.1,
+tf.app.flags.DEFINE_float('learning_rate', 0.001,
                            """Learning rate.""")
 
 tf.app.flags.DEFINE_string('logdir', '/tmp',
                            """Path to our outputs and logs.""")
 
 class LASModel(object):
-  def __init__(self, dataset, batch_size, features_width, features_len_max,
-      vocab_size, embedding_size, tokens_len_max, encoder_cell_size,
-      decoder_cell_size, attention_embedding_size, max_gradient_norm,
-      learning_rate):
+  def __init__(self, dataset, logdir, batch_size, features_width,
+      features_len_max, vocab_size, embedding_size, tokens_len_max,
+      encoder_cell_size, decoder_cell_size, attention_embedding_size,
+      max_gradient_norm, learning_rate):
     self.dataset = dataset
+    self.logdir = logdir
+
     self.batch_size = batch_size
     
     self.features_width = features_width
@@ -83,7 +89,7 @@ class LASModel(object):
     self.global_step = tf.Variable(0, trainable=False)
 
     # Create the inputs.
-    self.create_graph_inputs()
+    self.create_input_layer()
 
     # Create the encoder-encoder.
     self.create_encoder()
@@ -98,7 +104,7 @@ class LASModel(object):
     self.saver = tf.train.Saver(tf.all_variables())
 
 
-  def create_graph_inputs(self):
+  def create_input_layer(self):
     dataset_map = {}
     if self.dataset == 'train_si284':
       self.dataset = 'speech4/data/train_si284.tfrecords'
@@ -260,89 +266,88 @@ class LASModel(object):
     attention_embedding_size = self.attention_embedding_size
     decoder_cell_size = self.decoder_cell_size
 
-    with vs.variable_scope("decoder_cell" or scope):
-      # Create the embedding layer.
-      with tf.device("/cpu:0"):
-        sqrt3 = np.sqrt(3)
-        embedding = vs.get_variable(
-            "embedding", [self.vocab_size, self.embedding_size],
-            initializer=tf.random_uniform_initializer(-sqrt3, sqrt3))
+    # Create the embedding layer.
+    with tf.device("/cpu:0"):
+      sqrt3 = np.sqrt(3)
+      embedding = vs.get_variable(
+          "embedding", [self.vocab_size, self.embedding_size],
+          initializer=tf.random_uniform_initializer(-sqrt3, sqrt3))
 
-      emb = embedding_ops.embedding_lookup(
-          embedding, self.tokens[decoder_time_idx])
-      emb.set_shape([batch_size, self.embedding_size])
+    emb = embedding_ops.embedding_lookup(
+        embedding, self.tokens[decoder_time_idx])
+    emb.set_shape([batch_size, self.embedding_size])
 
-      def create_attention(decoder_state):
-        with vs.variable_scope("attention"):
-          U = vs.get_variable("U", [decoder_cell_size, attention_embedding_size])
-          b = vs.get_variable("b", [attention_embedding_size])
-          v = vs.get_variable("v", [attention_embedding_size])
+    def create_attention(decoder_state):
+      with vs.variable_scope("attention"):
+        U = vs.get_variable("U", [decoder_cell_size, attention_embedding_size])
+        b = vs.get_variable("b", [attention_embedding_size])
+        v = vs.get_variable("v", [attention_embedding_size])
 
-          # Decoder embedding.
-          decoder_state.set_shape([batch_size, decoder_cell_size])
-          d = nn_ops.xw_plus_b(decoder_state, U, b)
-          d = array_ops.reshape(d, [batch_size, 1, 1, attention_embedding_size])
+        # Decoder embedding.
+        decoder_state.set_shape([batch_size, decoder_cell_size])
+        d = nn_ops.xw_plus_b(decoder_state, U, b)
+        d = array_ops.reshape(d, [batch_size, 1, 1, attention_embedding_size])
 
-          # Energies.
-          e = math_ops.reduce_sum(
-              v * math_ops.tanh(encoder_embedding + d), [2, 3])
-          e = gru_ops.attention_mask(self.encoder_states[-1][1], e)
+        # Energies.
+        e = math_ops.reduce_sum(
+            v * math_ops.tanh(encoder_embedding + d), [2, 3])
+        e = gru_ops.attention_mask(self.encoder_states[-1][1], e)
 
-          # Alignment.
-          a = nn_ops.softmax(e)
+        # Alignment.
+        a = nn_ops.softmax(e)
 
-          # Context.
-          c = math_ops.reduce_sum(
-              array_ops.reshape(a, [batch_size, len(self.encoder_states[-1][0]), 1, 1]) * encoder_states,
-              [1, 2])
-          c = array_ops.reshape(c, [batch_size, self.encoder_cell_size])
-          return c
+        # Context.
+        c = math_ops.reduce_sum(
+            array_ops.reshape(a, [batch_size, len(self.encoder_states[-1][0]), 1, 1]) * encoder_states,
+            [1, 2])
+        c = array_ops.reshape(c, [batch_size, self.encoder_cell_size])
+        return c
 
-      new_states = [None]
-      new_attentions = [None]
-      new_outputs = [emb]
-      def create_gru_cell(attention):
-        stack_idx = len(new_states)
+    new_states = [None]
+    new_attentions = [None]
+    new_outputs = [emb]
+    def create_gru_cell(attention):
+      stack_idx = len(new_states)
 
-        # If empty, create new state.
-        if len(states):
-          state = states[stack_idx]
+      # If empty, create new state.
+      if len(states):
+        state = states[stack_idx]
+      else:
+        state = array_ops.zeros([batch_size, decoder_cell_size], tf.float32)
+
+      # The input to this layer is the output of the previous layer.
+      x = new_outputs[stack_idx - 1]
+      # If the previous timestep has an attention context, concat it.
+      if attention:
+        if len(attentions):
+          x = array_ops.concat(1, [x, attentions[stack_idx]])
         else:
-          state = array_ops.zeros([batch_size, decoder_cell_size], tf.float32)
+          x = array_ops.concat(1, [x, array_ops.zeros([
+              batch_size, self.encoder_cell_size], tf.float32)])
+        x.set_shape([batch_size, new_outputs[stack_idx - 1].get_shape()[1].value + self.encoder_cell_size])
 
-        # The input to this layer is the output of the previous layer.
-        x = new_outputs[stack_idx - 1]
-        # If the previous timestep has an attention context, concat it.
-        if attention:
-          if len(attentions):
-            x = array_ops.concat(1, [x, attentions[stack_idx]])
-          else:
-            x = array_ops.concat(1, [x, array_ops.zeros([
-                batch_size, self.encoder_cell_size], tf.float32)])
-          x.set_shape([batch_size, new_outputs[stack_idx - 1].get_shape()[1].value + self.encoder_cell_size])
+      # Create our GRU cell.
+      _, _, _, _, h = gru_ops.gru_cell(
+          decoder_cell_size, self.tokens_len, state, x, time_idx=decoder_time_idx)
+      h.set_shape([batch_size, decoder_cell_size])
 
-        # Create our GRU cell.
-        _, _, _, _, h = gru_ops.gru_cell(
-            decoder_cell_size, self.tokens_len, state, x, time_idx=decoder_time_idx)
-        h.set_shape([batch_size, decoder_cell_size])
+      new_states.append(h)
+      if attention:
+        c = create_attention(h)
+        new_attentions.append(c)
+        h = array_ops.concat(1, [h, c])
+        h.set_shape(
+            [batch_size, self.decoder_cell_size + self.encoder_cell_size])
+      else:
+        new_attentions.append(None)
+      new_outputs.append(h)
 
-        new_states.append(h)
-        if attention:
-          c = create_attention(h)
-          new_attentions.append(c)
-          h = array_ops.concat(1, [h, c])
-          h.set_shape(
-              [batch_size, self.decoder_cell_size + self.encoder_cell_size])
-        else:
-          new_attentions.append(None)
-        new_outputs.append(h)
+    with vs.variable_scope("1"):
+      create_gru_cell(attention=True)
+    with vs.variable_scope("2"):
+      create_gru_cell(attention=False)
 
-      with vs.variable_scope("1"):
-        create_gru_cell(attention=True)
-      with vs.variable_scope("2"):
-        create_gru_cell(attention=False)
-
-      return new_outputs, new_states, new_attentions
+    return new_outputs, new_states, new_attentions
 
 
   def create_loss(self):
@@ -375,8 +380,8 @@ class LASModel(object):
           grads, self.max_gradient_norm, name="clip_gradients")
       self.gradient_norm = norm
 
-    #opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-    opt = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
+    opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+    #opt = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
     self.updates.append(opt.apply_gradients(
         zip(cgrads, params), global_step=self.global_step))
 
@@ -419,45 +424,69 @@ class LASModel(object):
     return correct / count
 
 
-  def step(self, sess, forward_only, epoch=False):
-    if epoch:
-      steps_per_epoch = self.dataset_size // self.batch_size
+  def step_epoch(self, sess, forward_only):
+    steps_per_epoch = int(math.ceil(self.dataset_size // self.batch_size))
+    for s in range(steps_per_epoch):
+      self.step(sess, forward_only)
+    self.epochs = self.step_total / steps_per_epoch
 
-      for s in range(steps_per_epoch):
-        self.step(sess, forward_only, epoch=False)
+    self.saver.save(
+        sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs)
+
+    print("*** epoch done %d ***" % self.epochs)
+    print("step_total %d, avg_step_time: %f, accuracy %f, perplexity %f" % (
+        self.step_total, avg_step_time, accuracy, perplexity))
+    print("*** epoch done %d ***" % self.epochs)
+
+
+  def step(self, sess, forward_only):
+    steps_per_epoch = int(math.ceil(self.dataset_size // self.batch_size))
 
     start_time = time.time()
 
+    steps_per_report = 100
+    report = self.step_total % steps_per_report == 0
+
     targets = {}
-    targets['uttid'] = self.uttid
-    targets['text'] = self.text
-    targets['tokens'] = self.tokens
-    targets['tokens_weights'] = self.tokens_weights
-    targets['logperp'] = self.losses
-    targets['logits'] = self.logits
+    if forward_only or report:
+      targets['uttid'] = self.uttid
+      targets['text'] = self.text
+      targets['tokens'] = self.tokens
+      targets['tokens_weights'] = self.tokens_weights
+      targets['logperp'] = self.losses
+      targets['logits'] = self.logits
+
+    if not forward_only or report:
+      targets['gradient_norm'] = self.gradient_norm
 
     if not forward_only:
-      targets['gradient_norm'] = self.gradient_norm
       targets['updates'] = self.updates
 
     fetches = self.run_graph(sess, targets)
 
-    logperp = fetches['logperp'][0]
-    accuracy = self.compute_accuracy(
-        fetches['logits'], fetches['tokens'][1:], fetches['tokens_weights'][1:])
-
-    perplexity = np.exp(logperp)
-    gradient_norm = fetches['gradient_norm']
-    
-    tf.scalar_summary('accuracy', accuracy)
-    tf.scalar_summary('perplexity', perplexity)
-
     step_time = time.time() - start_time
     self.step_total += 1
     self.step_time_total += step_time
+    self.epochs = self.step_total / steps_per_epoch
 
-    print 'step_total %d, step_time: %f, accuracy %f, perplexity %f, gradient_norm %f' % (
-        self.step_total, step_time, accuracy, perplexity, gradient_norm)
+    avg_step_time = self.step_time_total / self.step_total
+
+    if report:
+      logperp = fetches['logperp'][0]
+
+      perplexity = np.exp(logperp)
+      gradient_norm = fetches['gradient_norm']
+      
+      accuracy = self.compute_accuracy(
+          fetches['logits'], fetches['tokens'][1:], fetches['tokens_weights'][1:])
+
+      self.saver.save(
+          sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs)
+
+      print("step_total %d, avg_step_time: %f, accuracy %f, perplexity %f, gradient_norm %f" % (
+          self.step_total, avg_step_time, accuracy, perplexity, gradient_norm))
+
+    return fetches
 
 
 def create_model(sess, dataset, forward_only):
@@ -467,14 +496,20 @@ def create_model(sess, dataset, forward_only):
   initializer = tf.random_uniform_initializer(-0.1, 0.1)
   with tf.variable_scope("model", initializer=initializer):
     model = LASModel(
-        dataset, FLAGS.batch_size, FLAGS.features_width, FLAGS.features_len_max,
-        FLAGS.vocab_size, FLAGS.embedding_size, FLAGS.tokens_len_max,
-        FLAGS.encoder_cell_size, FLAGS.decoder_cell_size,
+        dataset, FLAGS.logdir, FLAGS.batch_size, FLAGS.features_width,
+        FLAGS.features_len_max, FLAGS.vocab_size, FLAGS.embedding_size,
+        FLAGS.tokens_len_max, FLAGS.encoder_cell_size, FLAGS.decoder_cell_size,
         FLAGS.attention_embedding_size, FLAGS.max_gradient_norm,
         FLAGS.learning_rate)
 
-  tf.add_check_numerics_ops()
-  sess.run(tf.initialize_all_variables())
+  tf.train.write_graph(sess.graph_def, FLAGS.logdir, "graph_def.pbtxt")
+
+  # tf.add_check_numerics_ops()
+  if gfile.Exists(FLAGS.ckpt):
+    print("Reading model parameters from %s" % FLAGS.ckpt)
+    model.saver.restore(sess, ckpt)
+  else:
+    sess.run(tf.initialize_all_variables())
   tf.train.start_queue_runners(sess=sess)
 
   print('create_model graph time %f' % (time.time() - start_time))
@@ -490,17 +525,11 @@ def run_train():
     with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
       model = create_model(sess, 'train_si284', False)
 
-      summary_op = tf.merge_all_summaries()
-
       summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
       summary_writer.flush()
 
-      model.step(sess, forward_only=False, epoch=True)
-      for update in updates:
-        print updates
-
-      summary_str = sess.run(summary_op)
-      summary_writer.add_summary(summary_str, 0)
+      model.step(sess, forward_only=False)
+      model.step_epoch(sess, forward_only=False)
 
 
 def main(_):
