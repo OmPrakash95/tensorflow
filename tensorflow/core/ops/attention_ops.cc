@@ -17,6 +17,14 @@ limitations under the License.
 
 namespace tensorflow {
 
+REGISTER_OP("AttentionContextReduce")
+    .Input("alignment: float")
+    .Input("attention_states: float")
+    .Output("context: float")
+    .Doc(R"doc(
+Compute the attention context given an alignment an attention states.
+)doc");
+
 // Tout = extract_glimpse(Tin, size, offsets) extract the glimpse of size size
 // centered at location offsets from the input tensor Tin
 //
