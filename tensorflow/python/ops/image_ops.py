@@ -112,7 +112,7 @@ Example:
 # Decode an image and convert it to HSV.
 rgb_image = tf.decode_png(...,  channels=3)
 rgb_image_float = tf.convert_image_dtype(rgb_image, tf.float32)
-hsv_image = tf.hsv_to_rgb(rgb_image)
+hsv_image = tf.rgb_to_hsv(rgb_image)
 ```
 
 @@rgb_to_grayscale
@@ -172,8 +172,8 @@ from tensorflow.python.ops import random_ops
 
 
 # pylint: disable=wildcard-import
+from tensorflow.python.ops.attention_ops import *
 from tensorflow.python.ops.gen_image_ops import *
-from tensorflow.python.ops.gen_attention_ops import *
 # pylint: enable=wildcard-import
 
 ops.NoGradient('RandomCrop')
