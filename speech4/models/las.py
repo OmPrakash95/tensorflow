@@ -113,7 +113,9 @@ def run_train():
       summary_writer.flush()
 
       model.step(sess, forward_only=False)
-      model.step_epoch(sess, forward_only=True)
+
+      while True:
+        model.step_epoch(sess, forward_only=False)
 
 
 def main(_):
