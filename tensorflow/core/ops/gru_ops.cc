@@ -112,6 +112,52 @@ REGISTER_OP("GruGrad")
 GRU Gradient
 )doc");
 
+REGISTER_OP("GruFused")
+    .Attr("cell_size: int")
+    .Attr("sequence_len_max: int")
+    .Input("sequence_len: int64")
+    .Input("wxr: float")
+    .Input("whr: float")
+    .Input("wxz: float")
+    .Input("whz: float")
+    .Input("wxh: float")
+    .Input("whh: float")
+    .Input("xs: sequence_len_max * float")
+    .Output("rzs: sequence_len_max * float")
+    .Output("rhs: sequence_len_max * float")
+    .Output("gs: sequence_len_max * float")
+    .Output("hs: sequence_len_max * float")
+    .Doc(R"doc(
+GRU
+)doc");
+
+REGISTER_OP("GruFusedGrad")
+    .Attr("cell_size: int")
+    .Attr("sequence_len_max: int")
+    .Input("sequence_len: int64")
+    .Input("wxr: float")
+    .Input("whr: float")
+    .Input("wxz: float")
+    .Input("whz: float")
+    .Input("wxh: float")
+    .Input("whh: float")
+    .Input("xs: sequence_len_max * float")
+    .Input("rzs: sequence_len_max * float")
+    .Input("rhs: sequence_len_max * float")
+    .Input("gs: sequence_len_max * float")
+    .Input("hs: sequence_len_max * float")
+    .Input("dhs: sequence_len_max * float")
+    .Output("dwxr: float")
+    .Output("dwhr: float")
+    .Output("dwxz: float")
+    .Output("dwhz: float")
+    .Output("dwxh: float")
+    .Output("dwhh: float")
+    .Output("dxs: sequence_len_max * float")
+    .Doc(R"doc(
+GRU Gradient
+)doc");
+
 REGISTER_OP("Sink")
     .Attr("sinks: int")
     .Input("input: sinks * float")

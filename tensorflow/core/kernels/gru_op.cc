@@ -777,6 +777,119 @@ class GruOp : public OpKernel {
   int64 sequence_len_max_;
 };
 
+template <typename Device>
+class GruFusedOp : public OpKernel {
+ public:
+  explicit GruFusedOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("cell_size", &cell_size_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("sequence_len_max", &sequence_len_max_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    INPUT_TENSOR(sequence_len);
+
+    // Get the sequence length in CPU memory.
+    auto sequence_len_t = sequence_len->vec<int64>();
+    std::vector<int64> seq_lens_vector(sequence_len_t.size());
+    ctx->eigen_device<Device>().memcpyDeviceToHost(
+        seq_lens_vector.data(), sequence_len_t.data(),
+        sizeof(int64) * sequence_len_t.size());
+    GruDeviceSynchronize<Device>()(ctx->eigen_device<Device>());
+
+    // Maximum number of compute unrolls.
+    int64 sequence_len_max =
+        *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
+    const int64 batch_size = seq_lens_vector.size();
+
+  #define INPUT_LIST(T)                                                        \
+    OpInputList T;                                                             \
+    OP_REQUIRES_OK(ctx, ctx->input_list(#T, &T));
+
+    INPUT_LIST(xs);
+
+    INPUT_TENSOR(wxr);
+    INPUT_TENSOR(whr);
+    INPUT_TENSOR(wxz);
+    INPUT_TENSOR(whz);
+    INPUT_TENSOR(wxh);
+    INPUT_TENSOR(whh);
+
+    // Fused matrix mult is faster.
+    const int64 input_size = wxr->dim_size(0);
+    ALLOCATE_TEMP(
+        wxhrz, TensorShape({cell_size_ + input_size, cell_size_ * 2}));
+    ALLOCATE_TEMP(
+        xh, TensorShape({batch_size, input_size + cell_size_}));
+    ALLOCATE_TEMP(
+        r, TensorShape({batch_size, cell_size_}));
+    ALLOCATE_TEMP(
+        z, TensorShape({batch_size, cell_size_}));
+    GruWxhrz<Device>()(
+        ctx->eigen_device<Device>(), *wxr, *whr, *wxz, *whz, &wxhrz);
+
+  #define OUTPUT_LIST(T)                                                       \
+    OpOutputList T;                                                            \
+    OP_REQUIRES_OK(ctx, ctx->output_list(#T, &T));
+
+    OUTPUT_LIST(rzs);
+    OUTPUT_LIST(rhs);
+    OUTPUT_LIST(gs);
+    OUTPUT_LIST(hs);
+
+    for (int64 t = 0; t < sequence_len_max_; ++t) {
+  #define OUTPUT_LIST_ALLOCATE(OP_OUTPUT_LIST, NAME, SHAPE)                    \
+      Tensor* NAME = nullptr;                                                  \
+      OP_OUTPUT_LIST.allocate(t, SHAPE, &NAME);                                \
+      GruSetZero<Device>()(ctx->eigen_device<Device>(), NAME);
+
+      OUTPUT_LIST_ALLOCATE(rzs, r, TensorShape({batch_size, cell_size_ * 2}));
+      OUTPUT_LIST_ALLOCATE(rhs, rh, TensorShape({batch_size, cell_size_}));
+      OUTPUT_LIST_ALLOCATE(gs, g, TensorShape({batch_size, cell_size_}));
+      OUTPUT_LIST_ALLOCATE(hs, h, TensorShape({batch_size, cell_size_}));
+    }
+
+    if (sequence_len_max >= sequence_len_max_) {
+      sequence_len_max = sequence_len_max_;
+    }
+    for (int64 t = 0; t < sequence_len_max; ++t) {
+      const Tensor x = xs[t];
+      const Tensor* h_prev = t <= 0 ? nullptr : hs[t - 1];
+
+      Tensor* rz = rzs[t];
+      Tensor* rh = rhs[t];
+      Tensor* g = gs[t];
+      Tensor* h = hs[t];
+
+      // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
+      // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
+      GruXH<Device>()(ctx->eigen_device<Device>(), x, h_prev, &xh);
+      GruMatMul<Device>(ctx, false, xh, false, wxhrz, 0.0f, rz);
+      GruActivationSigmoid<Device>()(ctx->eigen_device<Device>(), rz);
+      GruRZ<Device>()(ctx->eigen_device<Device>(), *rz, &r, &z);
+
+      // rh[t] = r[t] .* h_prev[t]
+      // g[t] = tanh(x[t] Wxh + rh[t] Whh)
+      if (t > 0) {
+        GruCWiseMult<Device>()(ctx->eigen_device<Device>(), r, *h_prev, 0.0f, rh);
+      } else {
+        GruSetZero<Device>()(ctx->eigen_device<Device>(), rh);
+      }
+      GruMatMul<Device>(ctx, false, x, false, *wxh, 0.0f, g);
+      if (t > 0) GruMatMul<Device>(ctx, false, *rh, false, *whh, 1.0f, g);
+      GruActivationTanh<Device>()(ctx->eigen_device<Device>(), g);
+
+      // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
+      GruH<Device>()(ctx->eigen_device<Device>(), z, h_prev, *g, h);
+
+      GruPadTime<Device>()(ctx->eigen_device<Device>(), *sequence_len, t, 0.0f, h);
+    }
+  }
+
+ protected:
+  int64 cell_size_;
+  int64 sequence_len_max_;
+};
+
 REGISTER_KERNEL_BUILDER(Name("AttentionMask")
                              .Device(DEVICE_CPU),
                         AttentionMaskOp<CPUDevice>);
@@ -806,6 +919,16 @@ REGISTER_KERNEL_BUILDER(Name("Gru")
 REGISTER_KERNEL_BUILDER(Name("Gru")
                              .Device(DEVICE_GPU),
                         GruOp<GPUDevice>);
+#endif  // GOOGLE_CUDA
+
+REGISTER_KERNEL_BUILDER(Name("GruFused")
+                             .Device(DEVICE_CPU),
+                        GruFusedOp<CPUDevice>);
+
+#if GOOGLE_CUDA
+REGISTER_KERNEL_BUILDER(Name("GruFused")
+                             .Device(DEVICE_GPU),
+                        GruFusedOp<GPUDevice>);
 #endif  // GOOGLE_CUDA
 
 template <typename Device>
@@ -948,6 +1071,148 @@ class GruGradOp : public OpKernel {
   int64 sequence_len_max_;
 };
 
+template <typename Device>
+class GruFusedGradOp : public OpKernel {
+ public:
+  explicit GruFusedGradOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("cell_size", &cell_size_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("sequence_len_max", &sequence_len_max_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    const Tensor* sequence_len = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("sequence_len", &sequence_len));
+
+    // Get the sequence length in CPU memory.
+    auto sequence_len_t = sequence_len->vec<int64>();
+    std::vector<int64> seq_lens_vector(sequence_len_t.size());
+    ctx->eigen_device<Device>().memcpyDeviceToHost(
+        seq_lens_vector.data(), sequence_len_t.data(),
+        sizeof(int64) * sequence_len_t.size());
+    GruDeviceSynchronize<Device>()(ctx->eigen_device<Device>());
+
+    // Get the batch size.
+    const int64 batch_size = sequence_len->NumElements();
+
+    // Maximum number of compute unrolls.
+    int64 sequence_len_max =
+        *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
+
+    INPUT_TENSOR(wxr);
+    INPUT_TENSOR(whr);
+    INPUT_TENSOR(wxz);
+    INPUT_TENSOR(whz);
+    INPUT_TENSOR(wxh);
+    INPUT_TENSOR(whh);
+
+    INPUT_LIST(xs);
+    INPUT_LIST(rzs);
+    INPUT_LIST(rhs);
+    INPUT_LIST(gs);
+    INPUT_LIST(hs);
+
+    // Gradients.
+    INPUT_LIST(dhs);
+
+    ALLOCATE_TEMP(dh, TensorShape({batch_size, cell_size_}));
+    ALLOCATE_TEMP(r, dh.shape());
+    ALLOCATE_TEMP(z, dh.shape());
+    ALLOCATE_TEMP(dh_prev, dh.shape());
+    ALLOCATE_TEMP(dr, dh.shape());
+    ALLOCATE_TEMP(dz, dh.shape());
+    ALLOCATE_TEMP(drh, dh.shape());
+    ALLOCATE_TEMP(dg, dh.shape());
+
+    OUTPUT_TENSOR(dwxr, wxr->shape());
+    OUTPUT_TENSOR(dwhr, whr->shape());
+    OUTPUT_TENSOR(dwxz, wxz->shape());
+    OUTPUT_TENSOR(dwhz, whz->shape());
+    OUTPUT_TENSOR(dwxh, wxh->shape());
+    OUTPUT_TENSOR(dwhh, whh->shape());
+
+    OUTPUT_LIST(dxs);
+
+    CHECK_EQ(xs.size(), sequence_len_max_);
+    for (int64 t = 0; t < sequence_len_max_; ++t) {
+      const Tensor x = xs[t];
+      OUTPUT_LIST_ALLOCATE(dxs, dx, x.shape());
+    }
+
+    if (sequence_len_max >= sequence_len_max_) {
+      sequence_len_max = sequence_len_max_;
+    }
+    for (int64 t = sequence_len_max - 1; t >= 0; --t) {
+      const Tensor x = xs[t];
+      const Tensor rz = rzs[t];
+      const Tensor rh = rhs[t];
+      const Tensor g = gs[t];
+      const Tensor h = hs[t];
+      // const Tensor dhtt = dhs.at(t, true);
+      // const Tensor dh = dhs.at(t, true);
+      GruAdd<Device>()(ctx->eigen_device<Device>(), dhs[t], dh_prev, &dh);
+      // Tensor dh_prev = t <= 0 ? dhs.at(0, true) : dhs.at(t - 1, true);
+
+      const Tensor* h_prev = t <= 0 ? nullptr : &hs[t - 1];
+
+      GruSetZero<Device>()(ctx->eigen_device<Device>(), &dh_prev);
+      GruSetZero<Device>()(ctx->eigen_device<Device>(), &dr);
+      GruSetZero<Device>()(ctx->eigen_device<Device>(), &dz);
+      GruSetZero<Device>()(ctx->eigen_device<Device>(), &drh);
+      GruSetZero<Device>()(ctx->eigen_device<Device>(), &dg);
+
+      Tensor* dx = dxs[t];
+
+      GruRZ<Device>()(ctx->eigen_device<Device>(), rz, &r, &z);
+
+      // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
+      GruDz<Device>()(ctx->eigen_device<Device>(), dh, h_prev, g, &dz);
+      if (t > 0) {
+        GruCWiseMult<Device>()(ctx->eigen_device<Device>(), dh, z, 1.0f, &dh_prev);
+      }
+      GruDg<Device>()(ctx->eigen_device<Device>(), dh, z, &dg);
+
+      // g[t] = tanh(x[t] Wxh + rh[t] Whh)
+      GruActivationTanhGradient<Device>()(ctx->eigen_device<Device>(), g, &dg);
+      GruMatMul<Device>(ctx, false, dg, true, *wxh, 0.0f, dx);
+      GruMatMul<Device>(ctx, false, dg, true, *whh, 0.0f, &drh);
+
+      if (t > 0) {
+        GruCWiseMult<Device>()(ctx->eigen_device<Device>(), drh, *h_prev, 0.0f, &dr);
+        GruCWiseMult<Device>()(ctx->eigen_device<Device>(), drh, r, 1.0f, &dh_prev);
+      } else {
+        GruSetZero<Device>()(ctx->eigen_device<Device>(), &dr);
+      }
+
+      // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
+      GruActivationSigmoidGradient<Device>()(ctx->eigen_device<Device>(), z, &dz);
+      GruMatMul<Device>(ctx, false, dz, true, *wxz, 1.0f, dx);
+      if (t > 0) GruMatMul<Device>(ctx, false, dz, true, *whz, 1.0f, &dh_prev);
+
+      // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
+      if (t > 0) {
+        GruActivationSigmoidGradient<Device>()(ctx->eigen_device<Device>(), r, &dr);
+        GruMatMul<Device>(ctx, false, dr, true, *wxr, 1.0f, dx);
+        GruMatMul<Device>(ctx, false, dr, true, *whr, 1.0f, &dh_prev);
+      }
+
+      // Gradient wrt to the weights.
+      GruMatMul<Device>(ctx, true, x, false, dr, 1.0f, dwxr);
+      GruMatMul<Device>(ctx, true, x, false, dz, 1.0f, dwxz);
+      GruMatMul<Device>(ctx, true, x, false, dg, 1.0f, dwxh);
+
+      if (t > 0) {
+        GruMatMul<Device>(ctx, true, *h_prev, false, dr, 1.0f, dwhr);
+        GruMatMul<Device>(ctx, true, *h_prev, false, dz, 1.0f, dwhz);
+        GruMatMul<Device>(ctx, true, rh, false, dg, 1.0f, dwhh);
+      }
+    }
+  }
+
+ protected:
+  int64 cell_size_;
+  int64 sequence_len_max_;
+};
+
 REGISTER_KERNEL_BUILDER(Name("GruCellGrad")
                              .Device(DEVICE_CPU),
                         GruCellGradOp<CPUDevice>);
@@ -966,6 +1231,16 @@ REGISTER_KERNEL_BUILDER(Name("GruGrad")
 REGISTER_KERNEL_BUILDER(Name("GruGrad")
                              .Device(DEVICE_GPU),
                         GruGradOp<GPUDevice>);
+#endif  // GOOGLE_CUDA
+
+REGISTER_KERNEL_BUILDER(Name("GruFusedGrad")
+                             .Device(DEVICE_CPU),
+                        GruFusedGradOp<CPUDevice>);
+
+#if GOOGLE_CUDA
+REGISTER_KERNEL_BUILDER(Name("GruFusedGrad")
+                             .Device(DEVICE_GPU),
+                        GruFusedGradOp<GPUDevice>);
 #endif  // GOOGLE_CUDA
 
 }  // namespace tensorflow
