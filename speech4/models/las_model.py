@@ -415,8 +415,8 @@ class LASModel(object):
 
     results_proto = speech4_pb2.ResultsProto()
     acc_proto = results_proto.acc
-    acc_proto.pos = self.epoch_correct
-    acc_proto.count = self.epoch_count
+    acc_proto.pos = int(self.epoch_correct)
+    acc_proto.count = int(self.epoch_count)
 
     with open(os.path.join(self.logdir, 'results_%d.pbtxt' % self.epochs), 'w') as proto_file:
       proto_file.write(str(results_proto))
@@ -430,7 +430,7 @@ class LASModel(object):
   def step(self, sess, forward_only):
     start_time = time.time()
 
-    steps_per_report = 1
+    steps_per_report = 100
     report = forward_only or (self.step_total % steps_per_report == 0)
 
     targets = {}
