@@ -4,6 +4,7 @@ import os.path
 import time
 
 import tensorflow as tf
+from tensorflow.core.framework import speech4_pb2
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import clip_ops
 from tensorflow.python.ops import embedding_ops
@@ -21,10 +22,10 @@ from tensorflow.python.platform import gfile
 
 
 class LASModel(object):
-  def __init__(self, dataset, logdir, batch_size, features_width,
-      features_len_max, vocab_size, embedding_size, tokens_len_max,
-      encoder_cell_size, decoder_cell_size, attention_embedding_size,
-      max_gradient_norm, learning_rate):
+  def __init__(self, sess, dataset, logdir, ckpt, forward_only, batch_size,
+      features_width, features_len_max, vocab_size, embedding_size,
+      tokens_len_max, encoder_cell_size, decoder_cell_size,
+      attention_embedding_size, max_gradient_norm, learning_rate):
     self.dataset = dataset
     self.logdir = logdir
 
@@ -49,7 +50,7 @@ class LASModel(object):
     self.global_step = tf.Variable(0, trainable=False)
 
     # Create the inputs.
-    self.create_input_layer()
+    self.create_input_layer(forward_only)
 
     # Create the encoder-encoder.
     self.create_encoder()
@@ -63,8 +64,14 @@ class LASModel(object):
 
     self.saver = tf.train.Saver(tf.all_variables())
 
+    if gfile.Exists(ckpt):
+      print("Reading model parameters from %s" % ckpt)
+      self.saver.restore(sess, ckpt)
+    else:
+      sess.run(tf.initialize_all_variables())
 
-  def create_input_layer(self):
+
+  def create_input_layer(self, forward_only):
     dataset_map = {}
     if self.dataset == 'train_si284':
       self.dataset = 'speech4/data/train_si284.tfrecords'
@@ -80,10 +87,15 @@ class LASModel(object):
     reader = tf.TFRecordReader()
     _, serialized = reader.read(filename_queue)
 
-    serialized = tf.train.shuffle_batch(
-        [serialized], batch_size=self.batch_size, num_threads=2, capacity=self.batch_size * 4 + 512,
-        min_after_dequeue=512, seed=1000)
-    
+    if forward_only:
+      serialized = tf.train.batch(
+          [serialized], batch_size=self.batch_size, num_threads=2,
+          capacity=self.batch_size * 4 + 512)
+    else:
+      serialized = tf.train.shuffle_batch(
+          [serialized], batch_size=self.batch_size, num_threads=2,
+          capacity=self.batch_size * 4 + 512, min_after_dequeue=512, seed=1000)
+
     # Parse the batched of serialized strings into the relevant utterance features.
     self.features, self.features_len, _, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
         serialized, features_len_max=self.features_len_max, tokens_len_max=self.tokens_len_max + 1)
@@ -381,11 +393,19 @@ class LASModel(object):
       correct = correct + (np.equal(logit.argmax(axis=1), np.array(target)).astype(float) * weight).sum()
       count = count + weight.sum()
 
+    self.epoch_correct = self.epoch_correct + correct
+    self.epoch_count = self.epoch_count + count
+    self.epoch_accuracy = self.epoch_correct / self.epoch_count
+
     return correct / count
 
 
   def step_epoch(self, sess, forward_only):
     steps_per_epoch = int(math.ceil(self.dataset_size // self.batch_size))
+
+    self.epoch_correct = 0
+    self.epoch_count = 0
+
     for s in range(steps_per_epoch):
       self.step(sess, forward_only)
     self.epochs = self.step_total / steps_per_epoch
@@ -393,31 +413,36 @@ class LASModel(object):
     self.saver.save(
         sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs)
 
+    results_proto = speech4_pb2.ResultsProto()
+    acc_proto = results_proto.acc
+    acc_proto.pos = self.epoch_correct
+    acc_proto.count = self.epoch_count
+
+    with open(os.path.join(self.logdir, 'results_%d.pbtxt' % self.epochs), 'w') as proto_file:
+      proto_file.write(str(results_proto))
+
     print("*** epoch done %d ***" % self.epochs)
-    print("step_total %d, avg_step_time: %f, accuracy %f, perplexity %f" % (
-        self.step_total, avg_step_time, accuracy, perplexity))
+    print("step_total %d, avg_step_time: %f, accuracy %f" % (
+        self.step_total, self.avg_step_time, self.epoch_accuracy))
     print("*** epoch done %d ***" % self.epochs)
 
 
   def step(self, sess, forward_only):
-    steps_per_epoch = int(math.ceil(self.dataset_size // self.batch_size))
-
     start_time = time.time()
 
-    steps_per_report = 100
-    report = self.step_total % steps_per_report == 0
+    steps_per_report = 1
+    report = forward_only or (self.step_total % steps_per_report == 0)
 
     targets = {}
-    if forward_only or report:
+    if report:
       targets['uttid'] = self.uttid
       targets['text'] = self.text
       targets['tokens'] = self.tokens
       targets['tokens_weights'] = self.tokens_weights
       targets['logperp'] = self.losses
-      # targets['logits'] = self.logits
-      targets['encoder_states'] = self.encoder_states[-1][0]
+      targets['logits'] = self.logits
 
-    if not forward_only or report:
+    if not forward_only and report:
       targets['gradient_norm'] = self.gradient_norm
 
     if not forward_only:
@@ -428,9 +453,10 @@ class LASModel(object):
     step_time = time.time() - start_time
     self.step_total += 1
     self.step_time_total += step_time
+    steps_per_epoch = int(math.ceil(self.dataset_size // self.batch_size))
     self.epochs = self.step_total / steps_per_epoch
 
-    avg_step_time = self.step_time_total / self.step_total
+    self.avg_step_time = self.step_time_total / self.step_total
 
     if report:
       logperp = fetches['logperp'][0]
@@ -443,10 +469,11 @@ class LASModel(object):
         accuracy = self.compute_accuracy(
             fetches['logits'], fetches['tokens'][1:], fetches['tokens_weights'][1:])
 
-      self.saver.save(
-          sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs)
+      if not forward_only:
+        self.saver.save(
+            sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs)
 
       print("step_total %d, avg_step_time: %f, accuracy %f, perplexity %f, gradient_norm %f" % (
-          self.step_total, avg_step_time, accuracy, perplexity, gradient_norm))
+          self.step_total, self.avg_step_time, accuracy, perplexity, gradient_norm))
 
     return fetches

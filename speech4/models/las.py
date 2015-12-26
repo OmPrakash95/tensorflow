@@ -35,6 +35,9 @@ tf.app.flags.DEFINE_integer('device', 0,
 tf.app.flags.DEFINE_string('ckpt', '',
                             """The GPU device to use (set to negative to use CPU).""")
 
+tf.app.flags.DEFINE_integer('random_seed', 1000,
+                            """Random seed.""")
+
 tf.app.flags.DEFINE_integer('batch_size', 16,
                             """Number of utterances to process in a batch.""")
 
@@ -68,58 +71,68 @@ tf.app.flags.DEFINE_string('logdir', '',
                            """Path to our outputs and logs.""")
 
 
-def create_model(sess, dataset, forward_only):
+def create_model(sess, ckpt, dataset, forward_only):
   start_time = time.time()
 
   #initializer = tf.random_normal_initializer(0.0, 0.1)
   initializer = tf.random_uniform_initializer(-0.1, 0.1)
   with tf.variable_scope("model", initializer=initializer):
     model = las_model.LASModel(
-        dataset, FLAGS.logdir, FLAGS.batch_size, FLAGS.features_width,
-        FLAGS.features_len_max, FLAGS.vocab_size, FLAGS.embedding_size,
-        FLAGS.tokens_len_max, FLAGS.encoder_cell_size, FLAGS.decoder_cell_size,
-        FLAGS.attention_embedding_size, FLAGS.max_gradient_norm,
-        FLAGS.learning_rate)
+        sess, dataset, FLAGS.logdir, ckpt, forward_only, FLAGS.batch_size,
+        FLAGS.features_width, FLAGS.features_len_max, FLAGS.vocab_size,
+        FLAGS.embedding_size, FLAGS.tokens_len_max, FLAGS.encoder_cell_size,
+        FLAGS.decoder_cell_size, FLAGS.attention_embedding_size,
+        FLAGS.max_gradient_norm, FLAGS.learning_rate)
 
   tf.train.write_graph(sess.graph_def, FLAGS.logdir, "graph_def.pbtxt")
 
   # tf.add_check_numerics_ops()
-  if gfile.Exists(FLAGS.ckpt):
-    print("Reading model parameters from %s" % FLAGS.ckpt)
-    model.saver.restore(sess, ckpt)
-  else:
-    sess.run(tf.initialize_all_variables())
-  tf.train.start_queue_runners(sess=sess)
+  # threads = tf.train.start_queue_runners(sess=sess)
 
   print('create_model graph time %f' % (time.time() - start_time))
 
   return model
 
 
-def run_train():
-  tf.set_random_seed(1000)
-
-  if not FLAGS.logdir:
-    FLAGS.logdir = tempfile.mkdtemp()
-
-  print("logdir: %s" % FLAGS.logdir)
-
+def run(mode='train', epochs=1):
   device = '/gpu:%d' % FLAGS.device if FLAGS.device >= 0 else '/cpu:0'
   with tf.device(device):
-    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
-      model = create_model(sess, 'train_si284', False)
+    with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
+      if mode == 'train':
+        model = create_model(sess, FLAGS.ckpt, 'train_si284', False)
+      elif mode == 'valid':
+        model = create_model(sess, FLAGS.ckpt, 'test_dev93', True)
+      elif mode == 'test':
+        model = create_model(sess, FLAGS.ckpt, 'test_eval92', True)
+      coord = tf.train.Coordinator()
+      threads = []
+      for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
+        threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
 
       summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
       summary_writer.flush()
 
-      model.step(sess, forward_only=False)
+      for epoch in range(epochs):
+        model.step_epoch(sess, forward_only=(mode != 'train'))
 
-      while True:
-        model.step_epoch(sess, forward_only=False)
+      summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
+      summary_writer.flush()
+
+      coord.request_stop()
+      coord.join(threads, stop_grace_period_secs=10)
+      sess.close()
 
 
 def main(_):
-  run_train()
+  if not FLAGS.logdir:
+    FLAGS.logdir = tempfile.mkdtemp()
+  print("logdir: %s" % FLAGS.logdir)
+
+  tf.set_random_seed(FLAGS.random_seed)
+
+  while True:
+    run()
+    run(mode='valid')
 
 
 if __name__ == '__main__':
