@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+// Copyright 2015 William Chan <williamchan@cmu.edu>.
+
+package speech4;
+
+message EditDistanceResultsProto {
+  float error_rate = 1;
+
+  int64 ins = 2;
+  int64 del = 3;
+  int64 sub = 4;
+  int64 hyp_length = 5;
+  int64 ref_length = 6;
+};
+
+message AccuracyResultsProto {
+  int64 pos = 1;
+  int64 count = 2;
+};
+
+message ResultsProto {
+  EditDistanceResultsProto cer = 1;
+  EditDistanceResultsProto wer = 2;
+
+  AccuracyResultsProto acc = 3;
+};
