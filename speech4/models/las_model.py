@@ -118,7 +118,7 @@ class LASModel(object):
         #   xs = [xs[i:i + subsample_input] for i in range(0, len(xs), subsample_input)]
         #   xs = [array_ops.concat(1, x) for x in xs]
         xs = self.encoder_states[-1][0][0::subsample_input]
-        self.encoder_states.append([gru_ops.gru_fused(
+        self.encoder_states.append([gru_ops.gru(
             cell_size=self.encoder_cell_size, sequence_len=sequence_len, xs=xs)[-1], sequence_len])
       else:
         self.encoder_states.append([rnn.rnn(
