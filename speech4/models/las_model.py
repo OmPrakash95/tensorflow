@@ -459,7 +459,9 @@ class LASModel(object):
       logperp = fetches['logperp'][0]
 
       perplexity = np.exp(logperp)
-      gradient_norm = fetches['gradient_norm']
+      gradient_norm = 0.0
+      if 'gradient_norm' in fetches:
+        gradient_norm = fetches['gradient_norm']
       
       accuracy = 0.0
       if 'logits' in fetches:
