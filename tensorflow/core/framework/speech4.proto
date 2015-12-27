@@ -4,6 +4,23 @@ syntax = "proto3";
 
 package speech4;
 
+message ModelParamsProto {
+  int64 features_width = 1;
+  int64 features_len_max = 2;
+  int64 tokens_len_max = 3;
+  int64 vocab_size = 4;
+  int64 embedding_size = 5;
+  int64 encoder_cell_size = 6;
+  int64 decoder_cell_size = 7;
+  int64 attention_embedding_size = 8;
+
+  string input_layer = 9;
+};
+
+message DecoderParamsProto {
+  int64 beam_width = 1;
+};
+
 message EditDistanceResultsProto {
   float error_rate = 1;
 
