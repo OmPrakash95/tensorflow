@@ -46,10 +46,10 @@ class LASModel(object):
     self.create_encoder()
     self.create_decoder()
 
-    if not forward_only:
-      # Create the loss.
-      self.create_loss()
+    # Create the loss.
+    self.create_loss()
 
+    if not forward_only:
       # Create the optimizer.
       self.create_optimizer()
 
