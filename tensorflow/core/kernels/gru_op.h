@@ -171,6 +171,7 @@ struct GruDg {
       const Device& d, const Tensor& dh, const Tensor& z, Tensor* dg);
 };
 
+void GruDeviceSynchronizeGPU(const GPUDevice& d);
 void GruSetZeroGPU(const GPUDevice& d, Tensor* x);
 void GruCopyGPU(const GPUDevice& d, const Tensor& x, Tensor* y);
 void GruWxhrzGPU(
