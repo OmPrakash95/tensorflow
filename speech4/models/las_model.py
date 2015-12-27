@@ -65,18 +65,21 @@ class LASModel(object):
     if self.model_params.input_layer == 'placeholder':
       self.features = []
       self.tokens = []
+      self.tokens_weights = []
       for idx in range(self.model_params.features_len_max):
         self.features.append(tf.placeholder(
           tf.float32, shape=(self.batch_size, self.model_params.features_width),
           name="features_%d" % idx))
-      for idx in range(self.model_params.tokens_len_max):
+      for idx in range(self.model_params.tokens_len_max + 1):
         self.tokens.append(tf.placeholder(
           tf.int32, shape=(self.batch_size), name="tokens_%d" % idx))
+        self.tokens_weights.append(tf.placeholder(
+            tf.float32, shape=(self.batch_size), name="tokens_weights_%d" % idx))
 
-        self.features_len = tf.placeholder(
-            tf.int64, shape=(self.batch_size), name="features_len")
-        self.tokens_len = tf.placeholder(
-            tf.int64, shape=(self.batch_size), name="tokens_len")
+      self.features_len = tf.placeholder(
+          tf.int64, shape=(self.batch_size), name="features_len")
+      self.tokens_len = tf.placeholder(
+          tf.int64, shape=(self.batch_size), name="tokens_len")
     else:
       if 'train_si284' in self.dataset:
         self.dataset_size = 37416

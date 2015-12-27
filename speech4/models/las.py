@@ -26,9 +26,12 @@ from tensorflow.python.ops import sparse_ops
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops.gen_user_ops import s4_parse_utterance
 from tensorflow.python.platform import gfile
+from speech4.models import las_decoder
 from speech4.models import las_model
 
+
 FLAGS = tf.app.flags.FLAGS
+
 
 tf.app.flags.DEFINE_integer('device', 0,
                             """The GPU device to use (set to negative to use CPU).""")
@@ -56,7 +59,7 @@ tf.app.flags.DEFINE_integer('embedding_size', 32,
                             """Token vocabulary size.""")
 
 tf.app.flags.DEFINE_integer('encoder_cell_size', 384,
-                            """Encoder cell size.""")
+                            """encoder cell size.""")
 tf.app.flags.DEFINE_integer('decoder_cell_size', 384,
                             """Decoder cell size.""")
 tf.app.flags.DEFINE_integer('attention_embedding_size', 128,
@@ -72,12 +75,12 @@ tf.app.flags.DEFINE_string('logdir', '',
                            """Path to our outputs and logs.""")
 
 
-def create_model(sess, ckpt, dataset, forward_only):
-  start_time = time.time()
+# DecoderParams
+tf.app.flags.DEFINE_integer('beam_width', 1,
+                            """Decoder beam width.""")
 
-  #initializer = tf.random_normal_initializer(0.0, 0.1)
-  initializer = tf.random_uniform_initializer(-0.1, 0.1)
 
+def create_model_params():
   model_params = speech4_pb2.ModelParamsProto()
   
   model_params.features_width = FLAGS.features_width
@@ -89,6 +92,16 @@ def create_model(sess, ckpt, dataset, forward_only):
   model_params.encoder_cell_size = FLAGS.encoder_cell_size
   model_params.decoder_cell_size = FLAGS.decoder_cell_size
   model_params.attention_embedding_size = FLAGS.attention_embedding_size
+
+  return model_params
+
+def create_model(sess, ckpt, dataset, forward_only):
+  start_time = time.time()
+
+  #initializer = tf.random_normal_initializer(0.0, 0.1)
+  initializer = tf.random_uniform_initializer(-0.1, 0.1)
+
+  model_params = create_model_params()
 
   with open(os.path.join(FLAGS.logdir, 'model_params.pbtxt'), 'w') as proto_file:
     proto_file.write(str(model_params))
@@ -131,26 +144,47 @@ def run(mode, dataset, epochs=1):
         model = create_model(sess, ckpt, dataset, False)
       elif mode == 'valid':
         model = create_model(sess, ckpt, dataset, True)
-      elif mode == 'test':
-        model = create_model(sess, ckpt, dataset, True)
+
       coord = tf.train.Coordinator()
-      threads = []
-      for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
-        threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
+      if mode == 'train' or mode == 'valid':
+        threads = []
+        for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
+          threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
 
-      summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
-      summary_writer.flush()
+        summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
+        summary_writer.flush()
 
-      for epoch in range(epochs):
-        model.step_epoch(sess, forward_only=(mode != 'train'))
+        for epoch in range(epochs):
+          model.step_epoch(sess, forward_only=(mode != 'train'))
 
-      summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
-      summary_writer.flush()
+        summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
+        summary_writer.flush()
 
-      coord.request_stop()
-      coord.join(threads, stop_grace_period_secs=10)
-      sess.close()
+        coord.request_stop()
+        coord.join(threads, stop_grace_period_secs=10)
+      elif mode == 'test':
+        model_params = speech4_pb2.ModelParamsProto()
+        model_params_pbtxt = os.path.join(FLAGS.logdir, 'model_params.pbtxt')
+        if os.path.isfile(model_params_pbtxt):
+          with open(model_params_pbtxt, 'r') as proto_file:
+            google.protobuf.text_format.Merge(proto_file.read(), model_params)
+        else:
+          model_params = create_model_params()
 
+        decoder_params = speech4_pb2.DecoderParamsProto()
+        decoder_params.beam_width = FLAGS.beam_width
+
+        decoder = las_decoder.Decoder(
+            sess, dataset, dataset_size, FLAGS.logdir, ckpt, decoder_params, model_params)
+
+        threads = []
+        for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
+          threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
+
+        decoder.decode(sess)
+
+        coord.request_stop()
+        coord.join(threads, stop_grace_period_secs=10)
 
 def main(_):
   if not FLAGS.logdir:
@@ -160,6 +194,7 @@ def main(_):
   tf.set_random_seed(FLAGS.random_seed)
 
   while True:
+    run('test', 'test_eval92')
     run('train', 'train_si284')
     run('valid', 'test_dev93')
 
