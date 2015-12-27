@@ -126,7 +126,7 @@ struct GruDeviceSynchronize<CPUDevice> {
 template <>
 struct GruDeviceSynchronize<GPUDevice> {
   void operator()(const GPUDevice& d) {
-    d.synchronize();
+    GruDeviceSynchronizeGPU(d);
   }
 };
 

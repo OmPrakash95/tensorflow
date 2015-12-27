@@ -23,24 +23,14 @@ from tensorflow.python.platform import gfile
 
 class LASModel(object):
   def __init__(self, sess, dataset, logdir, ckpt, forward_only, batch_size,
-      features_width, features_len_max, vocab_size, embedding_size,
-      tokens_len_max, encoder_cell_size, decoder_cell_size,
-      attention_embedding_size, max_gradient_norm, learning_rate):
+      model_params, max_gradient_norm, learning_rate):
     self.dataset = dataset
     self.logdir = logdir
 
     self.batch_size = batch_size
+
+    self.model_params = model_params
     
-    self.features_width = features_width
-    self.features_len_max = features_len_max
-    self.vocab_size = vocab_size
-
-    self.embedding_size = embedding_size
-    self.tokens_len_max = tokens_len_max
-    self.encoder_cell_size = encoder_cell_size
-    self.decoder_cell_size = decoder_cell_size
-    self.attention_embedding_size = attention_embedding_size
-
     self.max_gradient_norm = max_gradient_norm
     self.learning_rate = learning_rate
 
@@ -70,42 +60,52 @@ class LASModel(object):
     else:
       sess.run(tf.initialize_all_variables())
 
-
   def create_input_layer(self, forward_only):
-    dataset_map = {}
-    if self.dataset == 'train_si284':
-      self.dataset = 'speech4/data/train_si284.tfrecords'
-      self.dataset_size = 37416
-    elif self.dataset == 'test_dev93':
-      self.dataset = 'speech4/data/test_dev93.tfrecords'
-      self.dataset_size = 503
-    elif self.dataset == 'test_eval92':
-      self.dataset = 'speech4/data/test_eval92.tfrecords'
-      self.dataset_size = 333
-    filename_queue = tf.train.string_input_producer([self.dataset])
+    if self.model_params.input_layer == 'placeholder':
+      self.features = []
+      self.tokens = []
+      for idx in range(self.model_params.features_len_max):
+        self.features.append(tf.placeholder(
+          tf.float32, shape=(self.batch_size, self.model_params.features_width),
+          name="features_%d" % idx))
+      for idx in range(self.model_params.tokens_len_max):
+        self.tokens.append(tf.placeholder(
+          tf.int32, shape=(self.batch_size), name="tokens_%d" % idx))
 
-    reader = tf.TFRecordReader()
-    _, serialized = reader.read(filename_queue)
-
-    if forward_only:
-      serialized = tf.train.batch(
-          [serialized], batch_size=self.batch_size, num_threads=2,
-          capacity=self.batch_size * 4 + 512)
+        self.features_len = tf.placeholder(
+            tf.int64, shape=(self.batch_size), name="features_len")
+        self.tokens_len = tf.placeholder(
+            tf.int64, shape=(self.batch_size), name="tokens_len"))
     else:
-      serialized = tf.train.shuffle_batch(
-          [serialized], batch_size=self.batch_size, num_threads=2,
-          capacity=self.batch_size * 4 + 512, min_after_dequeue=512, seed=1000)
+      if 'train_si284' in self.dataset:
+        self.dataset_size = 37416
+      elif 'test_dev93' in self.dataset:
+        self.dataset_size = 503
+      elif 'test_eval92' in self.dataset:
+        self.dataset_size = 333
+      filename_queue = tf.train.string_input_producer([self.dataset])
 
-    # Parse the batched of serialized strings into the relevant utterance features.
-    self.features, self.features_len, _, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
-        serialized, features_len_max=self.features_len_max, tokens_len_max=self.tokens_len_max + 1)
+      reader = tf.TFRecordReader()
+      _, serialized = reader.read(filename_queue)
+
+      if forward_only:
+        serialized = tf.train.batch(
+            [serialized], batch_size=self.batch_size, num_threads=2,
+            capacity=self.batch_size * 4 + 512)
+      else:
+        serialized = tf.train.shuffle_batch(
+            [serialized], batch_size=self.batch_size, num_threads=2,
+            capacity=self.batch_size * 4 + 512, min_after_dequeue=512, seed=1000)
+
+      # Parse the batched of serialized strings into the relevant utterance features.
+      self.features, self.features_len, _, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
+          serialized, features_len_max=self.model_params.features_len_max, tokens_len_max=self.model_params.tokens_len_max + 1)
 
     # Add the shape to the features.
     for feature in self.features:
-      feature.set_shape([self.batch_size, self.features_width])
+      feature.set_shape([self.batch_size, self.model_params.features_width])
     for token in self.tokens:
       token.set_shape([self.batch_size])
-
 
   def create_encoder(self):
     start_time = time.time()
@@ -119,7 +119,6 @@ class LASModel(object):
 
     print('create_encoder graph time %f' % (time.time() - start_time))
 
-
   def create_encoder_layer(self, subsample_input=1, use_monolithic=True):
     with vs.variable_scope('encoder_layer_%d' % (len(self.encoder_states))):
       sequence_len_factor = tf.constant(subsample_input, shape=[self.batch_size], dtype=tf.int64)
@@ -131,15 +130,15 @@ class LASModel(object):
         #   xs = [array_ops.concat(1, x) for x in xs]
         xs = self.encoder_states[-1][0][0::subsample_input]
         self.encoder_states.append([gru_ops.gru(
-            cell_size=self.encoder_cell_size, sequence_len=sequence_len, xs=xs)[-1], sequence_len])
+            cell_size=self.model_params.encoder_cell_size, sequence_len=sequence_len, xs=xs)[-1], sequence_len])
       else:
         self.encoder_states.append([rnn.rnn(
-            rnn_cell.GRUCell(self.encoder_cell_size),
+            rnn_cell.GRUCell(self.model_params.encoder_cell_size),
             self.encoder_states[-1][0][0::subsample_input], dtype=tf.float32,
             sequence_length=sequence_len)[0], sequence_len])
 
       for encoder_state in self.encoder_states[-1][0]:
-        encoder_state.set_shape([self.batch_size, self.encoder_cell_size])
+        encoder_state.set_shape([self.batch_size, self.model_params.encoder_cell_size])
 
   def create_decoder(self):
     start_time = time.time()
@@ -151,7 +150,7 @@ class LASModel(object):
     if len(self.encoder_states) > 1:
       attention_states = [
           array_ops.reshape(
-              e, [-1, 1, self.encoder_cell_size], name='reshape_%d' % idx)
+              e, [-1, 1, self.model_params.encoder_cell_size], name='reshape_%d' % idx)
           for idx, e in enumerate(self.encoder_states[-1][0])]
       attention_states = array_ops.concat(1, attention_states)
 
@@ -161,24 +160,23 @@ class LASModel(object):
 
     print('create_decoder graph time %f' % (time.time() - start_time))
 
-
   def create_decoder_layer_v1(
       self, attention_states=None, output_projection=None, scope=None):
     with vs.variable_scope('decoder_layer_%d' % (len(self.decoder_states))):
       decoder_initial_state = tf.constant(
-          0, shape=[self.batch_size, self.decoder_cell_size], dtype=tf.float32)
-      decoder_initial_state.set_shape([self.batch_size, self.decoder_cell_size])
+          0, shape=[self.batch_size, self.model_params.decoder_cell_size], dtype=tf.float32)
+      decoder_initial_state.set_shape([self.batch_size, self.model_params.decoder_cell_size])
 
-      cell = rnn_cell.GRUCell(self.decoder_cell_size)
-      #cell = rnn_cell.GRUCellv2(self.decoder_cell_size, sequence_len=self.tokens_len)
+      cell = rnn_cell.GRUCell(self.model_params.decoder_cell_size)
+      #cell = rnn_cell.GRUCellv2(self.model_params.decoder_cell_size, sequence_len=self.tokens_len)
       if output_projection == True:
-        cell = rnn_cell.OutputProjectionWrapper(cell, self.vocab_size)
+        cell = rnn_cell.OutputProjectionWrapper(cell, self.model_params.vocab_size)
 
       if attention_states:
         if len(self.decoder_states) == 1:
           self.decoder_states.append(seq2seq.embedding_attention_decoder(
               self.decoder_states[-1], decoder_initial_state, attention_states,
-              cell, self.embedding_size, self.vocab_size,
+              cell, self.model_params.embedding_size, self.model_params.vocab_size,
               attention_states_sequence_len=self.encoder_states[-1][1],
               sequence_length=self.tokens_len)[0])
         else:
@@ -190,13 +188,12 @@ class LASModel(object):
         if len(self.decoder_states) == 1:
           self.decoder_states.append(seq2seq.embedding_rnn_decoder(
               self.decoder_states[-1], decoder_initial_state, cell,
-              self.embedding_size, self.vocab_size,
+              self.model_params.embedding_size, self.model_params.vocab_size,
               sequence_length=self.tokens_len)[0])
         else:
           self.decoder_states.append(seq2seq.rnn_decoder(
               self.decoder_states[-1], decoder_initial_state, cell,
               sequence_length=self.tokens_len)[0])
-
 
   def create_decoder_sequence(self, attention_states, scope=None):
     with vs.variable_scope("decoder_layer" or scope):
@@ -207,7 +204,7 @@ class LASModel(object):
       encoder_states = array_ops.reshape(
           attention_states, [-1, attn_length, 1, attn_size])
       with vs.variable_scope("encoder_embedding"):
-        k = vs.get_variable("W", [1, 1, attn_size, self.attention_embedding_size])
+        k = vs.get_variable("W", [1, 1, attn_size, self.model_params.attention_embedding_size])
       encoder_embedding = nn_ops.conv2d(encoder_states, k, [1, 1, 1, 1], "SAME")
 
       self.decoder_states = []
@@ -226,8 +223,8 @@ class LASModel(object):
         with vs.variable_scope("Logit"):
           logit = nn_ops.xw_plus_b(
               outputs[-1],
-              vs.get_variable("Matrix", [outputs[-1].get_shape()[1].value, self.vocab_size]),
-              vs.get_variable("Bias", [self.vocab_size]), name="Logit_%d" % decoder_time_idx)
+              vs.get_variable("Matrix", [outputs[-1].get_shape()[1].value, self.model_params.vocab_size]),
+              vs.get_variable("Bias", [self.model_params.vocab_size]), name="Logit_%d" % decoder_time_idx)
           self.decoder_states.append(logit)
 
 
@@ -235,19 +232,19 @@ class LASModel(object):
       self, decoder_time_idx, states, attentions, encoder_states,
       encoder_embedding, scope=None):
     batch_size = self.batch_size
-    attention_embedding_size = self.attention_embedding_size
-    decoder_cell_size = self.decoder_cell_size
+    attention_embedding_size = self.model_params.attention_embedding_size
+    decoder_cell_size = self.model_params.decoder_cell_size
 
     # Create the embedding layer.
     with tf.device("/cpu:0"):
       sqrt3 = np.sqrt(3)
       embedding = vs.get_variable(
-          "embedding", [self.vocab_size, self.embedding_size],
+          "embedding", [self.model_params.vocab_size, self.model_params.embedding_size],
           initializer=tf.random_uniform_initializer(-sqrt3, sqrt3))
 
     emb = embedding_ops.embedding_lookup(
         embedding, self.tokens[decoder_time_idx])
-    emb.set_shape([batch_size, self.embedding_size])
+    emb.set_shape([batch_size, self.model_params.embedding_size])
 
     def create_attention(decoder_state):
       with vs.variable_scope("attention"):
@@ -272,7 +269,7 @@ class LASModel(object):
         c = math_ops.reduce_sum(
             array_ops.reshape(a, [batch_size, len(self.encoder_states[-1][0]), 1, 1]) * encoder_states,
             [1, 2])
-        c = array_ops.reshape(c, [batch_size, self.encoder_cell_size])
+        c = array_ops.reshape(c, [batch_size, self.model_params.encoder_cell_size])
         return c
 
     new_states = [None]
@@ -295,8 +292,8 @@ class LASModel(object):
           x = array_ops.concat(1, [x, attentions[stack_idx]])
         else:
           x = array_ops.concat(1, [x, array_ops.zeros([
-              batch_size, self.encoder_cell_size], tf.float32)])
-        x.set_shape([batch_size, new_outputs[stack_idx - 1].get_shape()[1].value + self.encoder_cell_size])
+              batch_size, self.model_params.encoder_cell_size], tf.float32)])
+        x.set_shape([batch_size, new_outputs[stack_idx - 1].get_shape()[1].value + self.model_params.encoder_cell_size])
 
       # Create our GRU cell.
       _, _, _, _, h = gru_ops.gru_cell(
@@ -309,7 +306,7 @@ class LASModel(object):
         new_attentions.append(c)
         h = array_ops.concat(1, [h, c])
         h.set_shape(
-            [batch_size, self.decoder_cell_size + self.encoder_cell_size])
+            [batch_size, self.model_params.decoder_cell_size + self.model_params.encoder_cell_size])
       else:
         new_attentions.append(None)
       new_outputs.append(h)
@@ -331,7 +328,7 @@ class LASModel(object):
     targets = self.tokens[1:]
     weights = self.tokens_weights[1:]
 
-    log_perps = seq2seq.sequence_loss(self.logits, targets, weights, self.vocab_size)
+    log_perps = seq2seq.sequence_loss(self.logits, targets, weights, self.model_params.vocab_size)
     self.losses.append(log_perps)
 
     print('create_loss graph time %f' % (time.time() - start_time))

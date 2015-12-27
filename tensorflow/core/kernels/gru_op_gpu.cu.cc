@@ -7,6 +7,10 @@
 namespace tensorflow {
 // typedef Eigen::GpuDevice GPUDevice;
 
+void GruDeviceSynchronizeGPU(const GPUDevice& d) {
+  d.synchronize();
+}
+
 void GruSetZeroGPU(const GPUDevice& d, Tensor* x) {
   x->matrix<float>().device(d) = x->matrix<float>().constant(0.0f);
 }
