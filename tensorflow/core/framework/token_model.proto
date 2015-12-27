@@ -1,0 +1,32 @@
+// Copyright 2015 William Chan <williamchan@cmu.edu>.
+
+syntax = "proto3";
+
+package speech4;
+
+message TokenProto {
+  int64 token_id = 1;
+  string token_string = 2;
+  int64 token_count = 3;
+};
+
+message TokenModelProto {
+  repeated TokenProto tokens = 1;
+
+  int64 token_sos = 2;
+  string token_string_sos = 3;
+
+  int64 token_eos = 4;
+  string token_string_eos = 5;
+
+  int64 token_eow = 6;
+  string token_string_eow = 7;
+
+  int64 token_unk = 8;
+  string token_string_unk = 9;
+
+  int64 unk_threshold = 10;
+
+  bool character_model = 11;
+  bool word_model = 12;
+};
