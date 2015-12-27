@@ -90,7 +90,7 @@ def create_model(sess, ckpt, dataset, forward_only):
   model_params.decoder_cell_size = FLAGS.decoder_cell_size
   model_params.attention_embedding_size = FLAGS.attention_embedding_size
 
-  with open(os.path.join(self.logdir, 'model_params.pbtxt'), 'w') as proto_file:
+  with open(os.path.join(FLAGS.logdir, 'model_params.pbtxt'), 'w') as proto_file:
     proto_file.write(str(model_params))
 
   with tf.variable_scope("model", initializer=initializer):
@@ -160,8 +160,8 @@ def main(_):
   tf.set_random_seed(FLAGS.random_seed)
 
   while True:
-    run()
-    run(mode='valid')
+    run('train', 'train_si284')
+    run('valid', 'test_dev93')
 
 
 if __name__ == '__main__':
