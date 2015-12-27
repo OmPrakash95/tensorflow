@@ -144,10 +144,10 @@ def run(mode, dataset):
         model = create_model(sess, ckpt, dataset, False)
       elif mode == 'valid':
         model = create_model(sess, ckpt, dataset, True)
-      model.global_epochs = run.global_epochs
 
       coord = tf.train.Coordinator()
       if mode == 'train' or mode == 'valid':
+        model.global_epochs = run.global_epochs
         threads = []
         for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
           threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
@@ -198,7 +198,6 @@ def main(_):
   tf.set_random_seed(FLAGS.random_seed)
 
   while True:
-    run('test', 'test_eval92')
     run('train', 'train_si284')
     run('valid', 'test_dev93')
 

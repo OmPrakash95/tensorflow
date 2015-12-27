@@ -36,6 +36,7 @@ class LASModel(object):
 
     self.step_total = 0
     self.step_time_total = 0
+    self.global_epochs = 0
 
     self.global_step = tf.Variable(0, trainable=False)
 
@@ -413,7 +414,7 @@ class LASModel(object):
 
     if not forward_only:
       self.saver.save(
-          sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs)
+          sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs + self.global_epochs)
 
     results_proto = speech4_pb2.ResultsProto()
     acc_proto = results_proto.acc
