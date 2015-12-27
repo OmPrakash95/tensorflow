@@ -411,8 +411,9 @@ class LASModel(object):
       self.step(sess, forward_only)
     self.epochs = self.step_total / steps_per_epoch
 
-    self.saver.save(
-        sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs)
+    if not forward_only:
+      self.saver.save(
+          sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs)
 
     results_proto = speech4_pb2.ResultsProto()
     acc_proto = results_proto.acc

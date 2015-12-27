@@ -121,7 +121,7 @@ def create_model(sess, ckpt, dataset, forward_only):
   return model
 
 
-def run(mode, dataset, epochs=1):
+def run(mode, dataset):
   device = '/gpu:%d' % FLAGS.device if FLAGS.device >= 0 else '/cpu:0'
 
   ckpt = tf.train.latest_checkpoint(FLAGS.logdir)
@@ -144,6 +144,7 @@ def run(mode, dataset, epochs=1):
         model = create_model(sess, ckpt, dataset, False)
       elif mode == 'valid':
         model = create_model(sess, ckpt, dataset, True)
+      model.global_epochs = run.global_epochs
 
       coord = tf.train.Coordinator()
       if mode == 'train' or mode == 'valid':
@@ -154,8 +155,10 @@ def run(mode, dataset, epochs=1):
         summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
         summary_writer.flush()
 
-        for epoch in range(epochs):
-          model.step_epoch(sess, forward_only=(mode != 'train'))
+        model.step_epoch(sess, forward_only=(mode != 'train'))
+
+        if mode == 'train':
+          model.global_epochs = run.global_epochs + 1
 
         summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
         summary_writer.flush()
@@ -185,6 +188,7 @@ def run(mode, dataset, epochs=1):
 
         coord.request_stop()
         coord.join(threads, stop_grace_period_secs=10)
+run.global_epochs = 0
 
 def main(_):
   if not FLAGS.logdir:
