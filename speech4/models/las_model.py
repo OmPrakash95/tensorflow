@@ -75,7 +75,7 @@ class LASModel(object):
         self.features_len = tf.placeholder(
             tf.int64, shape=(self.batch_size), name="features_len")
         self.tokens_len = tf.placeholder(
-            tf.int64, shape=(self.batch_size), name="tokens_len"))
+            tf.int64, shape=(self.batch_size), name="tokens_len")
     else:
       if 'train_si284' in self.dataset:
         self.dataset_size = 37416
