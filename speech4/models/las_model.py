@@ -46,11 +46,12 @@ class LASModel(object):
     self.create_encoder()
     self.create_decoder()
 
-    # Create the loss.
-    self.create_loss()
+    if not forward_only:
+      # Create the loss.
+      self.create_loss()
 
-    # Create the optimizer.
-    self.create_optimizer()
+      # Create the optimizer.
+      self.create_optimizer()
 
     self.saver = tf.train.Saver(tf.all_variables())
 
