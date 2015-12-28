@@ -232,6 +232,10 @@ run.global_epochs = 0
 def main(_):
   if not FLAGS.logdir:
     FLAGS.logdir = tempfile.mkdtemp()
+  try:
+    os.makedirs(FLAGS.logdir)
+  except:
+    pass
   print("logdir: %s" % FLAGS.logdir)
 
   tf.set_random_seed(FLAGS.random_seed)
