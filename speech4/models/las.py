@@ -66,14 +66,28 @@ tf.app.flags.DEFINE_integer('decoder_cell_size', 384,
 tf.app.flags.DEFINE_integer('attention_embedding_size', 128,
                             """Attention embedding size.""")
 
-tf.app.flags.DEFINE_float('max_gradient_norm', 1.0,
+# optimization_params
+tf.app.flags.DEFINE_string('optimization_params_type', '',
+                           """adam, gd""")
+
+tf.app.flags.DEFINE_float('optimization_params_adam_learning_rate', 0.001,
+                           """Adam""")
+tf.app.flags.DEFINE_float('optimization_params_adam_beta1', 0.9,
+                           """Adam""")
+tf.app.flags.DEFINE_float('optimization_params_adam_beta2', 0.999,
+                           """Adam""")
+tf.app.flags.DEFINE_float('optimization_params_adam_epsilon', 1e-08,
+                           """Adam""")
+
+tf.app.flags.DEFINE_float('optimization_params_max_gradient_norm', 1.0,
                            """Maximum gradient norm.""")
 
-tf.app.flags.DEFINE_float('learning_rate', 0.001,
-                           """Learning rate.""")
+tf.app.flags.DEFINE_float('optimization_params_gd_learning_rate', 0.1,
+                           """Gradient Descent""")
 
 tf.app.flags.DEFINE_string('logdir', '',
                            """Path to our outputs and logs.""")
+
 
 
 # DecoderParams
@@ -96,39 +110,54 @@ def create_model_params():
 
   return model_params
 
-def create_model(sess, ckpt, dataset, forward_only):
+def create_optimization_params():
+  optimization_params = speech4_pb2.OptimizationParamsProto()
+  optimization_params.type = FLAGS.optimization_params_type
+
+  if optimization_params.type == "adam":
+    optimization_params.adam.learning_rate = FLAGS.optimization_params_adam_learning_rate
+    optimization_params.adam.beta1 = FLAGS.optimization_params_adam_beta1
+    optimization_params.adam.beta2 = FLAGS.optimization_params_adam_beta2
+    optimization_params.adam.epochs = FLAGS.optimization_params_adam_epsilon
+  elif optimization_params.type == "gd":
+    optimization_params.gd.learning_rate = FLAGS.optimization_params_gd_learning_rate
+
+def create_model(sess, ckpt, dataset, forward_only, model_params=None, optimization_params=None):
   start_time = time.time()
 
-  #initializer = tf.random_normal_initializer(0.0, 0.1)
   initializer = tf.random_uniform_initializer(-0.1, 0.1)
 
-  model_params = create_model_params()
+  if not model_params:
+    model_params = create_model_params()
+  if not optimization_params:
+    optimization_params = create_optimization_params()
 
-  with open(os.path.join(FLAGS.logdir, 'model_params.pbtxt'), 'w') as proto_file:
+  with open(os.path.join(FLAGS.logdir, "model_params.pbtxt"), "w") as proto_file:
     proto_file.write(str(model_params))
+  with open(os.path.join(FLAGS.logdir, "optimization_params.pbtxt"), "w") as proto_file:
+    proto_file.write(str(optimization_params))
 
   with tf.variable_scope("model", initializer=initializer):
     model = las_model.LASModel(
         sess, dataset, FLAGS.logdir, ckpt, forward_only, FLAGS.batch_size,
-        model_params, FLAGS.max_gradient_norm, FLAGS.learning_rate)
+        model_params, optimization_params)
 
   tf.train.write_graph(sess.graph_def, FLAGS.logdir, "graph_def.pbtxt")
 
-  # tf.add_check_numerics_ops()
-  # threads = tf.train.start_queue_runners(sess=sess)
-
-  print('create_model graph time %f' % (time.time() - start_time))
+  print("create_model graph time %f" % (time.time() - start_time))
 
   return model
 
-
-def run(mode, dataset):
+def run(mode, dataset, model_params=None, optimization_params=None):
+  # Default device.
   device = '/gpu:%d' % FLAGS.device if FLAGS.device >= 0 else '/cpu:0'
 
+  # Load latest checkpoint or from flags.
   ckpt = tf.train.latest_checkpoint(FLAGS.logdir)
   if not ckpt:
     ckpt = FLAGS.ckpt
 
+  # Dataset alias.
   if dataset == 'train_si284':
     dataset = 'speech4/data/train_si284.tfrecords'
     dataset_size = 37416
@@ -139,12 +168,16 @@ def run(mode, dataset):
     dataset = 'speech4/data/test_eval92.tfrecords'
     dataset_size = 333
 
+  # Create our graph.
   with tf.device(device):
     with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
       if mode == 'train':
-        model = create_model(sess, ckpt, dataset, False)
+        model = create_model(
+            sess, ckpt, dataset, False, model_params=model_params,
+            optimization_params=optimization_params)
       elif mode == 'valid':
-        model = create_model(sess, ckpt, dataset, True)
+        model = create_model(
+            sess, ckpt, dataset, True, model_params=model_params)
 
       coord = tf.train.Coordinator()
       if mode == 'train' or mode == 'valid':

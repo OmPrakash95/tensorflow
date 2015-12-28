@@ -23,7 +23,7 @@ from tensorflow.python.platform import gfile
 
 class LASModel(object):
   def __init__(self, sess, dataset, logdir, ckpt, forward_only, batch_size,
-      model_params, max_gradient_norm, learning_rate):
+      model_params, optimization_params=None):
     self.dataset = dataset
     self.logdir = logdir
 
@@ -31,7 +31,7 @@ class LASModel(object):
 
     self.model_params = model_params
     
-    self.max_gradient_norm = max_gradient_norm
+    self.optimization_params = optimization_params
     self.learning_rate = learning_rate
 
     self.step_total = 0
@@ -361,13 +361,20 @@ class LASModel(object):
     self.updates = []
 
     grads = tf.gradients(self.losses, params)
-    if self.max_gradient_norm:
+    if self.optimization_params.max_gradient_norm:
       cgrads, norm = clip_ops.clip_by_global_norm(
-          grads, self.max_gradient_norm, name="clip_gradients")
+          grads, self.optimization_params.max_gradient_norm, name="clip_gradients")
       self.gradient_norm = norm
 
-    opt = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-    #opt = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
+    if self.optimization_params.type == "adam":
+      opt = tf.train.AdamOptimizer(
+          learning_rate=self.learning_rate, beta1=self.optimization_params.beta1, beta2=self.optimization_params.beta2, epsilon=self.optimization_params.epsilon)
+    elif self.optimization_params.type == "gd":
+      opt = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
+    else:
+      raise ValueError(
+          "Unknown optimization type: %s" % str(self.optimization_params))
+
     self.updates.append(opt.apply_gradients(
         zip(cgrads, params), global_step=self.global_step))
 

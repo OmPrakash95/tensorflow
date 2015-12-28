@@ -17,6 +17,27 @@ message ModelParamsProto {
   string input_layer = 9;
 };
 
+message AdamParamsProto {
+  float learning_rate = 1;
+  float beta1 = 2;
+  float beta2 = 3;
+  float epsilon = 4;
+};
+
+message GradientDescentParamsProto {
+  float learning_rate = 1;
+};
+
+message OptimizationParamsProto {
+  string type = 1;
+  int64 epochs = 2;
+
+  float max_gradient_norm = 3;
+
+  AdamParamsProto adam = 4;
+  GradientDescentParamsProto gd = 5;
+};
+
 message DecoderParamsProto {
   int64 beam_width = 1;
 };
