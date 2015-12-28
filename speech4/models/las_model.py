@@ -32,7 +32,6 @@ class LASModel(object):
     self.model_params = model_params
     
     self.optimization_params = optimization_params
-    self.learning_rate = learning_rate
 
     self.step_total = 0
     self.step_time_total = 0
@@ -368,9 +367,13 @@ class LASModel(object):
 
     if self.optimization_params.type == "adam":
       opt = tf.train.AdamOptimizer(
-          learning_rate=self.learning_rate, beta1=self.optimization_params.beta1, beta2=self.optimization_params.beta2, epsilon=self.optimization_params.epsilon)
+          learning_rate=self.optimization_params.adam.learning_rate,
+          beta1=self.optimization_params.adam.beta1,
+          beta2=self.optimization_params.adam.beta2,
+          epsilon=self.optimization_params.adam.epsilon)
     elif self.optimization_params.type == "gd":
-      opt = tf.train.GradientDescentOptimizer(learning_rate=self.learning_rate)
+      opt = tf.train.GradientDescentOptimizer(
+          learning_rate=self.optimization_params.gd.learning_rate)
     else:
       raise ValueError(
           "Unknown optimization type: %s" % str(self.optimization_params))

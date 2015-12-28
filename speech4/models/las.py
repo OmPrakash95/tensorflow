@@ -67,7 +67,7 @@ tf.app.flags.DEFINE_integer('attention_embedding_size', 128,
                             """Attention embedding size.""")
 
 # optimization_params
-tf.app.flags.DEFINE_string('optimization_params_type', '',
+tf.app.flags.DEFINE_string('optimization_params_type', 'adam',
                            """adam, gd""")
 
 tf.app.flags.DEFINE_float('optimization_params_adam_learning_rate', 0.001,
@@ -113,14 +113,19 @@ def create_model_params():
 def create_optimization_params():
   optimization_params = speech4_pb2.OptimizationParamsProto()
   optimization_params.type = FLAGS.optimization_params_type
+  optimization_params.epochs = 1
 
   if optimization_params.type == "adam":
     optimization_params.adam.learning_rate = FLAGS.optimization_params_adam_learning_rate
     optimization_params.adam.beta1 = FLAGS.optimization_params_adam_beta1
     optimization_params.adam.beta2 = FLAGS.optimization_params_adam_beta2
-    optimization_params.adam.epochs = FLAGS.optimization_params_adam_epsilon
+    optimization_params.adam.epsilon = FLAGS.optimization_params_adam_epsilon
   elif optimization_params.type == "gd":
     optimization_params.gd.learning_rate = FLAGS.optimization_params_gd_learning_rate
+
+  optimization_params.max_gradient_norm = FLAGS.optimization_params_max_gradient_norm
+
+  return optimization_params
 
 def create_model(sess, ckpt, dataset, forward_only, model_params=None, optimization_params=None):
   start_time = time.time()
