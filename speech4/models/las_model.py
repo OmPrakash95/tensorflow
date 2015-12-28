@@ -354,8 +354,8 @@ class LASModel(object):
     start_time = time.time()
 
     params = tf.trainable_variables()
-    for idx, param in enumerate(params):
-      print('param %d: %s %s' % (idx, param.name, str(param.get_shape())))
+    #for idx, param in enumerate(params):
+    #  print('param %d: %s %s' % (idx, param.name, str(param.get_shape())))
 
     self.updates = []
 
