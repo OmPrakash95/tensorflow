@@ -214,6 +214,7 @@ class LASModel(object):
       encoder_embedding = nn_ops.conv2d(encoder_states, k, [1, 1, 1, 1], "SAME")
 
       self.decoder_states = []
+      self.prob = []
       states = []
       attentions = []
       for decoder_time_idx in range(len(self.tokens) - 1):
@@ -232,6 +233,7 @@ class LASModel(object):
               vs.get_variable("Matrix", [outputs[-1].get_shape()[1].value, self.model_params.vocab_size]),
               vs.get_variable("Bias", [self.model_params.vocab_size]), name="Logit_%d" % decoder_time_idx)
           self.decoder_states.append(logit)
+          self.prob.append(tf.nn.softmax(logit))
 
 
   def create_decoder_cell(
@@ -252,10 +254,9 @@ class LASModel(object):
       emb = embedding_ops.embedding_lookup(
           embedding, self.tokens[decoder_time_idx])
     else:
-      emb = embedding_ops.embedding_lookup(
-          embedding, gru_ops.token_sample(
-              self.tokens[decoder_time_idx], self.prob[-1],
-              sample_prob=self.optimization_params.sample_prob))
+      emb = embedding_ops.embedding_lookup(embedding, gru_ops.token_sample(
+          self.tokens[decoder_time_idx], self.prob[-1],
+          sample_prob=self.optimization_params.sample_prob))
     emb.set_shape([batch_size, self.model_params.embedding_size])
 
     def create_attention(decoder_state):
@@ -343,10 +344,9 @@ class LASModel(object):
     self.losses = []
 
     self.logits = self.decoder_states
-    self.prob = []
     self.logprob = []
-    self.prob.append(tf.nn.softmax(logit))
-    self.logprob.append(tf.log(self.prob[-1]))
+    for prob in self.prob:
+      self.logprob.append(tf.log(prob))
 
     targets = self.tokens[1:]
     weights = self.tokens_weights[1:]
