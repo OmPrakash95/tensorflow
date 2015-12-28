@@ -156,7 +156,7 @@ class LASModel(object):
     if len(self.encoder_states) > 1:
       attention_states = [
           array_ops.reshape(
-              e, [-1, 1, self.model_params.encoder_cell_size], name='reshape_%d' % idx)
+              e, [self.batch_size, 1, self.model_params.encoder_cell_size], name='reshape_%d' % idx)
           for idx, e in enumerate(self.encoder_states[-1][0])]
       attention_states = array_ops.concat(1, attention_states)
 
@@ -208,7 +208,7 @@ class LASModel(object):
       attn_size = attention_states.get_shape()[2].value
 
       encoder_states = array_ops.reshape(
-          attention_states, [-1, attn_length, 1, attn_size])
+          attention_states, [batch_size, attn_length, 1, attn_size])
       with vs.variable_scope("encoder_embedding"):
         k = vs.get_variable("W", [1, 1, attn_size, self.model_params.attention_embedding_size])
       encoder_embedding = nn_ops.conv2d(encoder_states, k, [1, 1, 1, 1], "SAME")

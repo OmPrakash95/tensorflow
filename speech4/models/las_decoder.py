@@ -47,7 +47,7 @@ class Decoder(object):
     with tf.variable_scope("model"):
       self.model = las_model.LASModel(
           sess, dataset, logdir, ckpt, True, self.decoder_params.beam_width,
-          self.model_params, 0.0, 0.0)
+          self.model_params)
 
     tf.train.string_input_producer([dataset])
     reader = tf.TFRecordReader()
@@ -57,7 +57,8 @@ class Decoder(object):
         [serialized], batch_size=1, num_threads=2, capacity=2)
 
     self.features, self.features_len, _, self.text, _, _, _, self.uttid = s4_parse_utterance(
-        serialized, features_len_max=self.model_params.features_len_max, tokens_len_max=self.model_params.tokens_len_max + 1)
+        serialized, features_len_max=self.model_params.features_len_max,
+        tokens_len_max=self.model_params.tokens_len_max + 1)
 
   # We read one utterance and return it in a dict.
   def read_utterance(self, sess):
@@ -86,7 +87,7 @@ class Decoder(object):
     hyp = utterance.Hypothesis()
     hyp.text = ""
     hyp.state_prev = self.create_decoder_states_zero()
-    hyp.state_prev = self.run_decode_step(sess, utt, hyp.state_prev, [0])['decoder_states_stack']
+    hyp.state_prev = self.run_decoder_step(sess, utt, hyp.state_prev, [0])['decoder_states_stack']
     hyp.feed_token = self.token_model.proto.token_sos
 
     # Add the empty hypothesis to the utterance.
@@ -118,29 +119,30 @@ class Decoder(object):
 
       hypothesis_partial_next = sorted(hypothesis_partial_next, key=lambda hyp: hyp.logprob, reverse=True)
       hypothesis_partial_next = hypothesis_partial_next[:self.decoder_params.beam_width]
+      if hypothesis_partial_next:
+        print hypothesis_partial_next[0].text
 
       utt.hypothesis_partial = hypothesis_partial_next
-    utt.hypothesis_complete = sorted(utt.hypothesis_complete, key=lambda hyp: hyp.logprob, reverse=True)
+    utt.hypothesis_complete = sorted(utt.hypothesis_complete, key=lambda hyp: hyp.logprob / len(hyp.text), reverse=True)
     print utt.text
     print utt.hypothesis_complete[0].text
     print utt.hypothesis_complete[0].logprob
 
   def batch_inputs(self, x):
-    # return np.asarray(x + [np.zeros(x[0].shape, dtype=x[0].dtype)] * (self.model.batch_size - len(x)))
-    return np.asarray(x)
+    return np.asarray(x + [np.zeros(x[0].shape, dtype=x[0].dtype)] * (self.model.batch_size - len(x)))
+    #return np.asarray(x)
 
   def batch_hyps(self, utt, hyps):
     # Encoder states.
     feed_dict = {}
     for idx in range(len(self.model.encoder_states[-1][0])):
-      feed_dict[self.model.encoder_states[-1][0][idx]] = self.batch_inputs(
-          [utt.encoder_states[idx]] * self.model.batch_size)
+      feed_dict[self.model.encoder_states[-1][0][idx]] = utt.encoder_states[idx]
     feed_dict[self.model.features_len] = np.array(
-        utt.features_len * self.model.batch_size, dtype=np.int64)
+        np.tile(utt.features_len, self.model.batch_size), dtype=np.int64)
     # Tokens.
     for idx in range(len(self.model.tokens)):
       feed_dict[self.model.tokens[idx]] = np.array(
-          [hyp.feed_token for hyp in hyps], dtype=np.int32)
+          [hyp.feed_token for hyp in hyps] + [0] * (self.model.batch_size - len(hyps)), dtype=np.int32)
       feed_dict[self.model.tokens_weights[idx]] = np.array(
           [1.0] * self.model.batch_size, dtype=np.float32)
     feed_dict[self.model.tokens_len] = np.array(
@@ -161,7 +163,7 @@ class Decoder(object):
       feed_dict[self.model.features[idx]] = self.batch_inputs(
           [utt.features[idx][0]])
     feed_dict[self.model.features_len] = np.array(
-        utt.features_len * self.model.batch_size, dtype=np.int64)
+        np.tile(utt.features_len, self.model.batch_size), dtype=np.int64)
     for idx in range(len(self.model.tokens)):
       feed_dict[self.model.tokens[idx]] = np.array(
           [self.token_model.proto.token_sos] * self.model.batch_size, dtype=np.int32)
@@ -180,15 +182,15 @@ class Decoder(object):
       initial_state.append(np.zeros(shape))
     return initial_state
 
-  def run_decode_step(self, sess, utt, decoder_states_initial, tokens):
+  def run_decoder_step(self, sess, utt, decoder_states_initial, tokens):
     assert hasattr(utt, 'encoder_states')
-    assert len(tokens) == self.model.batch_size
+    tokens = tokens + [0] * (self.model.batch_size - len(tokens))
 
     feed_dict = {}
     for idx in range(len(self.model.encoder_states[-1][0])):
       feed_dict[self.model.encoder_states[-1][0][idx]] = utt.encoder_states[idx]
     feed_dict[self.model.features_len] = np.array(
-        utt.features_len, dtype=np.int64)
+        np.tile(utt.features_len, self.model.batch_size), dtype=np.int64)
     for idx in range(len(self.model.tokens)):
       feed_dict[self.model.tokens[idx]] = np.array(
           [self.token_model.proto.token_sos] * self.model.batch_size, dtype=np.int32)
@@ -197,7 +199,11 @@ class Decoder(object):
     feed_dict[self.model.tokens_len] = np.array(
         [self.model_params.tokens_len_max] * self.model.batch_size, dtype=np.int64)
     for idx in range(len(self.model.decoder_states_initial)):
-      feed_dict[self.model.decoder_states_initial[idx]] = decoder_states_initial[idx]
+      if decoder_states_initial[idx].shape[0] == 1:
+        feed_dict[self.model.decoder_states_initial[idx]] = np.tile(
+            decoder_states_initial[idx], [self.model.batch_size, 1])
+      else:
+        feed_dict[self.model.decoder_states_initial[idx]] = decoder_states_initial[idx]
 
     #decoder_states = sess.run(self.model.decoder_states_stack, feed_dict)
     targets = {}
