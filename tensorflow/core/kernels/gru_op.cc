@@ -6,9 +6,13 @@
 
 #include "tensorflow/core/kernels/gru_op.h"
 
+#include <random>
+
 #include "tensorflow/core/framework/numeric_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
+#include "tensorflow/core/lib/random/random_distributions.h"
+#include "tensorflow/core/util/guarded_philox_random.h"
 
 #if GOOGLE_CUDA
 #include "tensorflow/stream_executor/stream.h"
@@ -473,6 +477,65 @@ class AttentionMaskOp : public OpKernel {
 };
 
 template <typename Device>
+class TokenSampleOp : public OpKernel {
+ public:
+  explicit TokenSampleOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, generator_.Init(ctx));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("sample_prob", &sample_prob_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    INPUT_TENSOR(ground_truth);
+    INPUT_TENSOR(token_distribution);
+
+    OUTPUT_TENSOR(token, ground_truth->shape());
+
+    const int64 batch_size = token->dim_size(0);
+    const int64 vocab_size = token_distribution->dim_size(1);
+
+    typedef random::UniformDistribution<random::PhiloxRandom, float>
+        Distribution;
+    Distribution dist;
+
+    // First determine whether we want to sample or not sample from our distribution.
+    std::vector<float> sample_prab(batch_size);
+    std::vector<float> sample_token_prob(batch_size);
+
+    // Sample our random numbers.
+    const int kGroupSize = Distribution::kResultElementCount;
+    auto local_generator = generator_.ReserveSamples32(batch_size * 2);
+    for (int64 i = 0; i < batch_size; i += kGroupSize) {
+      auto samples = dist(&local_generator);
+      std::copy(&samples[0], &samples[0] + kGroupSize, &sample_prab[i]);
+      samples = dist(&local_generator);
+      std::copy(&samples[0], &samples[0] + kGroupSize, &sample_token_prob[i]);
+    }
+
+    token->vec<float>().device(ctx->eigen_device<Device>()) =
+        ground_truth->vec<float>();
+
+    if (sample_prob_ > 0.0f) {
+      for (int64 b = 0; b < batch_size; ++b) {
+        if (sample_prab[b] < sample_prob_) {
+          float prob = 0.0f;
+          int64 v = 0;
+          for (; v < vocab_size; ++v) {
+            if (prob > sample_token_prob[b]) break;
+            prob += token_distribution->matrix<float>()(b, v);
+          }
+
+          token->vec<float>()(b) = v - 1;
+        }
+      }
+    }
+  }
+
+ private:
+  float sample_prob_;
+  GuardedPhiloxRandom generator_;
+};
+
+template <typename Device>
 class GruCellOp : public OpKernel {
  public:
   explicit GruCellOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -893,6 +956,10 @@ class GruFusedOp : public OpKernel {
 REGISTER_KERNEL_BUILDER(Name("AttentionMask")
                              .Device(DEVICE_CPU),
                         AttentionMaskOp<CPUDevice>);
+
+REGISTER_KERNEL_BUILDER(Name("TokenSample")
+                             .Device(DEVICE_CPU),
+                        TokenSampleOp<CPUDevice>);
 
 #if GOOGLE_CUDA
 REGISTER_KERNEL_BUILDER(Name("AttentionMask")

@@ -248,8 +248,14 @@ class LASModel(object):
           "embedding", [self.model_params.vocab_size, self.model_params.embedding_size],
           initializer=tf.random_uniform_initializer(-sqrt3, sqrt3))
 
-    emb = embedding_ops.embedding_lookup(
-        embedding, self.tokens[decoder_time_idx])
+    if decoder_time_idx == 0 or self.model_params.input_layer == 'placeholder':
+      emb = embedding_ops.embedding_lookup(
+          embedding, self.tokens[decoder_time_idx])
+    else:
+      emb = embedding_ops.embedding_lookup(
+          embedding, gru_ops.token_sample(
+              self.tokens[decoder_time_idx], self.prob[-1],
+              sample_prob=self.optimization_params.sample_prob))
     emb.set_shape([batch_size, self.model_params.embedding_size])
 
     def create_attention(decoder_state):
@@ -337,9 +343,10 @@ class LASModel(object):
     self.losses = []
 
     self.logits = self.decoder_states
+    self.prob = []
     self.logprob = []
-    for logit in self.logits:
-      self.logprob.append(tf.log(tf.nn.softmax(logit)))
+    self.prob.append(tf.nn.softmax(logit))
+    self.logprob.append(tf.log(self.prob[-1]))
 
     targets = self.tokens[1:]
     weights = self.tokens_weights[1:]
