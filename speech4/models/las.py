@@ -61,7 +61,7 @@ tf.app.flags.DEFINE_integer('embedding_size', 32,
 
 tf.app.flags.DEFINE_integer('encoder_cell_size', 384,
                             """encoder cell size.""")
-tf.app.flags.DEFINE_integer('decoder_cell_size', 384,
+tf.app.flags.DEFINE_integer('decoder_cell_size', 256,
                             """Decoder cell size.""")
 tf.app.flags.DEFINE_integer('attention_embedding_size', 128,
                             """Attention embedding size.""")

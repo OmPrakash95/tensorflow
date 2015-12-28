@@ -36,6 +36,8 @@ message OptimizationParamsProto {
 
   AdamParamsProto adam = 4;
   GradientDescentParamsProto gd = 5;
+
+  float sample_prob = 100;
 };
 
 message DecoderParamsProto {

@@ -13,6 +13,15 @@ REGISTER_OP("AttentionMask")
 AttentionMask
 )doc");
 
+REGISTER_OP("TokenSample")
+    .Attr("sample_prob: float")
+    .Input("ground_truth: int32")
+    .Input("token_distribution: float")
+    .Output("token: int32")
+    .Doc(R"doc(
+AttentionMask
+)doc");
+
 REGISTER_OP("GruCell")
     .Attr("cell_size: int")
     .Attr("time_idx: int = -1")
