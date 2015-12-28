@@ -100,7 +100,7 @@ class LASModel(object):
       else:
         serialized = tf.train.shuffle_batch(
             [serialized], batch_size=self.batch_size, num_threads=2,
-            capacity=self.batch_size * 4 + 512, min_after_dequeue=512, seed=1000)
+            capacity=self.batch_size * 4 + 512, min_after_dequeue=512, seed=self.global_epochs)
 
       # Parse the batched of serialized strings into the relevant utterance features.
       self.features, self.features_len, _, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
@@ -149,6 +149,8 @@ class LASModel(object):
     start_time = time.time()
 
     self.decoder_states = []
+    self.decoder_states_initial = []
+    self.decoder_states_stack = []
     self.decoder_states.append(self.tokens[:-1])
 
     attention_states = []
@@ -286,6 +288,11 @@ class LASModel(object):
       # If empty, create new state.
       if len(states):
         state = states[stack_idx]
+      elif self.model_params.input_layer == 'placeholder':
+        # During decoding, this is given to us.
+        state = tf.placeholder(
+            tf.float32, shape=(batch_size, decoder_cell_size))
+        self.decoder_states_initial.append(state)
       else:
         state = array_ops.zeros([batch_size, decoder_cell_size], tf.float32)
 
@@ -305,6 +312,7 @@ class LASModel(object):
           decoder_cell_size, self.tokens_len, state, x, time_idx=decoder_time_idx)
       h.set_shape([batch_size, decoder_cell_size])
 
+      self.decoder_states_stack.append(h)
       new_states.append(h)
       if attention:
         c = create_attention(h)
@@ -330,6 +338,10 @@ class LASModel(object):
     self.losses = []
 
     self.logits = self.decoder_states
+    self.logprob = []
+    for logit in self.logits:
+      self.logprob.append(tf.log(tf.nn.softmax(logit)))
+
     targets = self.tokens[1:]
     weights = self.tokens_weights[1:]
 
@@ -362,14 +374,14 @@ class LASModel(object):
     print('create_optimizer graph time %f' % (time.time() - start_time))
 
 
-  def run_graph(self, sess, targets):
+  def run_graph(self, sess, targets, feed_dict=None):
     fetches = []
     for name, target in targets.iteritems():
       if isinstance(target, (list, tuple)):
         fetches.extend(target)
       else:
         fetches.append(target)
-    r = sess.run(fetches)
+    r = sess.run(fetches, feed_dict)
 
     f = {}
     start = 0

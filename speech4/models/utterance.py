@@ -1,3 +1,42 @@
+###############################################################################
+# Copyright 2015 William Chan <williamchan@cmu.edu>.
+###############################################################################
+
+
+import numpy as np
+
+
+class Hypothesis(object):
+  def __init__(self):
+    self.text = ""
+    self.logprob = 0.0
+    self.state_prev = None
+    self.state_next = None
+    self.feed_token = None
+    self.logprobs = None
+
+  def expand(self, token_model, beam_width):
+    completed = Hypothesis()
+    completed.text = self.text
+    completed.logprob = self.logprob + self.logprobs[token_model.proto.token_eos]
+
+    candidates = zip(range(self.logprobs.size), self.logprobs.tolist())
+    candidates = sorted(candidates, key=lambda x: x[1], reverse=True)
+    candidates = candidates[:beam_width]
+
+    partials = []
+    for token, logprob in candidates:
+      if token != token_model.proto.token_eos:
+        partial = Hypothesis()
+        partial.text = self.text + token_model.token_to_string[token]
+        partial.logprob = self.logprob + logprob
+        partial.state_prev = self.state_next
+        partial.feed_token = token
+
+        partials.append(partial)
+
+    return partials, completed
+
 class Utterance(object):
   def __init__(self):
     self.features = None
@@ -8,7 +47,5 @@ class Utterance(object):
     self.encoder_states = []
     self.feed_dict = {}
 
-  def build_feed_dict(self):
-    for idx, feature in enumerate(self.features):
-      self.feed_dict['features_%d' % idx] = feature
-    self.feed_dict['features_len'] = self.features_len
+    self.hypothesis_partial = []
+    self.hypothesis_complete = []
