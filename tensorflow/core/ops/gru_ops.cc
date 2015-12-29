@@ -15,6 +15,7 @@ AttentionMask
 
 REGISTER_OP("TokenSample")
     .Attr("sample_prob: float")
+    .Attr("seed: int = 0")
     .Input("ground_truth: int32")
     .Input("token_distribution: float")
     .Output("token: int32")

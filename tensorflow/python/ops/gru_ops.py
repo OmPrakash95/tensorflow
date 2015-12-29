@@ -29,8 +29,9 @@ def attention_mask(attention_states_sequence_len, input, name=None):
       attention_states_sequence_len=attention_states_sequence_len, input=input,
       fill_value=-np.finfo(np.float32).max, name=name)
 
-def token_sample(ground_truth, token_distribution, sample_prob, name=None):
-  return gen_gru_ops.token_sample(ground_truth, token_distribution, sample_prob, name)
+def token_sample(ground_truth, token_distribution, sample_prob, seed=0, name=None):
+  return gen_gru_ops.token_sample(
+      ground_truth, token_distribution, sample_prob, seed=seed, name=name)
 
 @ops.RegisterShape("TokenSample")
 def _TokenSampleShape(op):

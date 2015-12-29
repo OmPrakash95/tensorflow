@@ -261,7 +261,8 @@ class LASModel(object):
     else:
       emb = embedding_ops.embedding_lookup(embedding, gru_ops.token_sample(
           self.tokens[decoder_time_idx], self.prob[-1],
-          sample_prob=self.optimization_params.sample_prob))
+          sample_prob=self.optimization_params.sample_prob,
+          seed=len(self.prob)))
     emb.set_shape([batch_size, self.model_params.embedding_size])
 
     def create_attention(decoder_state):
