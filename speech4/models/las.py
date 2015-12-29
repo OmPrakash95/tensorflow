@@ -85,6 +85,9 @@ tf.app.flags.DEFINE_float('optimization_params_max_gradient_norm', 1.0,
 tf.app.flags.DEFINE_float('optimization_params_gd_learning_rate', 0.1,
                            """Gradient Descent""")
 
+tf.app.flags.DEFINE_float('optimization_params_sample_prob', 0.1,
+                           """Sample probability.""")
+
 tf.app.flags.DEFINE_string('logdir', '',
                            """Path to our outputs and logs.""")
 
@@ -124,6 +127,7 @@ def create_optimization_params():
     optimization_params.gd.learning_rate = FLAGS.optimization_params_gd_learning_rate
 
   optimization_params.max_gradient_norm = FLAGS.optimization_params_max_gradient_norm
+  optimization_params.sample_prob = FLAGS.optimization_params_sample_prob
 
   return optimization_params
 
@@ -241,7 +245,6 @@ def main(_):
   tf.set_random_seed(FLAGS.random_seed)
 
   while True:
-    run('test', 'train_si284')
     run('train', 'train_si284')
     run('valid', 'test_dev93')
 
