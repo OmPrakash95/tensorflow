@@ -87,7 +87,8 @@ class Decoder(object):
     hyp = utterance.Hypothesis()
     hyp.text = ""
     hyp.state_prev = self.create_decoder_states_zero()
-    hyp.state_prev = self.run_decoder_step(sess, utt, hyp.state_prev, [0])['decoder_states_stack']
+    hyp.state_prev = self.run_decoder_step(
+        sess, utt, hyp.state_prev, [0])['decoder_states_stack']
     hyp.feed_token = self.token_model.proto.token_sos
 
     # Add the empty hypothesis to the utterance.
@@ -112,18 +113,21 @@ class Decoder(object):
         for idx in range(len(hyps)):
           hyps[idx].state_next = [state[idx:idx+1,:] for state in fetches['decoder_states_stack']]
           hyps[idx].logprobs = [logit[idx,:] for logit in fetches['logprob']][0]
-          partials, completed = hyps[idx].expand(self.token_model, self.decoder_params.beam_width)
+          partials, completed = hyps[idx].expand(
+              self.token_model, self.decoder_params.beam_width)
 
           hypothesis_partial_next.extend(partials)
           utt.hypothesis_complete.append(completed)
 
-      hypothesis_partial_next = sorted(hypothesis_partial_next, key=lambda hyp: hyp.logprob, reverse=True)
+      hypothesis_partial_next = sorted(
+          hypothesis_partial_next, key=lambda hyp: hyp.logprob, reverse=True)
       hypothesis_partial_next = hypothesis_partial_next[:self.decoder_params.beam_width]
       if hypothesis_partial_next:
         print hypothesis_partial_next[0].text
 
       utt.hypothesis_partial = hypothesis_partial_next
-    utt.hypothesis_complete = sorted(utt.hypothesis_complete, key=lambda hyp: hyp.logprob / len(hyp.text), reverse=True)
+    utt.hypothesis_complete = sorted(
+        utt.hypothesis_complete, key=lambda hyp: hyp.logprob / len(hyp.text), reverse=True)
     print utt.text
     print utt.hypothesis_complete[0].text
     print utt.hypothesis_complete[0].logprob
@@ -146,7 +150,8 @@ class Decoder(object):
       feed_dict[self.model.tokens_weights[idx]] = np.array(
           [1.0] * self.model.batch_size, dtype=np.float32)
     feed_dict[self.model.tokens_len] = np.array(
-        [self.model_params.tokens_len_max] * self.model.batch_size, dtype=np.int64)
+        [self.model_params.tokens_len_max] * self.model.batch_size,
+        dtype=np.int64)
     # Initial state.
     for idx in range(len(self.model.decoder_states_initial)):
       feed_dict[self.model.decoder_states_initial[idx]] = self.batch_inputs(
@@ -166,11 +171,13 @@ class Decoder(object):
         np.tile(utt.features_len, self.model.batch_size), dtype=np.int64)
     for idx in range(len(self.model.tokens)):
       feed_dict[self.model.tokens[idx]] = np.array(
-          [self.token_model.proto.token_sos] * self.model.batch_size, dtype=np.int32)
+          [self.token_model.proto.token_sos] * self.model.batch_size,
+          dtype=np.int32)
       feed_dict[self.model.tokens_weights[idx]] = np.array(
           [0.0] * self.model.batch_size, dtype=np.float32)
     feed_dict[self.model.tokens_len] = np.array(
-        [self.model_params.tokens_len_max] * self.model.batch_size, dtype=np.int64)
+        [self.model_params.tokens_len_max] * self.model.batch_size,
+        dtype=np.int64)
 
     utt.encoder_states = sess.run(self.model.encoder_states[-1][0], feed_dict)
 
@@ -193,11 +200,13 @@ class Decoder(object):
         np.tile(utt.features_len, self.model.batch_size), dtype=np.int64)
     for idx in range(len(self.model.tokens)):
       feed_dict[self.model.tokens[idx]] = np.array(
-          [self.token_model.proto.token_sos] * self.model.batch_size, dtype=np.int32)
+          [self.token_model.proto.token_sos] * self.model.batch_size,
+          dtype=np.int32)
       feed_dict[self.model.tokens_weights[idx]] = np.array(
           tokens, dtype=np.float32)
     feed_dict[self.model.tokens_len] = np.array(
-        [self.model_params.tokens_len_max] * self.model.batch_size, dtype=np.int64)
+        [self.model_params.tokens_len_max] * self.model.batch_size,
+        dtype=np.int64)
     for idx in range(len(self.model.decoder_states_initial)):
       if decoder_states_initial[idx].shape[0] == 1:
         feed_dict[self.model.decoder_states_initial[idx]] = np.tile(

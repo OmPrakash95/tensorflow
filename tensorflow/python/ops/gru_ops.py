@@ -32,10 +32,11 @@ def attention_mask(attention_states_sequence_len, input, name=None):
 def token_sample(ground_truth, token_distribution, sample_prob, name=None):
   return gen_gru_ops.token_sample(ground_truth, token_distribution, sample_prob, name)
 
-@ops.RegisterShape("TokenSample"):
+@ops.RegisterShape("TokenSample")
+def _TokenSampleShape(op):
   return [op.inputs[0].get_shape()]
 
-@ops.NoGradient("TokenSample")
+ops.NoGradient("TokenSample")
 
 @ops.RegisterShape("AttentionMask")
 def _AttentionMaskShape(op):

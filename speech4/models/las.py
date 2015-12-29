@@ -241,6 +241,7 @@ def main(_):
   tf.set_random_seed(FLAGS.random_seed)
 
   while True:
+    run('test', 'train_si284')
     run('train', 'train_si284')
     run('valid', 'test_dev93')
 

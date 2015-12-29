@@ -103,7 +103,8 @@ class LASModel(object):
 
       # Parse the batched of serialized strings into the relevant utterance features.
       self.features, self.features_len, _, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
-          serialized, features_len_max=self.model_params.features_len_max, tokens_len_max=self.model_params.tokens_len_max + 1)
+          serialized, features_len_max=self.model_params.features_len_max,
+          tokens_len_max=self.model_params.tokens_len_max + 1)
 
     # Add the shape to the features.
     for feature in self.features:
@@ -125,7 +126,8 @@ class LASModel(object):
 
   def create_encoder_layer(self, subsample_input=1, use_monolithic=True):
     with vs.variable_scope('encoder_layer_%d' % (len(self.encoder_states))):
-      sequence_len_factor = tf.constant(subsample_input, shape=[self.batch_size], dtype=tf.int64)
+      sequence_len_factor = tf.constant(
+          subsample_input, shape=[self.batch_size], dtype=tf.int64)
       sequence_len = tf.div(self.encoder_states[-1][1], sequence_len_factor)
       if use_monolithic:
         # xs = self.encoder_states[-1][0]
@@ -134,7 +136,8 @@ class LASModel(object):
         #   xs = [array_ops.concat(1, x) for x in xs]
         xs = self.encoder_states[-1][0][0::subsample_input]
         self.encoder_states.append([gru_ops.gru(
-            cell_size=self.model_params.encoder_cell_size, sequence_len=sequence_len, xs=xs)[-1], sequence_len])
+            cell_size=self.model_params.encoder_cell_size,
+            sequence_len=sequence_len, xs=xs)[-1], sequence_len])
       else:
         self.encoder_states.append([rnn.rnn(
             rnn_cell.GRUCell(self.model_params.encoder_cell_size),
@@ -142,7 +145,8 @@ class LASModel(object):
             sequence_length=sequence_len)[0], sequence_len])
 
       for encoder_state in self.encoder_states[-1][0]:
-        encoder_state.set_shape([self.batch_size, self.model_params.encoder_cell_size])
+        encoder_state.set_shape([
+            self.batch_size, self.model_params.encoder_cell_size])
 
   def create_decoder(self):
     start_time = time.time()
@@ -233,7 +237,7 @@ class LASModel(object):
               vs.get_variable("Matrix", [outputs[-1].get_shape()[1].value, self.model_params.vocab_size]),
               vs.get_variable("Bias", [self.model_params.vocab_size]), name="Logit_%d" % decoder_time_idx)
           self.decoder_states.append(logit)
-          self.prob.append(tf.nn.softmax(logit))
+          self.prob.append(tf.nn.softmax(logit, name="Softmax_%d" % decoder_time_idx))
 
 
   def create_decoder_cell(
@@ -351,7 +355,8 @@ class LASModel(object):
     targets = self.tokens[1:]
     weights = self.tokens_weights[1:]
 
-    log_perps = seq2seq.sequence_loss(self.logits, targets, weights, self.model_params.vocab_size)
+    log_perps = seq2seq.sequence_loss(
+        self.logits, targets, weights, self.model_params.vocab_size)
     self.losses.append(log_perps)
 
     print('create_loss graph time %f' % (time.time() - start_time))
