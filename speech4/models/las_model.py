@@ -217,6 +217,7 @@ class LASModel(object):
         k = vs.get_variable("W", [1, 1, attn_size, self.model_params.attention_embedding_size])
       encoder_embedding = nn_ops.conv2d(encoder_states, k, [1, 1, 1, 1], "SAME")
 
+      self.alignments = []
       self.decoder_states = []
       self.prob = []
       states = []
@@ -280,7 +281,8 @@ class LASModel(object):
         e = gru_ops.attention_mask(self.encoder_states[-1][1], e)
 
         # Alignment.
-        a = nn_ops.softmax(e)
+        a = nn_ops.softmax(e, name="alignment_%d" % (decoder_time_idx))
+        self.alignments.append(a)
 
         # Context.
         c = math_ops.reduce_sum(
