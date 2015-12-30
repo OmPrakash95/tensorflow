@@ -12,6 +12,8 @@ class Hypothesis(object):
     self.logprob = 0.0
     self.state_prev = None
     self.state_next = None
+    self.attention_prev = None
+    self.attention_next = None
     self.logprobs = None
 
   def feed_token(self, token_model):
@@ -36,6 +38,7 @@ class Hypothesis(object):
           partial.text = self.text + token_model.token_to_string[token]
           partial.logprob = self.logprob + logprob
           partial.state_prev = self.state_next
+          partial.attention_prev = self.attention_next
 
           partials.append(partial)
 
