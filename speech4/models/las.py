@@ -66,6 +66,9 @@ tf.app.flags.DEFINE_integer('decoder_cell_size', 256,
 tf.app.flags.DEFINE_integer('attention_embedding_size', 128,
                             """Attention embedding size.""")
 
+tf.app.flags.DEFINE_string("model_params", "", """model_params proto""")
+tf.app.flags.DEFINE_string("optimization_params", "", """model_params proto""")
+
 # optimization_params
 tf.app.flags.DEFINE_string('optimization_params_type', 'adam',
                            """adam, gd""")
@@ -111,6 +114,10 @@ def create_model_params():
   model_params.decoder_cell_size = FLAGS.decoder_cell_size
   model_params.attention_embedding_size = FLAGS.attention_embedding_size
 
+  if os.path.isfile(FLAGS.model_params):
+    with open(FLAGS.model_params, "r") as proto_file:
+      google.protobuf.text_format.Merge(proto_file.read(), model_params)
+
   return model_params
 
 def create_optimization_params():
@@ -128,6 +135,10 @@ def create_optimization_params():
 
   optimization_params.max_gradient_norm = FLAGS.optimization_params_max_gradient_norm
   optimization_params.sample_prob = FLAGS.optimization_params_sample_prob
+
+  if os.path.isfile(FLAGS.optimization_params):
+    with open(FLAGS.optimization_params, "r") as proto_file:
+      google.protobuf.text_format.Merge(proto_file.read(), optimization_params)
 
   return optimization_params
 
