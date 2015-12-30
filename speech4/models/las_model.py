@@ -53,6 +53,10 @@ class LASModel(object):
       # Create the optimizer.
       self.create_optimizer()
 
+    variables = tf.all_variables()
+    if optimization_params:
+      if optimization_params.adam.reset:
+        variables = [v for v in variables if 'Adam' not in v]
     self.saver = tf.train.Saver(tf.all_variables())
 
     if gfile.Exists(ckpt):

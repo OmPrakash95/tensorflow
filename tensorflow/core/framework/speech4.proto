@@ -22,6 +22,8 @@ message AdamParamsProto {
   float beta1 = 2;
   float beta2 = 3;
   float epsilon = 4;
+
+  bool reset = 5;
 };
 
 message GradientDescentParamsProto {

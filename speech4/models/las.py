@@ -120,7 +120,7 @@ def create_model_params():
 
   return model_params
 
-def create_optimization_params():
+def create_optimization_params(global_epochs):
   optimization_params = speech4_pb2.OptimizationParamsProto()
   optimization_params.type = FLAGS.optimization_params_type
   optimization_params.epochs = 1
@@ -130,11 +130,14 @@ def create_optimization_params():
     optimization_params.adam.beta1 = FLAGS.optimization_params_adam_beta1
     optimization_params.adam.beta2 = FLAGS.optimization_params_adam_beta2
     optimization_params.adam.epsilon = FLAGS.optimization_params_adam_epsilon
+    if global_epochs == 1:
+      optimization_params.adam.reset = True
   elif optimization_params.type == "gd":
     optimization_params.gd.learning_rate = FLAGS.optimization_params_gd_learning_rate
 
   optimization_params.max_gradient_norm = FLAGS.optimization_params_max_gradient_norm
-  optimization_params.sample_prob = FLAGS.optimization_params_sample_prob
+  if global_epochs > 0:
+    optimization_params.sample_prob = FLAGS.optimization_params_sample_prob
 
   if os.path.isfile(FLAGS.optimization_params):
     with open(FLAGS.optimization_params, "r") as proto_file:
@@ -142,7 +145,9 @@ def create_optimization_params():
 
   return optimization_params
 
-def create_model(sess, ckpt, dataset, forward_only, model_params=None, optimization_params=None):
+def create_model(
+    sess, ckpt, dataset, forward_only, global_epochs, model_params=None,
+    optimization_params=None):
   start_time = time.time()
 
   initializer = tf.random_uniform_initializer(-0.1, 0.1)
@@ -150,7 +155,7 @@ def create_model(sess, ckpt, dataset, forward_only, model_params=None, optimizat
   if not model_params:
     model_params = create_model_params()
   if not optimization_params:
-    optimization_params = create_optimization_params()
+    optimization_params = create_optimization_params(global_epochs)
 
   with open(os.path.join(FLAGS.logdir, "model_params.pbtxt"), "w") as proto_file:
     proto_file.write(str(model_params))
@@ -168,7 +173,7 @@ def create_model(sess, ckpt, dataset, forward_only, model_params=None, optimizat
 
   return model
 
-def run(mode, dataset, model_params=None, optimization_params=None):
+def run(mode, dataset, global_epochs, model_params=None, optimization_params=None):
   # Default device.
   device = '/gpu:%d' % FLAGS.device if FLAGS.device >= 0 else '/cpu:0'
 
@@ -193,15 +198,16 @@ def run(mode, dataset, model_params=None, optimization_params=None):
     with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
       if mode == 'train':
         model = create_model(
-            sess, ckpt, dataset, False, model_params=model_params,
-            optimization_params=optimization_params)
+            sess, ckpt, dataset, False, global_epochs=global_epochs,
+            model_params=model_params, optimization_params=optimization_params)
       elif mode == 'valid':
         model = create_model(
-            sess, ckpt, dataset, True, model_params=model_params)
+            sess, ckpt, dataset, True, global_epochs=global_epochs,
+            model_params=model_params, optimization_params=optimization_params)
 
       coord = tf.train.Coordinator()
       if mode == 'train' or mode == 'valid':
-        model.global_epochs = run.global_epochs
+        model.global_epochs = global_epochs
         threads = []
         for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
           threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
@@ -210,9 +216,6 @@ def run(mode, dataset, model_params=None, optimization_params=None):
         summary_writer.flush()
 
         model.step_epoch(sess, forward_only=(mode != 'train'))
-
-        if mode == 'train':
-          model.global_epochs = run.global_epochs + 1
 
         summary_writer = tf.train.SummaryWriter(FLAGS.logdir, sess.graph_def)
         summary_writer.flush()
@@ -242,7 +245,6 @@ def run(mode, dataset, model_params=None, optimization_params=None):
 
         coord.request_stop()
         coord.join(threads, stop_grace_period_secs=10)
-run.global_epochs = 0
 
 def main(_):
   if not FLAGS.logdir:
@@ -255,9 +257,9 @@ def main(_):
 
   tf.set_random_seed(FLAGS.random_seed)
 
-  while True:
-    run('train', 'train_si284')
-    run('valid', 'test_dev93')
+  for global_epochs in range(20):
+    run('train', 'train_si284', global_epochs)
+    run('valid', 'test_dev93', global_epochs)
 
 
 if __name__ == '__main__':
