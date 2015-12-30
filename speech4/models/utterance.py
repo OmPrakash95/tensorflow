@@ -12,8 +12,14 @@ class Hypothesis(object):
     self.logprob = 0.0
     self.state_prev = None
     self.state_next = None
-    self.feed_token = None
+    self.attention_prev = None
+    self.attention_next = None
     self.logprobs = None
+
+  def feed_token(self, token_model):
+    if self.text == "":
+      return token_model.proto.token_sos
+    return token_model.string_to_token[self.text[-1]]
 
   def expand(self, token_model, beam_width):
     completed = Hypothesis()
@@ -32,7 +38,7 @@ class Hypothesis(object):
           partial.text = self.text + token_model.token_to_string[token]
           partial.logprob = self.logprob + logprob
           partial.state_prev = self.state_next
-          partial.feed_token = token
+          partial.attention_prev = self.attention_next
 
           partials.append(partial)
 

@@ -47,7 +47,8 @@ class LASModel(object):
     self.create_decoder()
 
     # Create the loss.
-    self.create_loss()
+    if not self.model_params.input_layer == 'placeholder':
+      self.create_loss()
 
     if not forward_only:
       # Create the optimizer.
@@ -157,7 +158,7 @@ class LASModel(object):
 
     self.decoder_states = []
     self.decoder_states_initial = []
-    self.decoder_states_stack = []
+    self.decoder_attentions_initial = []
     self.decoder_states.append(self.tokens[:-1])
 
     attention_states = []
@@ -224,6 +225,7 @@ class LASModel(object):
       self.alignments = []
       self.decoder_states = []
       self.prob = []
+      self.logprob = []
       states = []
       attentions = []
       for decoder_time_idx in range(len(self.tokens) - 1):
@@ -242,8 +244,11 @@ class LASModel(object):
               vs.get_variable("Matrix", [outputs[-1].get_shape()[1].value, self.model_params.vocab_size]),
               vs.get_variable("Bias", [self.model_params.vocab_size]), name="Logit_%d" % decoder_time_idx)
           self.decoder_states.append(logit)
-          self.prob.append(tf.nn.softmax(logit, name="Softmax_%d" % decoder_time_idx))
-
+          prob = tf.nn.softmax(logit, name="Softmax_%d" % decoder_time_idx)
+          self.prob.append(prob)
+          self.logprob.append(tf.log(prob, name="LogProb_%d" % decoder_time_idx))
+      self.decoder_state_last = states[1:]
+      self.decoder_attention_last = filter(None, attentions)
 
   def create_decoder_cell(
       self, decoder_time_idx, states, attentions, encoder_states,
@@ -317,7 +322,13 @@ class LASModel(object):
       x = new_outputs[stack_idx - 1]
       # If the previous timestep has an attention context, concat it.
       if attention:
-        if len(attentions):
+        if self.model_params.input_layer == "placeholder":
+          attention_placeholder = tf.placeholder(
+              tf.float32, shape=[batch_size, self.model_params.encoder_cell_size],
+              name="attention_%d" % stack_idx)
+          self.decoder_attentions_initial.append(attention_placeholder)
+          x = array_ops.concat(1, [x, attention_placeholder])
+        elif len(attentions):
           x = array_ops.concat(1, [x, attentions[stack_idx]])
         else:
           x = array_ops.concat(1, [x, array_ops.zeros([
@@ -329,7 +340,6 @@ class LASModel(object):
           decoder_cell_size, self.tokens_len, state, x, time_idx=decoder_time_idx)
       h.set_shape([batch_size, decoder_cell_size])
 
-      self.decoder_states_stack.append(h)
       new_states.append(h)
       if attention:
         c = create_attention(h)
@@ -355,9 +365,6 @@ class LASModel(object):
     self.losses = []
 
     self.logits = self.decoder_states
-    self.logprob = []
-    for prob in self.prob:
-      self.logprob.append(tf.log(prob))
 
     targets = self.tokens[1:]
     weights = self.tokens_weights[1:]

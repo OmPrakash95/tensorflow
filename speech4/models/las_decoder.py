@@ -61,12 +61,10 @@ class Decoder(object):
 
     self.features, self.features_len, _, self.text, _, _, _, self.uttid = s4_parse_utterance(
         serialized, features_len_max=self.model_params.features_len_max,
-        tokens_len_max=self.model_params.tokens_len_max + 1)
+        tokens_len_max=1)
 
   # We read one utterance and return it in a dict.
   def read_utterance(self, sess):
-    utt = utterance.Utterance()
-
     targets = {}
     targets['features'] = self.features
     targets['features_len'] = self.features_len
@@ -75,6 +73,7 @@ class Decoder(object):
 
     fetches = self.model.run_graph(sess, targets)
 
+    utt = utterance.Utterance()
     utt.features = fetches['features']
     utt.features_len = fetches['features_len']
     utt.text = fetches['text'][0]
@@ -88,17 +87,22 @@ class Decoder(object):
       self.decode_utterance(sess, utt)
 
   def decode_utterance(self, sess, utt):
+    # Run the encoder.
     self.run_encoder(sess, utt)
 
     # Create the empty hypothesis.
     hyp = utterance.Hypothesis()
-    hyp.text = ""
     hyp.state_prev = self.create_decoder_states_zero()
-    hyp.feed_token = self.token_model.proto.token_sos
+    hyp.attention_prev = self.create_decoder_attentions_zero()
+
+    # Run the decoder for 1 step (needed because we have <sos> <sos> utterance <eos>.
     self.run_decoder_step(sess, utt, [hyp])
     hyp.state_prev = hyp.state_next
+    hyp.attention_prev = hyp.attention_next
     hyp.state_next = None
+    hyp.attention_next = None
     hyp.logprobs = None
+    hyp.text = ""
     utt.hypothesis_partial.append(hyp)
 
     while utt.hypothesis_partial:
@@ -118,68 +122,80 @@ class Decoder(object):
       hypothesis_partial_next = sorted(
           hypothesis_partial_next, key=lambda hyp: hyp.logprob, reverse=True)
       hypothesis_partial_next = hypothesis_partial_next[:self.decoder_params.beam_width]
-      if hypothesis_partial_next:
-        print hypothesis_partial_next[0].text
-
       utt.hypothesis_partial = hypothesis_partial_next
 
     # Sort the completed hypothesis.
     utt.hypothesis_complete = sorted(
         utt.hypothesis_complete, key=lambda hyp: hyp.logprob / len(hyp.text), reverse=True)
-    print utt.text
-    print utt.hypothesis_complete[0].text
-    print utt.hypothesis_complete[0].logprob
-
+    utt.hypothesis_complete = utt.hypothesis_complete[:self.decoder_params.beam_width]
+    print 'ground_truth: %s' % utt.text
+    print 'top hyp     : %s' % utt.hypothesis_complete[0].text
 
   def run_encoder(self, sess, utt):
     feed_dict = {}
     for idx in range(len(self.model.features)):
       feed_dict[self.model.features[idx]] = np.tile(
           utt.features[idx][0], [self.model.batch_size, 1])
-
     feed_dict[self.model.features_len] = np.array(
         np.tile(utt.features_len, self.model.batch_size), dtype=np.int64)
 
-    utt.encoder_states = sess.run(self.model.encoder_states[-1][0], feed_dict)
+    utt.encoder_states = sess.run(self.model.encoder_states[-1][0], feed_dict=feed_dict)
 
   def create_decoder_states_zero(self):
     initial_state = []
     for state in self.model.decoder_states_initial:
       shape = state.get_shape().as_list()
       shape[0] = 1
-      initial_state.append(np.zeros(shape))
+      initial_state.append(np.zeros(shape, dtype=np.float32))
+    return initial_state
+
+  def create_decoder_attentions_zero(self):
+    initial_state = []
+    for state in self.model.decoder_attentions_initial:
+      shape = state.get_shape().as_list()
+      shape[0] = 1
+      initial_state.append(np.zeros(shape, dtype=np.float32))
     return initial_state
 
   def run_decoder_step(self, sess, utt, hyps):
-    assert len(hyps)
     pad_length = self.model.batch_size - len(hyps)
-
     feed_dict = {}
+
     # Encoder states.
     for idx in range(len(self.model.encoder_states[-1][0])):
       feed_dict[self.model.encoder_states[-1][0][idx]] = utt.encoder_states[idx]
     feed_dict[self.model.features_len] = np.array(
         np.tile(utt.features_len, self.model.batch_size), dtype=np.int64)
-    # Tokens.
-    for idx in range(len(self.model.tokens)):
-      feed_dict[self.model.tokens[idx]] = np.array(
-          [hyp.feed_token for hyp in hyps] + [0] * pad_length, dtype=np.int32)
-      feed_dict[self.model.tokens_weights[idx]] = np.array(
-          [1.0] * self.model.batch_size, dtype=np.float32)
+
+    # Feed token.
+    feed_dict[self.model.tokens[0]] = np.array(
+        [hyp.feed_token(self.token_model) for hyp in hyps] + [0] * pad_length, dtype=np.int32)
     feed_dict[self.model.tokens_len] = np.array(
-        [self.model_params.tokens_len_max] * self.model.batch_size,
-        dtype=np.int64)
+        [1] * self.model.batch_size, dtype=np.int64)
+
+    # Decoder states.
     for idx in range(len(self.model.decoder_states_initial)):
-      state_padding = [np.zeros([pad_length, hyps[0].state_prev[idx].shape[1]])]
+      state_padding = [np.zeros([
+          pad_length, hyps[0].state_prev[idx].shape[1]], dtype=np.float32)]
       feed_dict[self.model.decoder_states_initial[idx]] = np.vstack(
           [hyp.state_prev[idx] for hyp in hyps] + state_padding)
 
+    # Attention states.
+    for idx in range(len(self.model.decoder_attentions_initial)):
+      state_padding = [np.zeros([
+          pad_length, hyps[0].attention_prev[idx].shape[1]], dtype=np.float32)]
+      feed_dict[self.model.decoder_attentions_initial[idx]] = np.vstack(
+          [hyp.attention_prev[idx] for hyp in hyps] + state_padding)
+
+    # Fetch the next state and the log prob.
     fetches = {}
-    fetches["decoder_states_stack"] = self.model.decoder_states_stack
+    fetches["decoder_state_last"] = self.model.decoder_state_last
+    fetches["decoder_attentions_last"] = self.model.decoder_attention_last
     fetches["logprob"] = self.model.logprob
 
-    fetches = self.model.run_graph(sess, fetches, feed_dict)
+    fetches = self.model.run_graph(sess, fetches, feed_dict=feed_dict)
 
     for idx in range(len(hyps)):
-      hyps[idx].state_next = [state[idx:idx+1,:] for state in fetches['decoder_states_stack']]
+      hyps[idx].state_next = [state[idx:idx+1,:] for state in fetches['decoder_state_last']]
+      hyps[idx].attention_next = [state[idx:idx+1,:] for state in fetches['decoder_attentions_last']]
       hyps[idx].logprobs = [logprob[idx,:] for logprob in fetches['logprob']][0]

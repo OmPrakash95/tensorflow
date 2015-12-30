@@ -260,7 +260,7 @@ def main(_):
   for global_epochs in range(20):
     run('train', 'train_si284', global_epochs)
     run('valid', 'test_dev93', global_epochs)
-
+    #run('test', 'test_eval92')
 
 if __name__ == '__main__':
   tf.app.run()
