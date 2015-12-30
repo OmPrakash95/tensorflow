@@ -64,6 +64,12 @@ struct ApplyAdam {
 };
 
 template <typename Device, typename T>
+struct ApplyMaxWeightColNorm {
+  void operator()(const Device& d, typename TTypes<T>::Matrix var,
+                  typename TTypes<T>::Vec scale, float max_weight_col_norm);
+};
+
+template <typename Device, typename T>
 struct ApplyRMSProp {
   void operator()(const Device& d, typename TTypes<T>::Flat var,
                   typename TTypes<T>::Flat ms, typename TTypes<T>::Flat mom,

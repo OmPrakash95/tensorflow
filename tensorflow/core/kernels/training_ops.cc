@@ -99,6 +99,43 @@ struct ApplyAdam<CPUDevice, T> {
 };
 
 template <typename T>
+struct ApplyMaxWeightColNorm<CPUDevice, T> {
+  void operator()(const CPUDevice& d, typename TTypes<T>::Matrix var,
+                  typename TTypes<T>::Vec scale, float max_weight_col_norm) {
+    // Compute the norm2.
+    Eigen::array<typename TTypes<T>::Tensor::Index, 1> reduction_dim;
+    reduction_dim[0] = 0;
+    scale.device(d) = (var * var).sum(reduction_dim);
+
+    // Check if we need to scale = norm2 > max_weight_col_norm ? norm2 : 1.0.
+    const auto one = static_cast<T>(1.0);
+    scale.device(d) = (scale * (scale > scale.constant(max_weight_col_norm)))
+                      .cwiseMax(one);
+
+    // Rescale the weights.
+    Eigen::array<typename TTypes<T>::Tensor::Index, 2> bcast;
+    bcast[0] = var.dimension(0);
+    bcast[1] = 1;
+    var.device(d) = var / scale.broadcast(bcast);
+  }
+};
+
+#if GOOGLE_CUDA
+// Forward declarations of the functor specializations for GPU.
+#define DECLARE_GPU_SPEC(T)                                   \
+  template <>                                                 \
+  void ApplyMaxWeightColNorm<GPUDevice, T>::operator()(       \
+      const GPUDevice& d, typename TTypes<T>::Matrix var,     \
+      typename TTypes<T>::Vec scale,                          \
+      float max_weight_col_norm);                             \
+  extern template struct ApplyMaxWeightColNorm<GPUDevice, T>;
+DECLARE_GPU_SPEC(float);
+DECLARE_GPU_SPEC(double);
+#undef DECLARE_GPU_SPEC
+#endif
+#undef REGISTER_KERNELS
+
+template <typename T>
 struct ApplyRMSProp<CPUDevice, T> {
   void operator()(const CPUDevice& d, typename TTypes<T>::Flat var,
                   typename TTypes<T>::Flat ms, typename TTypes<T>::Flat mom,
@@ -628,6 +665,7 @@ class ApplyAdamOp : public OpKernel {
  public:
   explicit ApplyAdamOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("use_locking", &use_exclusive_lock_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("max_weight_col_norm", &max_weight_col_norm_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -647,6 +685,7 @@ class ApplyAdamOp : public OpKernel {
 
  private:
   bool use_exclusive_lock_;
+  float max_weight_col_norm_;
 
   void DoValidate(OpKernelContext* ctx) {
     Tensor var = ctx->mutable_input(0, use_exclusive_lock_);
@@ -725,6 +764,14 @@ class ApplyAdamOp : public OpKernel {
                                     beta2_power.scalar<T>(), lr.scalar<T>(),
                                     beta1.scalar<T>(), beta2.scalar<T>(),
                                     epsilon.scalar<T>(), grad.flat<T>());
+
+    if (var.dims() == 2 && max_weight_col_norm_ > 0.0f) {
+      Tensor scale;
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(var.dtype(), TensorShape({var.dim_size(1)}), &scale));
+
+      functor::ApplyMaxWeightColNorm<Device, T>()(
+          device, var.matrix<T>(), scale.vec<T>(), max_weight_col_norm_);
+    }
   }
 };
 

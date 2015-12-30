@@ -98,6 +98,28 @@ struct ApplyAdam<GPUDevice, T> {
 };
 
 template <typename T>
+struct ApplyMaxWeightColNorm<GPUDevice, T> {
+  void operator()(const GPUDevice& d, typename TTypes<T>::Matrix var,
+                  typename TTypes<T>::Vec scale, float max_weight_col_norm) {
+    // Compute the norm2.
+    Eigen::array<typename TTypes<T>::Tensor::Index, 1> reduction_dim;
+    reduction_dim[0] = 0;
+    scale.device(d) = (var * var).sum(reduction_dim);
+
+    // Check if we need to scale = norm2 > max_weight_col_norm ? norm2 : 1.0.
+    const auto one = static_cast<T>(1.0);
+    scale.device(d) = (scale * (scale > scale.constant(max_weight_col_norm)))
+                      .cwiseMax(one);
+
+    // Rescale the weights.
+    Eigen::array<typename TTypes<T>::Tensor::Index, 2> bcast;
+    bcast[0] = var.dimension(0);
+    bcast[1] = 1;
+    var.device(d) = var / scale.broadcast(bcast);
+  }
+};
+
+template <typename T>
 struct ApplyRMSProp<GPUDevice, T> {
   void operator()(const GPUDevice& d, typename TTypes<T>::Flat var,
                   typename TTypes<T>::Flat ms, typename TTypes<T>::Flat mom,
@@ -134,6 +156,8 @@ template struct functor::ApplyMomentum<GPUDevice, double>;
 
 template struct functor::ApplyAdam<GPUDevice, float>;
 template struct functor::ApplyAdam<GPUDevice, double>;
+template struct functor::ApplyMaxWeightColNorm<GPUDevice, float>;
+template struct functor::ApplyMaxWeightColNorm<GPUDevice, double>;
 
 template struct functor::ApplyRMSProp<GPUDevice, float>;
 template struct functor::ApplyRMSProp<GPUDevice, double>;
