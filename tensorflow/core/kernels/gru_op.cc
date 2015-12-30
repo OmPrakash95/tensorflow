@@ -488,7 +488,10 @@ class TokenSampleOp : public OpKernel {
     INPUT_TENSOR(ground_truth);
     INPUT_TENSOR(token_distribution);
 
-    OUTPUT_TENSOR(token, ground_truth->shape());
+    Tensor* token = nullptr;
+    ctx->allocate_output("token", ground_truth->shape(), &token);
+    token->vec<int32>().device(ctx->eigen_device<Device>()) =
+        ground_truth->vec<int32>();
 
     const int64 batch_size = token->dim_size(0);
     const int64 vocab_size = token_distribution->dim_size(1);
@@ -511,9 +514,6 @@ class TokenSampleOp : public OpKernel {
       std::copy(&samples[0], &samples[0] + kGroupSize, &sample_token_prob[i]);
     }
 
-    token->vec<float>().device(ctx->eigen_device<Device>()) =
-        ground_truth->vec<float>();
-
     if (sample_prob_ > 0.0f) {
       for (int64 b = 0; b < batch_size; ++b) {
         if (sample_prab[b] < sample_prob_) {
@@ -524,7 +524,7 @@ class TokenSampleOp : public OpKernel {
             prob += token_distribution->matrix<float>()(b, v);
           }
 
-          token->vec<float>()(b) = v - 1;
+          token->vec<int32>()(b) = v - 1;
         }
       }
     }
