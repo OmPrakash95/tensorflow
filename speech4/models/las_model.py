@@ -255,15 +255,15 @@ class LASModel(object):
           "embedding", [self.model_params.vocab_size, self.model_params.embedding_size],
           initializer=tf.random_uniform_initializer(-sqrt3, sqrt3))
 
-    if decoder_time_idx == 0 or self.model_params.input_layer == 'placeholder':
-      emb = embedding_ops.embedding_lookup(
-          embedding, self.tokens[decoder_time_idx])
-    else:
-      emb = embedding_ops.embedding_lookup(embedding, gru_ops.token_sample(
-          self.tokens[decoder_time_idx], self.prob[-1],
-          sample_prob=self.optimization_params.sample_prob,
-          seed=len(self.prob)))
-    emb.set_shape([batch_size, self.model_params.embedding_size])
+      if decoder_time_idx == 0 or self.model_params.input_layer == 'placeholder':
+        emb = embedding_ops.embedding_lookup(
+            embedding, self.tokens[decoder_time_idx])
+      else:
+        emb = embedding_ops.embedding_lookup(embedding, gru_ops.token_sample(
+            self.tokens[decoder_time_idx], self.prob[-1],
+            sample_prob=self.optimization_params.sample_prob,
+            seed=len(self.prob)))
+      emb.set_shape([batch_size, self.model_params.embedding_size])
 
     def create_attention(decoder_state):
       with vs.variable_scope("attention"):
