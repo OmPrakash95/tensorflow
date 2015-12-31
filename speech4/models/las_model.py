@@ -526,7 +526,7 @@ class LASModel(object):
 
       if not forward_only:
         self.saver.save(
-            sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs)
+            sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs + self.global_epochs)
 
       print("step_total %d, avg_step_time: %f, accuracy %f, perplexity %f, gradient_norm %f" % (
           self.step_total, self.avg_step_time, accuracy, perplexity, gradient_norm))
