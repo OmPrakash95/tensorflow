@@ -107,7 +107,7 @@ class LASModel(object):
             capacity=self.batch_size * 4 + 512, min_after_dequeue=512, seed=self.global_epochs)
 
       # Parse the batched of serialized strings into the relevant utterance features.
-      self.features, self.features_len, _, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
+      self.features, self.features_len, _, self.features_weight, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
           serialized, features_len_max=self.model_params.features_len_max,
           tokens_len_max=self.model_params.tokens_len_max + 1)
 
@@ -376,8 +376,33 @@ class LASModel(object):
         self.logits, targets, weights, self.model_params.vocab_size)
     self.losses.append(log_perps)
 
+    self.create_loss_encoder_lm(self.encoder_states[1][0], self.features)
+
     print('create_loss graph time %f' % (time.time() - start_time))
 
+  def create_loss_encoder_lm(
+      self, encoder_states, frames, delay=1, frames_to_predict=1):
+    assert len(encoder_states) == len(frames)
+    with vs.variable_scope("encoder_lm"):
+      prediction_dim = frames[0].get_shape()[1].value * frames_to_predict
+      W = vs.get_variable("W", [encoder_states[0].get_shape()[1].value, prediction_dim])
+      b = vs.get_variable("b", [prediction_dim])
+
+      self.loss_encoder_lm_losses = []
+      for idx in range(len(encoder_states) - delay - frames_to_predict + 1):
+        encoder_state = encoder_states[idx]
+        prediction = nn_ops.xw_plus_b(encoder_state, W, b, name="encoder_lm_prediction_%d" % idx)
+
+        if frames_to_predict == 1:
+          label = frames[idx + delay]
+        else:
+          label = array_ops.concat(1, frames[idx+delay:idx+delay+frames_to_predict])
+
+        weight = self.features_weight[idx + delay + frames_to_predict - 1]
+        loss = tf.nn.l2_loss((label - prediction) * weight, name="encoder_lm_l2_loss_%d" % idx)
+
+        self.loss_encoder_lm_losses.append(loss)
+      self.loss_encoder_lm_loss = tf.reduce_sum(tf.add_n(self.loss_encoder_lm_losses) / self.batch_size)
 
   def create_optimizer(self):
     start_time = time.time()

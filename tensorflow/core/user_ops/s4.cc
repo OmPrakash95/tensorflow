@@ -34,6 +34,7 @@ REGISTER_OP("S4ParseUtterance")
     .Output("features: features_len_max * float")
     .Output("features_len: int64")
     .Output("features_width: int64")
+    .Output("features_weight: features_len_max* float")
     .Output("text: string")
     .Output("tokens: tokens_len_max * int32")
     .Output("tokens_len: int64")
@@ -59,6 +60,7 @@ class S4ParseUtterance : public OpKernel {
     OpOutputList output_list_features;
     Tensor* output_tensor_features_len = nullptr;
     Tensor* output_tensor_features_width = nullptr;
+    OpOutputList output_list_features_weight;
     Tensor* output_tensor_text = nullptr;
     OpOutputList output_list_tokens;
     Tensor* output_tensor_tokens_len = nullptr;
@@ -91,13 +93,18 @@ class S4ParseUtterance : public OpKernel {
       if (b == 0) {
         // Allocate the memory.
         OP_REQUIRES_OK(ctx, ctx->output_list("features", &output_list_features));
+        OP_REQUIRES_OK(ctx, ctx->output_list("features_weight", &output_list_features_weight));
         for (int64 t = 0; t < features_len_max_; ++t) {
           TensorShape feature_shape({batch_size, features_width});
 
           Tensor* feature_slice = nullptr;
           output_list_features.allocate(t, feature_shape, &feature_slice);
 
+          Tensor* feature_weight = nullptr;
+          output_list_features_weight.allocate(t, TensorShape({batch_size}), &feature_weight);
+
           std::fill_n(feature_slice->flat<float>().data(), feature_shape.num_elements(), 0.0f);
+          std::fill_n(feature_weight->flat<float>().data(), batch_size, 0.0f);
         }
 
         TensorShape x({batch_size});
@@ -149,6 +156,9 @@ class S4ParseUtterance : public OpKernel {
         std::copy_n(features.value().data() + t * features_width,
                     features_width,
                     feature_slice->flat<float>().data() + b * features_width);
+
+        Tensor* feature_weight = output_list_features_weight[t];
+        feature_weight->flat<float>().data()[b] = 1.0f;
       }
 
       // Copy the text across.
