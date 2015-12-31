@@ -43,7 +43,7 @@ message OptimizationParamsProto {
 
   float max_gradient_norm = 3;
 
-  AdagradParamsProto = 4;
+  AdagradParamsProto adagrad = 4;
   AdamParamsProto adam = 5;
   GradientDescentParamsProto gd = 6;
 
