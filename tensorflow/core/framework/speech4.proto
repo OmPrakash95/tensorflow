@@ -17,6 +17,13 @@ message ModelParamsProto {
   string input_layer = 9;
 };
 
+message AdagradParamsProto {
+  float learning_rate = 1;
+  float initial_accumulator_value = 2;
+
+  bool reset = 3;
+};
+
 message AdamParamsProto {
   float learning_rate = 1;
   float beta1 = 2;
@@ -36,8 +43,9 @@ message OptimizationParamsProto {
 
   float max_gradient_norm = 3;
 
-  AdamParamsProto adam = 4;
-  GradientDescentParamsProto gd = 5;
+  AdagradParamsProto = 4;
+  AdamParamsProto adam = 5;
+  GradientDescentParamsProto gd = 6;
 
   float sample_prob = 100;
 };
