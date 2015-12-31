@@ -42,6 +42,7 @@ REGISTER_OP("ApplyAdagrad")
     .Input("grad: T")
     .Output("out: Ref(T)")
     .Attr("T: numbertype")
+    .Attr("max_weight_col_norm: float = 1")
     .Attr("use_locking: bool = false")
     .Doc(R"doc(
 Update '*var' according to the adagrad scheme.

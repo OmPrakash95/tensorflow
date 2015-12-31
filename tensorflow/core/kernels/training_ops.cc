@@ -244,6 +244,7 @@ class ApplyAdagradOp : public OpKernel {
  public:
   explicit ApplyAdagradOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("use_locking", &use_exclusive_lock_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("max_weight_col_norm", &max_weight_col_norm_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -266,6 +267,7 @@ class ApplyAdagradOp : public OpKernel {
 
  private:
   bool use_exclusive_lock_;
+  float max_weight_col_norm_;
 
   void DoValidate(OpKernelContext* ctx) {
     Tensor var = ctx->mutable_input(0, use_exclusive_lock_);
@@ -303,6 +305,16 @@ class ApplyAdagradOp : public OpKernel {
     const Tensor& grad = ctx->input(3);
     functor::ApplyAdagrad<Device, T>()(device, var.flat<T>(), accum.flat<T>(),
                                        lr.scalar<T>(), grad.flat<T>());
+
+    if (var.dims() == 2 && max_weight_col_norm_ > 0.0f) {
+      Tensor scale;
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(
+            var.dtype(), TensorShape({var.dim_size(1)}), &scale));
+
+      functor::ApplyMaxWeightColNorm<Device, T>()(
+          device, var.matrix<T>(), scale.vec<T>(),
+          max_weight_col_norm_);
+    }
   }
 };
 
@@ -767,10 +779,12 @@ class ApplyAdamOp : public OpKernel {
 
     if (var.dims() == 2 && max_weight_col_norm_ > 0.0f) {
       Tensor scale;
-      OP_REQUIRES_OK(ctx, ctx->allocate_temp(var.dtype(), TensorShape({var.dim_size(1)}), &scale));
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(
+            var.dtype(), TensorShape({var.dim_size(1)}), &scale));
 
       functor::ApplyMaxWeightColNorm<Device, T>()(
-          device, var.matrix<T>(), scale.vec<T>(), max_weight_col_norm_);
+          device, var.matrix<T>(), scale.vec<T>(),
+          max_weight_col_norm_);
     }
   }
 };
