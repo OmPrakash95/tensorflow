@@ -169,9 +169,20 @@ class LASModel(object):
           for idx, e in enumerate(self.encoder_states[-1][0])]
       attention_states = array_ops.concat(1, attention_states)
 
+    batch_size = self.batch_size
+    attn_length = attention_states.get_shape()[1].value
+    attn_size = attention_states.get_shape()[2].value
+
+    encoder_states = array_ops.reshape(
+        attention_states, [batch_size, attn_length, 1, attn_size])
+    with vs.variable_scope("encoder_embedding"):
+      k = vs.get_variable("W", [1, 1, attn_size, self.model_params.attention_embedding_size])
+    encoder_embedding = nn_ops.conv2d(encoder_states, k, [1, 1, 1, 1], "SAME")
+
     #self.create_decoder_layer(attention_states=attention_states)
     #self.create_decoder_layer_v1(output_projection=True)
-    self.create_decoder_sequence(attention_states=attention_states)
+    self.create_decoder_sequence(
+        attention_states=attention_states, encoder_states=encoder_states)
 
     print('create_decoder graph time %f' % (time.time() - start_time))
 
@@ -210,18 +221,9 @@ class LASModel(object):
               self.decoder_states[-1], decoder_initial_state, cell,
               sequence_length=self.tokens_len)[0])
 
-  def create_decoder_sequence(self, attention_states, scope=None):
+  def create_decoder_sequence(
+      self, attention_states, encoder_states, scope=None):
     with vs.variable_scope("decoder_layer" or scope):
-      batch_size = self.batch_size
-      attn_length = attention_states.get_shape()[1].value
-      attn_size = attention_states.get_shape()[2].value
-
-      encoder_states = array_ops.reshape(
-          attention_states, [batch_size, attn_length, 1, attn_size])
-      with vs.variable_scope("encoder_embedding"):
-        k = vs.get_variable("W", [1, 1, attn_size, self.model_params.attention_embedding_size])
-      encoder_embedding = nn_ops.conv2d(encoder_states, k, [1, 1, 1, 1], "SAME")
-
       self.alignments = []
       self.decoder_states = []
       self.prob = []
