@@ -135,18 +135,18 @@ def create_optimization_params(global_epochs):
   optimization_params.type = FLAGS.optimization_params_type
   optimization_params.epochs = 1
 
-  if optimization_params.type == "adam":
+  if optimization_params.type == "adagrad":
+    optimization_params.adagrad.learning_rate = FLAGS.optimization_params_adagrad_learning_rate
+    optimization_params.adagrad.initial_accumulator_value = FLAGS.optimization_params_adagrad_initial_accumulator_value
+    if global_epochs == 1:
+      optimization_params.adagrad.reset = True
+  elif optimization_params.type == "adam":
     optimization_params.adam.learning_rate = FLAGS.optimization_params_adam_learning_rate
     optimization_params.adam.beta1 = FLAGS.optimization_params_adam_beta1
     optimization_params.adam.beta2 = FLAGS.optimization_params_adam_beta2
     optimization_params.adam.epsilon = FLAGS.optimization_params_adam_epsilon
     if global_epochs == 1:
       optimization_params.adam.reset = True
-  elif optimization_params.type == "adagrad":
-    optimization_params.adagrad.learning_rate = FLAGS.optimization_params_adagrad_learning_rate
-    optimization_params.adagrad.initial_accumulator_value = FLAGS.optimization_params_adagrad_initial_accumulator_value
-    if global_epochs == 1:
-      optimization_params.adagrad.reset = True
   elif optimization_params.type == "gd":
     optimization_params.gd.learning_rate = FLAGS.optimization_params_gd_learning_rate
 

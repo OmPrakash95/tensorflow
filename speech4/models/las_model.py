@@ -391,7 +391,11 @@ class LASModel(object):
           grads, self.optimization_params.max_gradient_norm, name="clip_gradients")
       self.gradient_norm = norm
 
-    if self.optimization_params.type == "adam":
+    if self.optimization_params.type == "adagrad":
+      opt = tf.train.AdagradOptimizer(
+          learning_rate=self.optimization_params.adagrad.learning_rate,
+          initial_accumulator_value=self.optimization_params.adagrad.initial_accumulator_value)
+    elif self.optimization_params.type == "adam":
       opt = tf.train.AdamOptimizer(
           learning_rate=self.optimization_params.adam.learning_rate,
           beta1=self.optimization_params.adam.beta1,
