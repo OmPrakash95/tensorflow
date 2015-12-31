@@ -40,13 +40,15 @@ tf.app.flags.DEFINE_integer('device', 0,
                             """The GPU device to use (set to negative to use CPU).""")
 
 tf.app.flags.DEFINE_string('ckpt', '',
-                            """The GPU device to use (set to negative to use CPU).""")
+                            """Checkpoint to recover from.""")
 
 tf.app.flags.DEFINE_integer('random_seed', 1000,
                             """Random seed.""")
 
 tf.app.flags.DEFINE_integer('batch_size', 16,
                             """Number of utterances to process in a batch.""")
+tf.app.flags.DEFINE_integer('global_epochs', 0,
+                            """Global epochs.""")
 
 tf.app.flags.DEFINE_integer('features_width', 123,
                             """Size of each feature.""")
@@ -261,7 +263,7 @@ def main(_):
 
   tf.set_random_seed(FLAGS.random_seed)
 
-  for global_epochs in range(20):
+  for global_epochs in range(FLAGS.global_epochs, 20):
     run('train', 'train_si284', global_epochs)
     run('valid', 'test_dev93', global_epochs)
     #run('test', 'test_eval92')
