@@ -4,6 +4,8 @@ import google
 import math
 import numpy as np
 import os.path
+import random
+import string
 import sys
 import tempfile
 import time
@@ -248,7 +250,9 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
 
 def main(_):
   if not FLAGS.logdir:
-    FLAGS.logdir = tempfile.mkdtemp()
+    # FLAGS.logdir = tempfile.mkdtemp()
+    FLAGS.logdir = os.path.join(
+        "exp", "speech4_" + "".join(random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(8)))
   try:
     os.makedirs(FLAGS.logdir)
   except:
