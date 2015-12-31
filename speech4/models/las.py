@@ -101,6 +101,9 @@ tf.app.flags.DEFINE_float('optimization_params_gd_learning_rate', 0.1,
 tf.app.flags.DEFINE_float('optimization_params_sample_prob', 0.1,
                            """Sample probability.""")
 
+tf.app.flags.DEFINE_float('optimization_params_encoder_lm_loss_weight', 0.1,
+                           """This loss should be perhaps decayed?""")
+
 tf.app.flags.DEFINE_string('logdir', '',
                            """Path to our outputs and logs.""")
 
@@ -153,6 +156,8 @@ def create_optimization_params(global_epochs):
   optimization_params.max_gradient_norm = FLAGS.optimization_params_max_gradient_norm
   if global_epochs > 0:
     optimization_params.sample_prob = FLAGS.optimization_params_sample_prob
+
+  optimization_params.encoder_lm_loss_weight = FLAGS.optimization_params_encoder_lm_loss_weight
 
   if os.path.isfile(FLAGS.optimization_params):
     with open(FLAGS.optimization_params, "r") as proto_file:

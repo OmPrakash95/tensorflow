@@ -48,6 +48,8 @@ message OptimizationParamsProto {
   GradientDescentParamsProto gd = 6;
 
   float sample_prob = 100;
+
+  float encoder_lm_loss_weight = 200;
 };
 
 message DecoderParamsProto {
