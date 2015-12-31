@@ -393,8 +393,8 @@ class LASModel(object):
 
     if self.optimization_params.type == "adagrad":
       opt = tf.train.AdagradOptimizer(
-          learning_rate=optimization_params.adagrad.learning_rate,
-          initial_accumulator_value=optimization_params.adagrad.initial_accumulator_value)
+          learning_rate=self.optimization_params.adagrad.learning_rate,
+          initial_accumulator_value=self.optimization_params.adagrad.initial_accumulator_value)
     elif self.optimization_params.type == "adam":
       opt = tf.train.AdamOptimizer(
           learning_rate=self.optimization_params.adam.learning_rate,
