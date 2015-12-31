@@ -182,7 +182,8 @@ class LASModel(object):
     #self.create_decoder_layer(attention_states=attention_states)
     #self.create_decoder_layer_v1(output_projection=True)
     self.create_decoder_sequence(
-        attention_states=attention_states, encoder_states=encoder_states)
+        attention_states=attention_states, encoder_states=encoder_states,
+        encoder_embedding=encoder_embedding)
 
     print('create_decoder graph time %f' % (time.time() - start_time))
 
@@ -222,7 +223,7 @@ class LASModel(object):
               sequence_length=self.tokens_len)[0])
 
   def create_decoder_sequence(
-      self, attention_states, encoder_states, scope=None):
+      self, attention_states, encoder_states, encoder_embedding, scope=None):
     with vs.variable_scope("decoder_layer" or scope):
       self.alignments = []
       self.decoder_states = []
