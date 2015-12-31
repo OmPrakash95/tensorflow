@@ -15,6 +15,9 @@ message ModelParamsProto {
   int64 attention_embedding_size = 8;
 
   string input_layer = 9;
+
+  bool encoder_only = 10;
+  bool encoder_lm = 11;
 };
 
 message AdagradParamsProto {

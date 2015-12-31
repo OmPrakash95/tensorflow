@@ -367,21 +367,24 @@ class LASModel(object):
 
     self.losses = []
 
-    self.logits = self.decoder_states
+    if not self.model_params.encoder_only:
+      self.logits = self.decoder_states
 
-    targets = self.tokens[1:]
-    weights = self.tokens_weights[1:]
+      targets = self.tokens[1:]
+      weights = self.tokens_weights[1:]
 
-    log_perps = seq2seq.sequence_loss(
-        self.logits, targets, weights, self.model_params.vocab_size)
-    self.losses.append(log_perps)
+      log_perps = seq2seq.sequence_loss(
+          self.logits, targets, weights, self.model_params.vocab_size)
+      self.logperp =log_perps
+      self.losses.append(log_perps)
 
-    self.create_loss_encoder_lm(self.encoder_states[1][0], self.features)
+    if self.model_params.encoder_lm:
+      self.create_loss_encoder_lm(self.encoder_states[2][0], self.features)
 
     print('create_loss graph time %f' % (time.time() - start_time))
 
   def create_loss_encoder_lm(
-      self, encoder_states, frames, delay=1, frames_to_predict=1):
+      self, encoder_states, frames, delay=1, frames_to_predict=4):
     assert len(encoder_states) == len(frames)
     with vs.variable_scope("encoder_lm"):
       prediction_dim = frames[0].get_shape()[1].value * frames_to_predict
@@ -399,10 +402,11 @@ class LASModel(object):
           label = array_ops.concat(1, frames[idx+delay:idx+delay+frames_to_predict])
 
         weight = self.features_weight[idx + delay + frames_to_predict - 1]
-        loss = tf.nn.l2_loss((label - prediction) * weight, name="encoder_lm_l2_loss_%d" % idx)
+        loss = tf.nn.l2_loss((label - prediction)) * weight * self.optimization_params.encoder_lm_loss_weight
 
         self.loss_encoder_lm_losses.append(loss)
       self.loss_encoder_lm_loss = tf.reduce_sum(tf.add_n(self.loss_encoder_lm_losses) / self.batch_size)
+      self.losses.append(self.loss_encoder_lm_loss)
 
   def create_optimizer(self):
     start_time = time.time()
@@ -515,7 +519,7 @@ class LASModel(object):
   def step(self, sess, forward_only):
     start_time = time.time()
 
-    steps_per_report = 100
+    steps_per_report = 10
     report = forward_only or (self.step_total % steps_per_report == 0)
 
     targets = {}
@@ -524,7 +528,7 @@ class LASModel(object):
       targets['text'] = self.text
       targets['tokens'] = self.tokens
       targets['tokens_weights'] = self.tokens_weights
-      targets['logperp'] = self.losses
+      targets['logperp'] = self.logperp
       targets['logits'] = self.logits
 
     if not forward_only and report:
@@ -544,7 +548,7 @@ class LASModel(object):
     self.avg_step_time = self.step_time_total / self.step_total
 
     if report:
-      logperp = fetches['logperp'][0]
+      logperp = fetches['logperp']
 
       perplexity = np.exp(logperp)
       gradient_norm = 0.0
