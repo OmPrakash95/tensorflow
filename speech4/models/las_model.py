@@ -44,7 +44,8 @@ class LASModel(object):
 
     # Create the encoder-encoder.
     self.create_encoder()
-    self.create_decoder()
+    if not self.model_params.encoder_only:
+      self.create_decoder()
 
     # Create the loss.
     if not self.model_params.input_layer == 'placeholder':
@@ -107,7 +108,7 @@ class LASModel(object):
             capacity=self.batch_size * 4 + 512, min_after_dequeue=512, seed=self.global_epochs)
 
       # Parse the batched of serialized strings into the relevant utterance features.
-      self.features, self.features_len, _, self.features_weight, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
+      self.features, self.features_fbank, self.features_len, _, self.features_weight, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
           serialized, features_len_max=self.model_params.features_len_max,
           tokens_len_max=self.model_params.tokens_len_max + 1)
 
@@ -379,7 +380,7 @@ class LASModel(object):
       self.losses.append(log_perps)
 
     if self.model_params.encoder_lm:
-      self.create_loss_encoder_lm(self.encoder_states[2][0], self.features)
+      self.create_loss_encoder_lm(self.encoder_states[2][0], self.features_fbank)
 
     print('create_loss graph time %f' % (time.time() - start_time))
 
@@ -528,8 +529,12 @@ class LASModel(object):
       targets['text'] = self.text
       targets['tokens'] = self.tokens
       targets['tokens_weights'] = self.tokens_weights
-      targets['logperp'] = self.logperp
-      targets['logits'] = self.logits
+      if not self.model_params.encoder_only:
+        targets['logperp'] = self.logperp
+        targets['logits'] = self.logits
+
+      if self.model_params.encoder_lm:
+        targets['encoder_lm_loss'] = self.loss_encoder_lm_loss
 
     if not forward_only and report:
       targets['gradient_norm'] = self.gradient_norm
@@ -548,7 +553,12 @@ class LASModel(object):
     self.avg_step_time = self.step_time_total / self.step_total
 
     if report:
-      logperp = fetches['logperp']
+      logperp = 0
+      if 'logperp' in fetches:
+        fetches['logperp']
+
+      if "encoder_lm_loss" in fetches:
+        print fetches["encoder_lm_loss"]
 
       perplexity = np.exp(logperp)
       gradient_norm = 0.0
