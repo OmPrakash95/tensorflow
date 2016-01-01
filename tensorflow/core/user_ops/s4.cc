@@ -28,10 +28,12 @@ SPEECH4, parse an utterance!
 )doc");
 
 REGISTER_OP("S4ParseUtterance")
+    .Attr("features_fbank_dim: int = 40")
     .Attr("features_len_max: int")
     .Attr("tokens_len_max: int")
     .Input("serialized: string")
     .Output("features: features_len_max * float")
+    .Output("features_fbank: features_len_max * float")
     .Output("features_len: int64")
     .Output("features_width: int64")
     .Output("features_weight: features_len_max* float")
@@ -47,6 +49,7 @@ SPEECH4, parse an utterance!
 class S4ParseUtterance : public OpKernel {
  public:
   explicit S4ParseUtterance(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("features_fbank_dim", &features_fbank_dim_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("features_len_max", &features_len_max_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("tokens_len_max", &tokens_len_max_));
   }
@@ -58,6 +61,7 @@ class S4ParseUtterance : public OpKernel {
     const int64 batch_size = serialized_t.size();
 
     OpOutputList output_list_features;
+    OpOutputList output_list_features_fbank;
     Tensor* output_tensor_features_len = nullptr;
     Tensor* output_tensor_features_width = nullptr;
     OpOutputList output_list_features_weight;
@@ -93,17 +97,22 @@ class S4ParseUtterance : public OpKernel {
       if (b == 0) {
         // Allocate the memory.
         OP_REQUIRES_OK(ctx, ctx->output_list("features", &output_list_features));
+        OP_REQUIRES_OK(ctx, ctx->output_list("features_fbank", &output_list_features_fbank));
         OP_REQUIRES_OK(ctx, ctx->output_list("features_weight", &output_list_features_weight));
         for (int64 t = 0; t < features_len_max_; ++t) {
           TensorShape feature_shape({batch_size, features_width});
-
           Tensor* feature_slice = nullptr;
           output_list_features.allocate(t, feature_shape, &feature_slice);
+
+          TensorShape feature_fbank_shape({batch_size, features_fbank_dim_});
+          Tensor* feature_fbank_slice = nullptr;
+          output_list_features_fbank.allocate(t, feature_fbank_shape, &feature_fbank_slice);
 
           Tensor* feature_weight = nullptr;
           output_list_features_weight.allocate(t, TensorShape({batch_size}), &feature_weight);
 
           std::fill_n(feature_slice->flat<float>().data(), feature_shape.num_elements(), 0.0f);
+          std::fill_n(feature_fbank_slice->flat<float>().data(), feature_fbank_shape.num_elements(), 0.0f);
           std::fill_n(feature_weight->flat<float>().data(), batch_size, 0.0f);
         }
 
@@ -157,6 +166,11 @@ class S4ParseUtterance : public OpKernel {
                     features_width,
                     feature_slice->flat<float>().data() + b * features_width);
 
+        Tensor* feature_fbank_slice = output_list_features_fbank[t];
+        std::copy_n(features.value().data() + t * features_width,
+                    features_fbank_dim_,
+                    feature_fbank_slice->flat<float>().data() + b * features_fbank_dim_);
+
         Tensor* feature_weight = output_list_features_weight[t];
         feature_weight->flat<float>().data()[b] = 1.0f;
       }
@@ -197,6 +211,7 @@ class S4ParseUtterance : public OpKernel {
   }
 
  protected:
+  int64 features_fbank_dim_;
   int64 features_len_max_;
   int64 tokens_len_max_;
 };

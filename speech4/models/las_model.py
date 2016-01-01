@@ -1,5 +1,4 @@
 import math
-import matplotlib.pyplot as plt
 import numpy as np
 import os.path
 import time
@@ -117,6 +116,8 @@ class LASModel(object):
     # Add the shape to the features.
     for feature in self.features:
       feature.set_shape([self.batch_size, self.model_params.features_width])
+    for feature_fbank in self.features_fbank:
+      feature_fbank.set_shape([self.batch_size, 40])
     for token in self.tokens:
       token.set_shape([self.batch_size])
 
@@ -542,7 +543,8 @@ class LASModel(object):
 
       if self.visualization_params.attention:
         pass
-      if self.visualization_params.attention:
+      if self.visualization_params.encoder_predictions:
+        targets["features_fbank"] = self.features_fbank
         targets["encoder_predictions"] = self.encoder_predictions
 
     if not forward_only and report:
@@ -569,6 +571,18 @@ class LASModel(object):
       if "encoder_lm_loss" in fetches:
         print fetches["encoder_lm_loss"]
 
+      # Save the visualization of our predictions compared to the original to
+      # disk.
+      if self.visualization_params.encoder_predictions:
+        features_fbank = fetches["features_fbank"]
+        encoder_predictions = fetches["encoder_predictions"]
+        features_fbank = [x[0,:] for x in features_fbank]
+        encoder_predictions = [x[0,:] for x in encoder_predictions]
+        np.save(os.path.join(self.logdir, "features_fbank"),
+                np.vstack(features_fbank))
+        np.save(os.path.join(self.logdir, "encoder_predictions"),
+                np.vstack(encoder_predictions))
+
       perplexity = np.exp(logperp)
       gradient_norm = 0.0
       if 'gradient_norm' in fetches:
@@ -587,10 +601,3 @@ class LASModel(object):
           self.step_total, self.avg_step_time, accuracy, perplexity, gradient_norm))
 
     return fetches
-
-  def plot_images(imgs):
-    fig = plt.figure()
-
-    for idx in range(len(imgs)):
-      ax = fig.add_subplot(idx, 1, 1)
-      plt.imshow(imgs[idx])
