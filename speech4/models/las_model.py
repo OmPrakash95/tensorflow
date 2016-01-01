@@ -1,4 +1,5 @@
 import math
+import matplotlib.pyplot as plt
 import numpy as np
 import os.path
 import time
@@ -23,7 +24,7 @@ from tensorflow.python.platform import gfile
 
 class LASModel(object):
   def __init__(self, sess, dataset, logdir, ckpt, forward_only, batch_size,
-      model_params, optimization_params=None):
+      model_params, optimization_params=None, visualization_params=None):
     self.dataset = dataset
     self.logdir = logdir
 
@@ -32,6 +33,7 @@ class LASModel(object):
     self.model_params = model_params
     
     self.optimization_params = optimization_params
+    self.visualization_params = visualization_params
 
     self.step_total = 0
     self.step_time_total = 0
@@ -385,6 +387,7 @@ class LASModel(object):
 
   def create_loss_encoder_lm(
       self, encoder_states, frames, delay=1, frames_to_predict=4):
+    self.encoder_predictions = []
     assert len(encoder_states) == len(frames)
     with vs.variable_scope("encoder_lm"):
       prediction_dim = frames[0].get_shape()[1].value * frames_to_predict
@@ -395,6 +398,7 @@ class LASModel(object):
       for idx in range(len(encoder_states) - delay - frames_to_predict + 1):
         encoder_state = encoder_states[idx]
         prediction = nn_ops.xw_plus_b(encoder_state, W, b, name="encoder_lm_prediction_%d" % idx)
+        self.encoder_predictions.append(prediction)
 
         if frames_to_predict == 1:
           label = frames[idx + delay]
@@ -531,6 +535,11 @@ class LASModel(object):
       targets['logperp'] = self.logperp
       targets['logits'] = self.logits
 
+      if self.visualization_params.attention:
+        pass
+      if self.visualization_params.attention:
+        targets["encoder_predictions"] = self.encoder_predictions
+
     if not forward_only and report:
       targets['gradient_norm'] = self.gradient_norm
 
@@ -568,3 +577,10 @@ class LASModel(object):
           self.step_total, self.avg_step_time, accuracy, perplexity, gradient_norm))
 
     return fetches
+
+  def plot_images(imgs):
+    fig = plt.figure()
+
+    for idx in range(len(imgs)):
+      ax = fig.add_subplot(idx, 1, 1)
+      plt.imshow(imgs[idx])
