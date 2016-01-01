@@ -104,6 +104,8 @@ tf.app.flags.DEFINE_float('optimization_params_sample_prob', 0.1,
 tf.app.flags.DEFINE_float('optimization_params_encoder_lm_loss_weight', 0.1,
                            """This loss should be perhaps decayed?""")
 
+tf.app.flags.DEFINE_string("visualization_params", "", """VisualizationParamsProto""")
+
 tf.app.flags.DEFINE_string('logdir', '',
                            """Path to our outputs and logs.""")
 
@@ -165,6 +167,13 @@ def create_optimization_params(global_epochs):
 
   return optimization_params
 
+def create_visualization_params():
+  visualization_params = speech4_pb2.VisualizationParamsProto()
+  if os.path.isfile(FLAGS.visualization_params):
+    with open(FLAGS.visualization_params, "r") as proto_file:
+      google.protobuf.text_format.Merge(proto_file.read(), visualization_params)
+  return visualization_params
+
 def create_model(
     sess, ckpt, dataset, forward_only, global_epochs, model_params=None,
     optimization_params=None):
@@ -176,6 +185,7 @@ def create_model(
     model_params = create_model_params()
   if not optimization_params:
     optimization_params = create_optimization_params(global_epochs)
+  visualization_params = create_visualization_params()
 
   with open(os.path.join(FLAGS.logdir, "model_params.pbtxt"), "w") as proto_file:
     proto_file.write(str(model_params))
@@ -185,7 +195,8 @@ def create_model(
   with tf.variable_scope("model", initializer=initializer):
     model = las_model.LASModel(
         sess, dataset, FLAGS.logdir, ckpt, forward_only, FLAGS.batch_size,
-        model_params, optimization_params)
+        model_params, optimization_params=optimization_params,
+        visualization_params=visualization_params)
 
   tf.train.write_graph(sess.graph_def, FLAGS.logdir, "graph_def.pbtxt")
 

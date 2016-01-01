@@ -4,6 +4,11 @@ syntax = "proto3";
 
 package speech4;
 
+message VisualizationParamsProto {
+  bool attention = 1;
+  bool encoder_predictions = 2;
+};
+
 message ModelParamsProto {
   int64 features_width = 1;
   int64 features_len_max = 2;
