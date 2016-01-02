@@ -5,6 +5,7 @@ import time
 
 import tensorflow as tf
 from tensorflow.core.framework import speech4_pb2
+from tensorflow.python.ops import attention_mask_ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import clip_ops
 from tensorflow.python.ops import embedding_ops
@@ -231,19 +232,19 @@ class LASModel(object):
   def create_decoder_sequence(
       self, attention_states, encoder_states, encoder_embedding, scope=None):
     with vs.variable_scope("decoder_layer" or scope):
-      self.alignments = []
       self.decoder_states = []
       self.prob = []
       self.logprob = []
       states = []
       attentions = []
+      alignments = None
       for decoder_time_idx in range(len(self.tokens) - 1):
         if decoder_time_idx > 0:
           vs.get_variable_scope().reuse_variables()
 
         # RNN-Attention Decoder.
-        (outputs, states, attentions) = self.create_decoder_cell(
-            decoder_time_idx, states, attentions, encoder_states,
+        (outputs, states, attentions, alignments) = self.create_decoder_cell(
+            decoder_time_idx, states, attentions, alignments, encoder_states,
             encoder_embedding)
  
         # Logit.
@@ -260,7 +261,7 @@ class LASModel(object):
       self.decoder_attention_last = filter(None, attentions)
 
   def create_decoder_cell(
-      self, decoder_time_idx, states, attentions, encoder_states,
+      self, decoder_time_idx, states, attentions, prev_alignments, encoder_states,
       encoder_embedding, scope=None):
     batch_size = self.batch_size
     attention_embedding_size = self.model_params.attention_embedding_size
@@ -283,7 +284,7 @@ class LASModel(object):
             seed=len(self.prob)))
       emb.set_shape([batch_size, self.model_params.embedding_size])
 
-    def create_attention(decoder_state):
+    def create_attention(decoder_state, prev_attention):
       with vs.variable_scope("attention"):
         U = vs.get_variable("U", [decoder_cell_size, attention_embedding_size])
         b = vs.get_variable("b", [attention_embedding_size])
@@ -297,21 +298,25 @@ class LASModel(object):
         # Energies.
         e = math_ops.reduce_sum(
             v * math_ops.tanh(encoder_embedding + d), [2, 3])
-        e = gru_ops.attention_mask(self.encoder_states[-1][1], e)
+        if prev_attention and self.model_params.attention_params.type == "median":
+          e = attention_mask_ops.attention_mask_median(
+              self.encoder_states[-1][1], e, prev_attention)
+        else:
+          e = attention_mask_ops.attention_mask(self.encoder_states[-1][1], e)
 
         # Alignment.
         a = nn_ops.softmax(e, name="alignment_%d" % (decoder_time_idx))
-        self.alignments.append(a)
 
         # Context.
         c = math_ops.reduce_sum(
             array_ops.reshape(a, [batch_size, len(self.encoder_states[-1][0]), 1, 1]) * encoder_states,
             [1, 2])
         c = array_ops.reshape(c, [batch_size, self.model_params.encoder_cell_size])
-        return c
+        return a, c
 
     new_states = [None]
     new_attentions = [None]
+    new_alignments = [None]
     new_outputs = [emb]
     def create_gru_cell(attention):
       stack_idx = len(new_states)
@@ -351,13 +356,18 @@ class LASModel(object):
 
       new_states.append(h)
       if attention:
-        c = create_attention(h)
+        prev_alignment = None
+        if prev_alignments:
+          prev_alignment = prev_alignments[stack_idx]
+        a, c = create_attention(h, prev_alignment)
         new_attentions.append(c)
+        new_alignments.append(a)
         h = array_ops.concat(1, [h, c])
         h.set_shape(
             [batch_size, self.model_params.decoder_cell_size + self.model_params.encoder_cell_size])
       else:
         new_attentions.append(None)
+        new_alignments.append(None)
       new_outputs.append(h)
 
     with vs.variable_scope("1"):
@@ -365,7 +375,7 @@ class LASModel(object):
     with vs.variable_scope("2"):
       create_gru_cell(attention=False)
 
-    return new_outputs, new_states, new_attentions
+    return new_outputs, new_states, new_attentions, new_alignments
 
 
   def create_loss(self):

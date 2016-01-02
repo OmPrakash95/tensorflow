@@ -4,7 +4,7 @@ syntax = "proto3";
 
 package speech4;
 
-message AttentionMaskOptions {
+message AttentionParamsProto {
   string type = 1;
 
   int64 median_window_l = 2;
@@ -30,6 +30,8 @@ message ModelParamsProto {
 
   bool encoder_only = 10;
   bool encoder_lm = 11;
+
+  AttentionParamsProto attention_params = 12;
 };
 
 message AdagradParamsProto {
