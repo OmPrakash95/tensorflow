@@ -298,7 +298,10 @@ class LASModel(object):
         # Energies.
         e = math_ops.reduce_sum(
             v * math_ops.tanh(encoder_embedding + d), [2, 3])
-        if prev_attention and self.model_params.attention_params.type == "median":
+        if self.model_params.attention_params.type == "window":
+          e = attention_mask_ops.attention_mask_window(
+              self.encoder_states[-1][1], decoder_time_idx, e)
+        elif prev_attention and self.model_params.attention_params.type == "median":
           e = attention_mask_ops.attention_mask_median(
               self.encoder_states[-1][1], e, prev_attention)
         else:

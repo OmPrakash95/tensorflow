@@ -186,7 +186,6 @@ class AttentionMaskWindowOp : public OpKernel {
   void Compute(OpKernelContext* ctx) override {
     INPUT_TENSOR(attention_states_sequence_len);
     INPUT_TENSOR(input);
-    INPUT_TENSOR(prev);
 
     OUTPUT_TENSOR(output, input->shape());
 

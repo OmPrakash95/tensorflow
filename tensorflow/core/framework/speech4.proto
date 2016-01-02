@@ -7,8 +7,15 @@ package speech4;
 message AttentionParamsProto {
   string type = 1;
 
+  // TODO(williamchan): These fields are actually not used, but the python op
+  // default values are used instead.
   int64 median_window_l = 2;
   int64 median_window_r = 3;
+
+  int64 s_min = 4;
+  int64 s_max = 5;
+  float v_min = 6;
+  float v_max = 7;
 };
 
 message VisualizationParamsProto {

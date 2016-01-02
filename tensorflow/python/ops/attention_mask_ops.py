@@ -96,7 +96,6 @@ def _AttentionMaskWindowShape(op):
 @ops.RegisterGradient("AttentionMaskWindow")
 def _AttentionMaskWindowGrad(op, *grad):
   attention_mask_grad = gen_attention_mask_ops._attention_mask_window(
-      attention_states_sequence_len=op.inputs[0], index=index, input=grad[0],
-      fill_value=0.0)
+      attention_states_sequence_len=op.inputs[0], index=op.get_attr("index"),
+      input=grad[0], fill_value=0.0)
   return [None] + [attention_mask_grad]
-
