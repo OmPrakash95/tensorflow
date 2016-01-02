@@ -567,7 +567,7 @@ class LASModel(object):
     with open(os.path.join(self.logdir, 'results_%d.pbtxt' % self.epochs), 'w') as proto_file:
       proto_file.write(str(results_proto))
 
-    print("*** epoch done %d ***" % self.epochs)
+    print("*** epoch done %d ***" % (self.epochs + self.global_epochs))
     print("step_total %d, avg_step_time: %f, accuracy %f" % (
         self.step_total, self.avg_step_time, self.epoch_accuracy))
     print("*** epoch done %d ***" % self.epochs)
@@ -576,7 +576,7 @@ class LASModel(object):
   def step(self, sess, forward_only):
     start_time = time.time()
 
-    steps_per_report = 10
+    steps_per_report = 100
     report = forward_only or (self.step_total % steps_per_report == 0)
 
     targets = {}
