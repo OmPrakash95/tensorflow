@@ -34,7 +34,6 @@ def attention_mask(attention_states_sequence_len, input, name=None):
 def _AttentionMaskShape(op):
   return [op.inputs[1].get_shape()]
 
-
 @ops.RegisterGradient("AttentionMask")
 def _AttentionMaskGrad(op, *grad):
   attention_mask_grad = gen_attention_mask_ops._attention_mask(
@@ -66,7 +65,6 @@ def attention_mask_median(attention_states_sequence_len, input, prev,
 def _AttentionMaskMedianShape(op):
   return [op.inputs[1].get_shape()]
 
-
 @ops.RegisterGradient("AttentionMaskMedian")
 def _AttentionMaskMedianGrad(op, *grad):
   attention_mask_grad = gen_attention_mask_ops._attention_mask_median(
@@ -74,3 +72,31 @@ def _AttentionMaskMedianGrad(op, *grad):
       prev=op.inputs[2], fill_value=0.0, window_l=op.get_attr("window_l"),
       window_r=op.get_attr("window_r"))
   return [None] * 2 + [attention_mask_grad]
+
+def attention_mask_window(attention_states_sequence_len, index, input, name=None):
+  r"""AttentionMaskWindow
+
+  Args:
+    attention_states_sequence_len: A `Tensor` of type `int64`.
+    input: A `Tensor` of type `float32`.
+    fill_value: A `float`.
+    name: A name for the operation (optional).
+
+  Returns:
+    A `Tensor` of type `float32`.
+  """
+  return gen_attention_mask_ops._attention_mask_window(
+      attention_states_sequence_len=attention_states_sequence_len, index=index,
+      input=input, fill_value=-np.finfo(np.float32).max, name=name)
+
+@ops.RegisterShape("AttentionMaskWindow")
+def _AttentionMaskWindowShape(op):
+  return [op.inputs[1].get_shape()]
+
+@ops.RegisterGradient("AttentionMaskWindow")
+def _AttentionMaskWindowGrad(op, *grad):
+  attention_mask_grad = gen_attention_mask_ops._attention_mask_window(
+      attention_states_sequence_len=op.inputs[0], index=index, input=grad[0],
+      fill_value=0.0)
+  return [None] + [attention_mask_grad]
+

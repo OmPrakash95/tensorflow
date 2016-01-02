@@ -430,6 +430,7 @@ tf_gen_op_wrapper_py(
     hidden = [
         "AttentionMask",
         "AttentionMaskMedian",
+        "AttentionMaskWindow",
     ],
     require_shape_functions = True,
 )

@@ -29,6 +29,16 @@ void AttentionMaskMedianGPU(
   output->matrix<float>().device(d) = input.matrix<float>().generate(generator);
 }
 
+void AttentionMaskWindowGPU(
+    const GPUDevice& d, float fill_value, int64 s_min, int64 s_max,
+    float v_min, float v_max, int64 index, const Tensor& sequence_len,
+    const Tensor& input, Tensor* output) {
+  generator::AttentionMaskWindowGenerator generator(
+      fill_value, s_min, s_max, v_min, v_max, index, sequence_len.vec<int64>(),
+      input.matrix<float>());
+  output->matrix<float>().device(d) = input.matrix<float>().generate(generator);
+}
+
 __global__
 void ComputeMedianGPU_kernel(
     const int batch_size,

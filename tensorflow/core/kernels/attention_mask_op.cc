@@ -53,6 +53,18 @@ struct AttentionMaskMedian<GPUDevice> {
 };
 
 template <>
+struct AttentionMaskWindow<GPUDevice> {
+  void operator()(
+      const Device& d, float fill_value, int64 s_min, int64 s_max, float v_min,
+      float v_max, int64 index, const Tensor& sequence_len, const Tensor& input,
+      Tensor* output) {
+    AttentionMaskWindowGPU(
+        d, fill_value, s_min, s_max, v_min, v_max, index, sequence_len, input,
+        output);
+  }
+};
+
+template <>
 struct ComputeMedian<GPUDevice> {
   void operator()(
       const GPUDevice& d, const Tensor& input, Tensor* median) {
@@ -157,5 +169,49 @@ class AttentionMaskMedianOp : public OpKernel {
 REGISTER_KERNEL_BUILDER(Name("AttentionMaskMedian")
                              .Device(DEVICE_GPU),
                         AttentionMaskMedianOp<GPUDevice>);
+#endif  // GOOGLE_CUDA
+
+template <typename Device>
+class AttentionMaskWindowOp : public OpKernel {
+ public:
+  explicit AttentionMaskWindowOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("fill_value", &fill_value_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("s_min", &s_min_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("s_max", &s_max_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("v_min", &v_min_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("v_max", &v_max_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("index", &index_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    INPUT_TENSOR(attention_states_sequence_len);
+    INPUT_TENSOR(input);
+    INPUT_TENSOR(prev);
+
+    OUTPUT_TENSOR(output, input->shape());
+    int64 batch_size = output->dim_size(0);
+
+    AttentionMaskWindow<Device>()(
+        ctx->eigen_device<Device>(), fill_value_, s_min, s_max, v_min, v_max,
+        index, *attention_states_sequence_len, *input, output);
+  }
+
+ private:
+  float fill_value_;
+  int64 s_min_;
+  int64 s_max_;
+  float v_min_;
+  float v_max_;
+  int64 index_;
+};
+
+// REGISTER_KERNEL_BUILDER(Name("AttentionMaskWindow")
+//                              .Device(DEVICE_CPU),
+//                         AttentionMaskWindowOp<CPUDevice>);
+
+#if GOOGLE_CUDA
+REGISTER_KERNEL_BUILDER(Name("AttentionMaskWindow")
+                             .Device(DEVICE_GPU),
+                        AttentionMaskWindowOp<GPUDevice>);
 #endif  // GOOGLE_CUDA
 }  // namespace tensorflow
