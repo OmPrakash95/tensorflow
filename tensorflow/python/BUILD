@@ -415,13 +415,21 @@ tf_gen_op_wrapper_py(
 tf_gen_op_wrapper_py(
     name = "gru_ops",
     hidden = [
-        "AttentionMask",
         "Gru",
         "GruCell",
         "GruCellGrad",
         "GruFused",
         "GruFusedGrad",
         "GruGrad",
+    ],
+    require_shape_functions = True,
+)
+
+tf_gen_op_wrapper_py(
+    name = "attention_mask_ops",
+    hidden = [
+        "AttentionMask",
+        "AttentionMaskMedian",
     ],
     require_shape_functions = True,
 )
@@ -606,6 +614,7 @@ py_library(
         "ops/array_grad.py",
         "ops/array_ops.py",
         "ops/attention_ops.py",
+        "ops/attention_mask_ops.py",
         "ops/candidate_sampling_ops.py",
         "ops/clip_ops.py",
         "ops/control_flow_grad.py",
@@ -615,6 +624,7 @@ py_library(
         "ops/embedding_ops.py",
         "ops/gen_array_ops.py",
         "ops/gen_attention_ops.py",
+        "ops/gen_attention_mask_ops.py",
         "ops/gen_control_flow_ops.py",
         "ops/gen_data_flow_ops.py",
         "ops/gen_gru_ops.py",
@@ -663,6 +673,7 @@ py_library(
     srcs_version = "PY2AND3",
     deps = [
         ":array_ops",
+        ":attention_mask_ops",
         ":candidate_sampling_ops",
         ":control_flow_ops",
         ":data_flow_ops",

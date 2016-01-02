@@ -47,31 +47,6 @@ struct GruMatMulFunctor {
 
 }  // end namespace functor
 
-namespace generator {
-class AttentionMaskGenerator {
- public:
-  EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE
-  AttentionMaskGenerator(
-      float fill_value, TTypes<int64>::ConstVec sequence_len,
-      TTypes<float, 2>::ConstTensor input)
-    : fill_value_(fill_value), sequence_len_(sequence_len), input_(input) {}
-
-  EIGEN_DEVICE_FUNC EIGEN_ALWAYS_INLINE
-  float operator()(const Eigen::array<Eigen::DenseIndex, 2>& coords) const {
-    if (coords[1] < sequence_len_(coords[0])) {
-      return input_(coords);
-    } else {
-      return fill_value_;
-    }
-  }
-
- private:
-  float fill_value_;
-  TTypes<int64>::ConstVec sequence_len_;
-  TTypes<float, 2>::ConstTensor input_;
-};
-}  // end namespace generator
-
 template <typename Device>
 struct GruDeviceSynchronize {
   void operator()(const Device& d);
@@ -109,13 +84,6 @@ struct GruRZ {
 template <typename Device>
 struct GruAdd {
   void operator()(const Device& d, const Tensor& a, const Tensor& b, Tensor* c);
-};
-
-template <typename Device>
-struct AttentionMask {
-  void operator()(
-      const Device& d, float fill_value, const Tensor& sequence_len,
-      const Tensor& input, Tensor* output);
 };
 
 template <typename Device>

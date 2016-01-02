@@ -262,27 +262,6 @@ struct GruAdd<GPUDevice> {
 };
 
 template <>
-struct AttentionMask<CPUDevice> {
-  void operator()(
-      const CPUDevice& d, float fill_value, const Tensor& sequence_len,
-      const Tensor& input, Tensor* output) {
-    generator::AttentionMaskGenerator generator(
-        fill_value, sequence_len.vec<int64>(), input.matrix<float>());
-    output->matrix<float>().device(d) = input.matrix<float>().generate(generator);
-  }
-};
-
-template <>
-struct AttentionMask<GPUDevice> {
-  void operator()(
-      const GPUDevice& d, float fill_value, const Tensor& sequence_len,
-      const Tensor& input, Tensor* output) {
-    AttentionMaskGPU(d, fill_value, sequence_len, input, output);
-  }
-};
-
-
-template <>
 struct GruPadTime<CPUDevice> {
   void operator()(
       const CPUDevice& d, const Tensor& sequence_len, const int64 sequence_idx,
@@ -446,37 +425,6 @@ struct GruDg<GPUDevice> {
 };
 
 template <typename Device>
-class AttentionMaskOp : public OpKernel {
- public:
-  explicit AttentionMaskOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("fill_value", &fill_value_));
-  }
-
-  void Compute(OpKernelContext* ctx) override {
-  #define INPUT_TENSOR(T)                                                      \
-    const Tensor* T = nullptr;                                                 \
-    OP_REQUIRES_OK(ctx, ctx->input(#T, &T));
-
-    INPUT_TENSOR(attention_states_sequence_len);
-    INPUT_TENSOR(input);
-
-#define OUTPUT_TENSOR(NAME, SHAPE)                                             \
-    Tensor* NAME = nullptr;                                                    \
-    ctx->allocate_output(#NAME, SHAPE, &NAME);                                 \
-    GruSetZero<Device>()(ctx->eigen_device<Device>(), NAME);
-
-    OUTPUT_TENSOR(output, input->shape());
-
-    AttentionMask<Device>()(
-        ctx->eigen_device<Device>(), fill_value_, *attention_states_sequence_len,
-        *input, output);
-  }
-
- private:
-  float fill_value_;
-};
-
-template <typename Device>
 class TokenSampleOp : public OpKernel {
  public:
   explicit TokenSampleOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -485,6 +433,10 @@ class TokenSampleOp : public OpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    #define INPUT_TENSOR(T)                                                      \
+      const Tensor* T = nullptr;                                                 \
+      OP_REQUIRES_OK(ctx, ctx->input(#T, &T));
+
     INPUT_TENSOR(ground_truth);
     INPUT_TENSOR(token_distribution);
 
@@ -556,6 +508,11 @@ class GruCellOp : public OpKernel {
     INPUT_TENSOR(whz);
     INPUT_TENSOR(wxh);
     INPUT_TENSOR(whh);
+
+    #define OUTPUT_TENSOR(NAME, SHAPE)                                         \
+      Tensor* NAME = nullptr;                                                  \
+      ctx->allocate_output(#NAME, SHAPE, &NAME);                               \
+      GruSetZero<Device>()(ctx->eigen_device<Device>(), NAME);
 
     OUTPUT_TENSOR(r, TensorShape({batch_size, cell_size_}));
     OUTPUT_TENSOR(z, TensorShape({batch_size, cell_size_}));
@@ -953,21 +910,6 @@ class GruFusedOp : public OpKernel {
   int64 sequence_len_max_;
 };
 
-REGISTER_KERNEL_BUILDER(Name("AttentionMask")
-                             .Device(DEVICE_CPU),
-                        AttentionMaskOp<CPUDevice>);
-
-REGISTER_KERNEL_BUILDER(Name("TokenSample")
-                             .Device(DEVICE_CPU),
-                        TokenSampleOp<CPUDevice>);
-
-#if GOOGLE_CUDA
-REGISTER_KERNEL_BUILDER(Name("AttentionMask")
-                             .Device(DEVICE_GPU),
-                        AttentionMaskOp<GPUDevice>);
-#endif  // GOOGLE_CUDA
-
-
 REGISTER_KERNEL_BUILDER(Name("GruCell")
                              .Device(DEVICE_CPU),
                         GruCellOp<CPUDevice>);
@@ -1309,5 +1251,9 @@ REGISTER_KERNEL_BUILDER(Name("GruFusedGrad")
                              .Device(DEVICE_GPU),
                         GruFusedGradOp<GPUDevice>);
 #endif  // GOOGLE_CUDA
+
+REGISTER_KERNEL_BUILDER(Name("TokenSample")
+                             .Device(DEVICE_CPU),
+                        TokenSampleOp<CPUDevice>);
 
 }  // namespace tensorflow
