@@ -21,6 +21,7 @@ def main():
   parser.add_argument('--kaldi_scp', type=str)
   parser.add_argument('--kaldi_txt', type=str)
   parser.add_argument('--kaldi_utt2spk', type=str)
+  parser.add_argument('--sort', type=bool, default=False)
   parser.add_argument('--tf_records', type=str)
   parser.add_argument('--token_model_pbtxt', type=str, default='speech4/conf/token_model_character_simple.pbtxt')
   parser.add_argument('--type', type=str, default='wsj')
@@ -43,9 +44,15 @@ def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=
   # Read the text file into utterance_map.
   utterance_map = {}
   lines = [line.strip() for line in open(kaldi_txt, 'r')]
+  sorted_uttids = []
   for line in lines:
     [uttid, utt] = normalize_text_wsj(line)
     utterance_map[uttid] = utt
+    sorted_uttids.append((uttid, utt))
+  sorted_uttids = sorted(sorted_uttids, key=lambda x: len(x[1]))
+  print sorted_uttids
+
+  assert True == False
 
   # Read the speaker normalization.
   normalization_map = {}
