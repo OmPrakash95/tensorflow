@@ -49,6 +49,8 @@ tf.app.flags.DEFINE_integer('batch_size', 16,
                             """Number of utterances to process in a batch.""")
 tf.app.flags.DEFINE_integer('global_epochs', 0,
                             """Global epochs.""")
+tf.app.flags.DEFINE_integer('global_epochs_max', 20,
+                            """Global epochs max.""")
 
 tf.app.flags.DEFINE_integer('features_width', 123,
                             """Size of each feature.""")
@@ -291,7 +293,7 @@ def main(_):
 
   tf.set_random_seed(FLAGS.random_seed)
 
-  for global_epochs in range(FLAGS.global_epochs, 20):
+  for global_epochs in range(FLAGS.global_epochs, FLAGS.global_epochs_max):
     run('train', 'train_si284', global_epochs)
     run('valid', 'test_dev93', global_epochs)
     #run('test', 'test_eval92')
