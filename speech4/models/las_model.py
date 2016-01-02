@@ -455,7 +455,7 @@ class LASModel(object):
         else:
           label = array_ops.concat(1, frames[idx+delay:idx+delay+frames_to_predict])
 
-        weight = np.tile(np.repeat(np.linspace(1, 2, frames_to_predict), label_dim), [batch_size, 1]) * self.optimization_params.encoder_lm_loss_weight
+        weight = np.tile(np.repeat(np.linspace(1, 10, frames_to_predict), label_dim), [batch_size, 1]) * self.optimization_params.encoder_lm_loss_weight
         weight = tf.convert_to_tensor(weight, dtype=tf.float32)
         loss = tf.nn.l2_loss((label - prediction) * weight)
 
