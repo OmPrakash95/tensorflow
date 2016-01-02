@@ -55,9 +55,9 @@ struct AttentionMaskMedian<GPUDevice> {
 template <>
 struct AttentionMaskWindow<GPUDevice> {
   void operator()(
-      const Device& d, float fill_value, int64 s_min, int64 s_max, float v_min,
-      float v_max, int64 index, const Tensor& sequence_len, const Tensor& input,
-      Tensor* output) {
+      const GPUDevice& d, float fill_value, int64 s_min, int64 s_max,
+      float v_min, float v_max, int64 index, const Tensor& sequence_len,
+      const Tensor& input, Tensor* output) {
     AttentionMaskWindowGPU(
         d, fill_value, s_min, s_max, v_min, v_max, index, sequence_len, input,
         output);
@@ -189,11 +189,10 @@ class AttentionMaskWindowOp : public OpKernel {
     INPUT_TENSOR(prev);
 
     OUTPUT_TENSOR(output, input->shape());
-    int64 batch_size = output->dim_size(0);
 
     AttentionMaskWindow<Device>()(
-        ctx->eigen_device<Device>(), fill_value_, s_min, s_max, v_min, v_max,
-        index, *attention_states_sequence_len, *input, output);
+        ctx->eigen_device<Device>(), fill_value_, s_min_, s_max_, v_min_,
+        v_max_, index_, *attention_states_sequence_len, *input, output);
   }
 
  private:
