@@ -101,7 +101,7 @@ tf.app.flags.DEFINE_float('optimization_params_gd_learning_rate', 0.1,
 tf.app.flags.DEFINE_float('optimization_params_sample_prob', 0.1,
                            """Sample probability.""")
 
-tf.app.flags.DEFINE_float('optimization_params_encoder_lm_loss_weight', 0.1,
+tf.app.flags.DEFINE_float('optimization_params_encoder_lm_loss_weight', 0.01,
                            """This loss should be perhaps decayed?""")
 
 tf.app.flags.DEFINE_string("visualization_params", "", """VisualizationParamsProto""")

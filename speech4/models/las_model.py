@@ -38,6 +38,8 @@ class LASModel(object):
     self.step_time_total = 0
     self.global_epochs = 0
 
+    self.epoch_accuracy = 0.0
+
     self.global_step = tf.Variable(0, trainable=False)
 
     # Create the inputs.
@@ -387,13 +389,59 @@ class LASModel(object):
 
     print('create_loss graph time %f' % (time.time() - start_time))
 
+  def create_loss_sequence_regression(self, state, labels, state_ws, pred_ws, weight):
+    assert len(labels) == len(state_ws)
+    assert len(labels) == len(pred_ws)
+    predictions = []
+    losses = []
+    for label, state_w, pred_w in zip(labels, state_ws, pred_ws):
+      state = tf.nn.elu(nn_ops.xw_plus_b(state, state_w[0], state_w[1]))
+      pred = nn_ops.xw_plus_b(state, pred_w[0], pred_w[1])
+
+      predictions.append(pred)
+      losses.append(tf.nn.l2_loss((label - pred) * weight * self.optimization_params.encoder_lm_loss_weight))
+    return predictions, losses
+
+  def create_loss_encoder_lm_2(
+      self, encoder_states, frames, delay=1, frames_to_predict=10):
+    with vs.variable_scope("encoder_lm"):
+      state_dim = encoder_states[0].get_shape()[1].value
+      prediction_dim = frames[0].get_shape()[1].value
+
+      state_ws = []
+      pred_ws = []
+      for idx in range(frames_to_predict):
+        state_ws.append([vs.get_variable("state_w_%d" % idx, [state_dim, state_dim]),
+                         vs.get_variable("state_b_%d" % idx, [state_dim])])
+        pred_ws.append([vs.get_variable("pred_w_%d" % idx, [state_dim, prediction_dim]),
+                         vs.get_variable("pred_b_%d" % idx, [prediction_dim])])
+
+      self.loss_encoder_lm_losses = []
+      for idx in range(len(encoder_states) - delay - frames_to_predict + 1):
+        encoder_state = encoder_states[idx]
+        labels = frames[idx+delay:idx+delay+frames_to_predict]
+        weight = self.features_weight[idx + delay + frames_to_predict - 1]
+
+        predictions, losses = self.create_loss_sequence_regression(
+            encoder_state, labels, state_ws, pred_ws, weight)
+        self.loss_encoder_lm_losses.extend(losses)
+      self.loss_encoder_lm_loss = tf.reduce_sum(tf.add_n(self.loss_encoder_lm_losses)) / (
+          tf.reduce_sum(tf.add_n(self.features_weight[:-(delay + frames_to_predict - 1)])))
+      self.losses.append(self.loss_encoder_lm_loss)
+
+
   def create_loss_encoder_lm(
-      self, encoder_states, frames, delay=1, frames_to_predict=4):
+      self, encoder_states, frames, delay=1, frames_to_predict=10):
     self.encoder_predictions = []
     assert len(encoder_states) == len(frames)
     with vs.variable_scope("encoder_lm"):
-      prediction_dim = frames[0].get_shape()[1].value * frames_to_predict
-      W = vs.get_variable("W", [encoder_states[0].get_shape()[1].value, prediction_dim])
+      batch_size = self.batch_size
+      state_dim = encoder_states[0].get_shape()[1].value
+      label_dim = frames[0].get_shape()[1].value
+      prediction_dim = label_dim * frames_to_predict
+
+
+      W = vs.get_variable("W", [state_dim, prediction_dim])
       b = vs.get_variable("b", [prediction_dim])
 
       self.loss_encoder_lm_losses = []
@@ -407,11 +455,14 @@ class LASModel(object):
         else:
           label = array_ops.concat(1, frames[idx+delay:idx+delay+frames_to_predict])
 
-        weight = self.features_weight[idx + delay + frames_to_predict - 1]
-        loss = tf.nn.l2_loss((label - prediction)) * weight * self.optimization_params.encoder_lm_loss_weight
+        weight = np.tile(np.repeat(np.linspace(1, 2, frames_to_predict), label_dim), [batch_size, 1]) * self.optimization_params.encoder_lm_loss_weight
+        weight = tf.convert_to_tensor(weight, dtype=tf.float32)
+        loss = tf.nn.l2_loss((label - prediction) * weight)
 
+        loss = loss * self.features_weight[idx + delay + frames_to_predict - 1]
         self.loss_encoder_lm_losses.append(loss)
-      self.loss_encoder_lm_loss = tf.reduce_sum(tf.add_n(self.loss_encoder_lm_losses) / self.batch_size)
+      self.loss_encoder_lm_loss = tf.reduce_sum(tf.add_n(self.loss_encoder_lm_losses)) / (
+          tf.reduce_sum(tf.add_n(self.features_weight[:-(delay + frames_to_predict - 1)])))
       self.losses.append(self.loss_encoder_lm_loss)
 
   def create_optimizer(self):
