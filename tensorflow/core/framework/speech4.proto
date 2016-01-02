@@ -72,7 +72,7 @@ message OptimizationParamsProto {
   string type = 1;
   int64 epochs = 2;
 
-  bool shuffle = 100;
+  bool shuffle = 300;
 
   float max_gradient_norm = 3;
 
