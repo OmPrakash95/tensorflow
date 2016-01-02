@@ -21,16 +21,18 @@ def main():
   parser.add_argument('--kaldi_scp', type=str)
   parser.add_argument('--kaldi_txt', type=str)
   parser.add_argument('--kaldi_utt2spk', type=str)
-  parser.add_argument('--sort', type=bool, default=False)
+  parser.add_argument('--sort', dest='sort', action='store_true')
   parser.add_argument('--tf_records', type=str)
   parser.add_argument('--token_model_pbtxt', type=str, default='speech4/conf/token_model_character_simple.pbtxt')
   parser.add_argument('--type', type=str, default='wsj')
   args   = vars(parser.parse_args())
 
-  convert(args['kaldi_scp'], args['kaldi_txt'], args['tf_records'], args['token_model_pbtxt'], args['kaldi_cmvn_scp'], args['kaldi_utt2spk'])
+  convert(args['kaldi_scp'], args['kaldi_txt'], args['tf_records'],
+      args['token_model_pbtxt'], args['kaldi_cmvn_scp'], args['kaldi_utt2spk'],
+      args['sort'])
 
 
-def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=None, kaldi_utt2spk=None):
+def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=None, kaldi_utt2spk=None, sort=False):
   # Load the token model.
   token_model_proto = token_model_pb2.TokenModelProto()
 
@@ -50,9 +52,6 @@ def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=
     utterance_map[uttid] = utt
     sorted_uttids.append((uttid, utt))
   sorted_uttids = sorted(sorted_uttids, key=lambda x: len(x[1]))
-  print sorted_uttids
-
-  assert True == False
 
   # Read the speaker normalization.
   normalization_map = {}
@@ -67,42 +66,77 @@ def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=
     utt2spk_map[uttid] = spkid
 
   # Process the utterances.
-  kaldi_feat_reader = kaldi_io.SequentialBaseFloatMatrixReader(kaldi_scp)
   tf_record_writer = tf.python_io.TFRecordWriter(tf_records)
   utt_count = 0
-  for uttid, feats in kaldi_feat_reader:
-    # CMVN.
-    spkid = utt2spk_map[uttid]
-    mean_var = normalization_map[spkid]
+  if sort:
+    kaldi_feat_reader = kaldi_io.RandomAccessBaseFloatMatrixReader(kaldi_scp)
+    for uttid, text in sorted_uttids:
+      feats = kaldi_feat_reader[uttid]
 
-    dim = mean_var.shape[1] - 1
-    count = mean_var[0, dim]
+      # CMVN.
+      spkid = utt2spk_map[uttid]
+      mean_var = normalization_map[spkid]
 
-    mean = mean_var[0, :-1] / count
-    var = (mean_var[1, :-1] / count) - mean * mean
+      dim = mean_var.shape[1] - 1
+      count = mean_var[0, dim]
 
-    scale = 1.0 / np.sqrt(var)
-    offset = - mean * scale
+      mean = mean_var[0, :-1] / count
+      var = (mean_var[1, :-1] / count) - mean * mean
 
-    feats_normalized = feats * scale[np.newaxis, :] + offset
+      scale = 1.0 / np.sqrt(var)
+      offset = - mean * scale
 
-    # Corresponding text transcript.
-    text = utterance_map[uttid]
+      feats_normalized = feats * scale[np.newaxis, :] + offset
 
-    # Corresponding tokens.
-    tokens = [token_model_proto.token_sos] * 2 + [character_to_token_map[c] for c in text] + [token_model_proto.token_eos]
-    assert len(tokens)
+      # Corresponding tokens.
+      tokens = [token_model_proto.token_sos] * 2 + [character_to_token_map[c] for c in text] + [token_model_proto.token_eos]
+      assert len(tokens)
 
-    example = tf.train.Example(features=tf.train.Features(feature={
-        'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats_normalized.shape[0]])),
-        'features': tf.train.Feature(float_list=tf.train.FloatList(value=feats_normalized.flatten('C').tolist())),
-        'tokens': tf.train.Feature(int64_list=tf.train.Int64List(value=tokens)),
-        'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(uttid)])),
-        'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
-    tf_record_writer.write(example.SerializeToString())
+      example = tf.train.Example(features=tf.train.Features(feature={
+          'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats_normalized.shape[0]])),
+          'features': tf.train.Feature(float_list=tf.train.FloatList(value=feats_normalized.flatten('C').tolist())),
+          'tokens': tf.train.Feature(int64_list=tf.train.Int64List(value=tokens)),
+          'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(uttid)])),
+          'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
+      tf_record_writer.write(example.SerializeToString())
 
-    utt_count = utt_count + 1
-    print 'processed %d out of %d' % (utt_count, len(utterance_map))
+      utt_count = utt_count + 1
+      print 'processed %d out of %d' % (utt_count, len(utterance_map))
+  else:
+    kaldi_feat_reader = kaldi_io.SequentialBaseFloatMatrixReader(kaldi_scp)
+    for uttid, feats in kaldi_feat_reader:
+      # CMVN.
+      spkid = utt2spk_map[uttid]
+      mean_var = normalization_map[spkid]
+
+      dim = mean_var.shape[1] - 1
+      count = mean_var[0, dim]
+
+      mean = mean_var[0, :-1] / count
+      var = (mean_var[1, :-1] / count) - mean * mean
+
+      scale = 1.0 / np.sqrt(var)
+      offset = - mean * scale
+
+      feats_normalized = feats * scale[np.newaxis, :] + offset
+
+      # Corresponding text transcript.
+      text = utterance_map[uttid]
+
+      # Corresponding tokens.
+      tokens = [token_model_proto.token_sos] * 2 + [character_to_token_map[c] for c in text] + [token_model_proto.token_eos]
+      assert len(tokens)
+
+      example = tf.train.Example(features=tf.train.Features(feature={
+          'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats_normalized.shape[0]])),
+          'features': tf.train.Feature(float_list=tf.train.FloatList(value=feats_normalized.flatten('C').tolist())),
+          'tokens': tf.train.Feature(int64_list=tf.train.Int64List(value=tokens)),
+          'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(uttid)])),
+          'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
+      tf_record_writer.write(example.SerializeToString())
+
+      utt_count = utt_count + 1
+      print 'processed %d out of %d' % (utt_count, len(utterance_map))
 
 
 def normalize_text_wsj(line):
