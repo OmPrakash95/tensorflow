@@ -4,15 +4,6 @@
 
 namespace tensorflow {
 
-REGISTER_OP("AttentionMask")
-    .Attr("fill_value: float")
-    .Input("attention_states_sequence_len: int64")
-    .Input("input: float")
-    .Output("output: float")
-    .Doc(R"doc(
-AttentionMask
-)doc");
-
 REGISTER_OP("TokenSample")
     .Attr("sample_prob: float")
     .Attr("seed: int = 0")

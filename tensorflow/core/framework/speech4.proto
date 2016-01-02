@@ -4,6 +4,13 @@ syntax = "proto3";
 
 package speech4;
 
+message AttentionMaskOptions {
+  string type = 1;
+
+  int64 median_window_l = 2;
+  int64 median_window_r = 3;
+};
+
 message VisualizationParamsProto {
   bool attention = 1;
   bool encoder_predictions = 2;

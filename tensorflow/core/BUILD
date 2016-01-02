@@ -409,6 +409,7 @@ tf_gen_op_libs(
     op_lib_names = [
         "array_ops",
         "attention_ops",
+        "attention_mask_ops",
         "candidate_sampling_ops",
         "control_flow_ops",
         "data_flow_ops",
