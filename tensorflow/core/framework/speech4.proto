@@ -4,6 +4,13 @@ syntax = "proto3";
 
 package speech4;
 
+message ExperimentParamsProto {
+  string description = 1;
+
+  ModelParamsProto model_params = 2;
+  OptimizationParamsProto optimization_params = 3;
+};
+
 message AttentionParamsProto {
   string type = 1;
 
