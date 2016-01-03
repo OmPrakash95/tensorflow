@@ -47,6 +47,10 @@ tf.app.flags.DEFINE_integer('random_seed', 1000,
 
 tf.app.flags.DEFINE_integer('batch_size', 16,
                             """Number of utterances to process in a batch.""")
+
+tf.app.flags.DEFINE_bool("shuffle", True,
+                         """Shuffle the data.""");
+
 tf.app.flags.DEFINE_integer('global_epochs', 0,
                             """Global epochs.""")
 tf.app.flags.DEFINE_integer('global_epochs_max', 20,
@@ -143,6 +147,7 @@ def create_optimization_params(global_epochs):
   optimization_params = speech4_pb2.OptimizationParamsProto()
   optimization_params.type = FLAGS.optimization_params_type
   optimization_params.epochs = 1
+  optimization_params.shuffle = FLAGS.shuffle
 
   if optimization_params.type == "adagrad":
     optimization_params.adagrad.learning_rate = FLAGS.optimization_params_adagrad_learning_rate

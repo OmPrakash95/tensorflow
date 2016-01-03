@@ -1,0 +1,3 @@
+attention_params {
+    type: "window"
+}
