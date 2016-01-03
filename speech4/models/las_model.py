@@ -62,7 +62,13 @@ class LASModel(object):
     variables = tf.all_variables()
     if optimization_params:
       if optimization_params.adam.reset:
-        variables = [v for v in variables if 'Adam' not in v.name]
+        filtered_variables = []
+        for v in variables:
+          if 'Adam' not in v.name and 'beta1_power' not in v.name and 'beta2_power' not in v.name:
+            filtered_variables.append(v)
+        variables = filtered_variables
+    for v in variables:
+      print "laoding: %s" % v.name
     self.saver = tf.train.Saver(tf.all_variables())
 
     if gfile.Exists(ckpt):
