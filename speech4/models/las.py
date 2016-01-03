@@ -48,7 +48,7 @@ tf.app.flags.DEFINE_integer('random_seed', 1000,
 tf.app.flags.DEFINE_integer('batch_size', 16,
                             """Number of utterances to process in a batch.""")
 
-tf.app.flags.DEFINE_bool("shuffle", True,
+tf.app.flags.DEFINE_boolean("shuffle", True,
                          """Shuffle the data.""");
 
 tf.app.flags.DEFINE_integer('global_epochs', 0,
