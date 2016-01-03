@@ -309,7 +309,7 @@ class LASModel(object):
               self.encoder_states[-1][1], decoder_time_idx, e)
         elif prev_attention and self.model_params.attention_params.type == "median":
           e = attention_mask_ops.attention_mask_median(
-              self.encoder_states[-1][1], e, prev_attention)
+              self.encoder_states[-1][1], e, prev_attention, window_l=100, window_r=100)
         else:
           e = attention_mask_ops.attention_mask(self.encoder_states[-1][1], e)
 
