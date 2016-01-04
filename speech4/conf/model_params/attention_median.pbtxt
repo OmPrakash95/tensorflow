@@ -1,3 +1,5 @@
 attention_params {
   type: "median"
+  median_window_l: 100
+  median_window_r: 100
 }
