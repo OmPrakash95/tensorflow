@@ -124,3 +124,10 @@ message UtteranceResultsProto {
   EditDistanceResultsProto cer = 4;
   EditDistanceResultsProto wer = 5;
 };
+
+message ResultsProto {
+  int64 pos = 1;
+  int64 count = 2;
+
+  AccuracyResultsProto acc = 3;
+};

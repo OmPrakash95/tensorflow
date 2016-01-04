@@ -536,6 +536,21 @@ class LASModel(object):
     self.updates = []
 
     grads = tf.gradients(self.losses, params)
+
+    if self.optimization_params.gaussian_noise_stddev:
+      ngrads = []
+      for grad in grads:
+        if isinstance(grad, ops.Tensor):
+          noise = tf.random_normal(
+              grad.get_shape(),
+              stddev=self.optimization_params.gaussian_noise_stddev,
+              seed=self.global_epochs)
+          ngrad = grad + noise
+        else:
+          ngrad = grad
+        ngrads.append(ngrad)
+      grads = ngrads
+
     if self.optimization_params.max_gradient_norm:
       cgrads, norm = clip_ops.clip_by_global_norm(
           grads, self.optimization_params.max_gradient_norm, name="clip_gradients")
