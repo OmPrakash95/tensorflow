@@ -292,7 +292,7 @@ class LASModel(object):
             seed=len(self.prob)))
       emb.set_shape([batch_size, self.model_params.embedding_size])
 
-    def create_attention(decoder_state, prev_attention):
+    def create_attention(decoder_state, prev_alignment):
       with vs.variable_scope("attention"):
         U = vs.get_variable("U", [decoder_cell_size, attention_embedding_size])
         b = vs.get_variable("b", [attention_embedding_size])
@@ -309,11 +309,11 @@ class LASModel(object):
         if self.model_params.attention_params.type == "window":
           e = attention_mask_ops.attention_mask_window(
               self.encoder_states[-1][1], decoder_time_idx, e)
-        elif prev_attention and self.model_params.attention_params.type == "median":
+        elif prev_alignment and self.model_params.attention_params.type == "median":
           window_l = self.model_params.attention_params.median_window_l
           window_r = self.model_params.attention_params.median_window_r
           e = attention_mask_ops.attention_mask_median(
-              self.encoder_states[-1][1], e, prev_attention, window_l=window_l,
+              self.encoder_states[-1][1], e, prev_alignment, window_l=window_l,
               window_r=window_r)
         else:
           e = attention_mask_ops.attention_mask(self.encoder_states[-1][1], e)

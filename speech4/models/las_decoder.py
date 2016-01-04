@@ -41,8 +41,8 @@ class Decoder(object):
 
     self.model_params = model_params
     self.model_params.attention_params.type = "median"
-    self.model_params.attention_params.median_window_l = 1000
-    self.model_params.attention_params.median_window_r = 1000
+    self.model_params.attention_params.median_window_l = 10
+    self.model_params.attention_params.median_window_r = 100
     self.model_params.tokens_len_max = 1
     self.model_params.input_layer = "placeholder"
 

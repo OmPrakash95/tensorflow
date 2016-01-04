@@ -41,20 +41,19 @@ void AttentionMaskWindowGPU(
 
 __global__
 void ComputeMedianGPU_kernel(
-    const int batch_size,
-    const int dist_size,
-    const float* input,
+    const int batch_size, const int dist_size, const float* input,
     int* median) {
   const int b = blockIdx.x;
-
   if (b < batch_size) {
     input += b * dist_size;
 
-    int median_idx = 0;
     float sum = 0.0f;
+    int median_idx = 0;
     for (; median_idx < dist_size; ++median_idx) {
       sum += input[median_idx];
-      if (sum > 0.5f) break;
+      if (sum > 0.5f) {
+        break;
+      }
     }
 
     median[b] = median_idx;

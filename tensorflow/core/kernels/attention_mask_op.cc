@@ -148,7 +148,7 @@ class AttentionMaskMedianOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_INT32, TensorShape({batch_size}), &median));
 
     ComputeMedian<Device>()(
-        ctx->eigen_device<Device>(), *input, &median);
+        ctx->eigen_device<Device>(), *prev, &median);
 
     AttentionMaskMedian<Device>()(
         ctx->eigen_device<Device>(), fill_value_, window_l_, window_r_,
