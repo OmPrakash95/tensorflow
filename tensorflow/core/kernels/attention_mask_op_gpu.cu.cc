@@ -45,10 +45,10 @@ void ComputeMedianGPU_kernel(
     const int dist_size,
     const float* input,
     int* median) {
-  const int tidx = threadIdx.x;
+  const int b = blockIdx.x;
 
-  if (tidx < batch_size) {
-    input += tidx * dist_size;
+  if (b < batch_size) {
+    input += b * dist_size;
 
     int median_idx = 0;
     float sum = 0.0f;
@@ -57,7 +57,7 @@ void ComputeMedianGPU_kernel(
       if (sum > 0.5f) break;
     }
 
-    median[tidx] = median_idx;
+    median[b] = median_idx;
   }
 }
 
@@ -67,7 +67,7 @@ void ComputeMedianGPU(
   const int64 dist_size = input.dim_size(1);
 
   // Our batch sizes are usually 16 or smaller, so we give each their own block.
-  ComputeMedianGPU_kernel<<<1, batch_size, 0, d.stream()>>>(
+  ComputeMedianGPU_kernel<<<batch_size, 1, 0, d.stream()>>>(
       batch_size, dist_size, input.flat<float>().data(),
       median->flat<int>().data());
 }
