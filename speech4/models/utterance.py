@@ -5,6 +5,7 @@
 
 import numpy as np
 
+from tensorflow.core.framework import speech4_pb2
 from speech4.models import las_utils
 
 
@@ -62,8 +63,22 @@ class Utterance(object):
     self.hypothesis_partial = []
     self.hypothesis_complete = []
 
-  def word_distance(self):
+  def compute_word_distance(self, proto):
     ref = self.text.split(' ')
     hyp = self.hypothesis_complete[0].text.split(' ')
 
-    return las_utils.LevensteinDistance(ref, hyp), len(ref)
+    proto.edit_distance = las_utils.LevensteinDistance(ref, hyp)
+    proto.ref_length = len(ref)
+    proto.hyp_length = len(hyp)
+
+    proto.error_rate = float(proto.edit_distance) / float(proto.ref_length)
+
+  def create_proto(self):
+    proto = speech4_pb2.UtteranceResultsProto()
+    proto.uttid = self.uttid
+    proto.ref = self.text
+    proto.hyp = self.hypothesis_complete[0].text
+
+    self.compute_word_distance(proto.wer)
+
+    self.proto = proto

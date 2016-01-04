@@ -95,8 +95,10 @@ message EditDistanceResultsProto {
   int64 ins = 2;
   int64 del = 3;
   int64 sub = 4;
-  int64 hyp_length = 5;
-  int64 ref_length = 6;
+  int64 edit_distance = 5;
+
+  int64 hyp_length = 6;
+  int64 ref_length = 7;
 };
 
 message AccuracyResultsProto {
@@ -104,9 +106,19 @@ message AccuracyResultsProto {
   int64 count = 2;
 };
 
-message ResultsProto {
-  EditDistanceResultsProto cer = 1;
-  EditDistanceResultsProto wer = 2;
+message HypothesisResultsProto {
+  string text = 1;
+  float log_prob = 2;
 
-  AccuracyResultsProto acc = 3;
+  EditDistanceResultsProto cer = 3;
+  EditDistanceResultsProto wer = 4;
+};
+
+message UtteranceResultsProto {
+  string uttid = 1;
+  string ref = 2;
+  string hyp = 3;
+
+  EditDistanceResultsProto cer = 4;
+  EditDistanceResultsProto wer = 5;
 };

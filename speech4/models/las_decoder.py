@@ -49,6 +49,8 @@ class Decoder(object):
     self.dataset = dataset
     self.dataset_size = dataset_size
 
+    self.logdir = logdir
+
     with tf.variable_scope("model"):
       self.model = las_model.LASModel(
           sess, dataset, logdir, ckpt, True, self.decoder_params.beam_width,
@@ -85,9 +87,25 @@ class Decoder(object):
     return utt
 
   def decode(self, sess):
+    edit_distance = speech4_pb2.EditDistanceResultsProto()
+    utts = []
     for _ in range(self.dataset_size):
       utt = self.read_utterance(sess)
       self.decode_utterance(sess, utt)
+
+      edit_distance.edit_distance += utt.proto.wer.edit_distance
+      edit_distance.ref_length += utt.proto.wer.ref_length
+
+      utts.append(utt)
+
+    edit_distance.error_rate = float(edit_distance.edit_distance) / float(edit_distance.ref_length)
+
+    with open(os.path.join(self.logdir, "decode_results.pbtxt"), "w") as proto_file:
+      proto_file.write(str(edit_distance.error_rate))
+
+    with open(os.path.join(self.logdir, "decode_results_details.pbtxt"), "w") as proto_file:
+      for utt in utts:
+        proto_file.write(str(utt.proto))
 
   def decode_utterance(self, sess, utt):
     # Run the encoder.
@@ -136,8 +154,8 @@ class Decoder(object):
     utt.hypothesis_complete = utt.hypothesis_complete[:self.decoder_params.beam_width]
     print 'ground_truth: %s' % utt.text
     print 'top hyp     : %s' % utt.hypothesis_complete[0].text
-    d, l = utt.word_distance()
-    print 'wer         : %f' % (float(d) / float(l))
+    utt.create_proto()
+    print 'wer         : %f' % utt.proto.wer.error_rate
 
   def run_encoder(self, sess, utt):
     feed_dict = {}
