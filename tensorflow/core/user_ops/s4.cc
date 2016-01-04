@@ -3,6 +3,7 @@
 #include "tensorflow/core/example/example.pb.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/token_model.pb.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/protobuf.h"
 
@@ -31,6 +32,8 @@ REGISTER_OP("S4ParseUtterance")
     .Attr("features_fbank_dim: int = 40")
     .Attr("features_len_max: int")
     .Attr("tokens_len_max: int")
+    .Attr("eow_weight: float = 1.0")
+    .Attr("token_model: string = 'speech4/conf/token_model_character_simple.pbtxt'")
     .Input("serialized: string")
     .Output("features: features_len_max * float")
     .Output("features_fbank: features_len_max * float")
@@ -52,6 +55,14 @@ class S4ParseUtterance : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("features_fbank_dim", &features_fbank_dim_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("features_len_max", &features_len_max_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("tokens_len_max", &tokens_len_max_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("eow_weight", &eow_weight_));
+
+    // Read the TokenModelProto.
+    string token_model_pbtxt_path;
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("token_model", &token_model_pbtxt_path));
+    string token_model_pbtxt;
+    TF_CHECK_OK(ReadFileToString(ctx->env(), token_model_pbtxt_path, &token_model_pbtxt));
+    CHECK(protobuf::TextFormat::ParseFromString(token_model_pbtxt, &token_model_proto_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -195,10 +206,15 @@ class S4ParseUtterance : public OpKernel {
       }
       for (int64 s = 0; s < tokens_len; ++s) {
         Tensor* token_slice = output_list_tokens[s];
-        token_slice->flat<int32>().data()[b] = tokens.value(s);
+        int32 token = tokens.value(s);
+        token_slice->flat<int32>().data()[b] = token;
 
         Tensor* weight_slice = output_list_tokens_weights[s];
-        weight_slice->flat<float>().data()[b] = 1.0f;
+        if (token == token_model_proto_.token_eow()) {
+          weight_slice->flat<float>().data()[b] = eow_weight_;
+        } else {
+          weight_slice->flat<float>().data()[b] = 1.0f;
+        }
       }
 
       // Copy the uttid across.
@@ -214,6 +230,9 @@ class S4ParseUtterance : public OpKernel {
   int64 features_fbank_dim_;
   int64 features_len_max_;
   int64 tokens_len_max_;
+  float eow_weight_;
+
+  speech4::TokenModelProto token_model_proto_;
 };
 
 REGISTER_KERNEL_BUILDER(Name("S4ParseUtterance").Device(DEVICE_CPU), S4ParseUtterance);
