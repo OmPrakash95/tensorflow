@@ -141,6 +141,12 @@ def create_model_params():
     with open(FLAGS.model_params, "r") as proto_file:
       google.protobuf.text_format.Merge(proto_file.read(), model_params)
 
+  if model_params.attention_params.type == "median":
+    if not model_params.attention_params.window_l:
+      model_params.attention_params.window_l = 100
+    if not model_params.attention_params.window_r:
+      model_params.attention_params.window_r = 100
+
   return model_params
 
 def create_optimization_params(global_epochs):
@@ -301,7 +307,7 @@ def main(_):
   for global_epochs in range(FLAGS.global_epochs, FLAGS.global_epochs_max):
     run('train', 'train_si284', global_epochs)
     run('valid', 'test_dev93', global_epochs)
-    #run('test', 'test_eval92')
+    #run('test', 'test_eval92', global_epochs)
 
 if __name__ == '__main__':
   tf.app.run()
