@@ -40,6 +40,9 @@ class Decoder(object):
     self.decoder_params = decoder_params
 
     self.model_params = model_params
+    self.model_params.attention_params.type = "median"
+    self.model_params.attention_params.median_window_l = 1000
+    self.model_params.attention_params.median_window_r = 1000
     self.model_params.tokens_len_max = 1
     self.model_params.input_layer = "placeholder"
 
@@ -93,13 +96,16 @@ class Decoder(object):
     # Create the empty hypothesis.
     hyp = utterance.Hypothesis()
     hyp.state_prev = self.create_decoder_states_zero()
+    hyp.alignment_prev = self.create_decoder_alignments_zero()
     hyp.attention_prev = self.create_decoder_attentions_zero()
 
     # Run the decoder for 1 step (needed because we have <sos> <sos> utterance <eos>.
     self.run_decoder_step(sess, utt, [hyp])
     hyp.state_prev = hyp.state_next
+    hyp.alignment_prev = hyp.alignment_next
     hyp.attention_prev = hyp.attention_next
     hyp.state_next = None
+    hyp.alignment_next = None
     hyp.attention_next = None
     hyp.logprobs = None
     hyp.text = ""
@@ -130,6 +136,8 @@ class Decoder(object):
     utt.hypothesis_complete = utt.hypothesis_complete[:self.decoder_params.beam_width]
     print 'ground_truth: %s' % utt.text
     print 'top hyp     : %s' % utt.hypothesis_complete[0].text
+    d, l = utt.word_distance()
+    print 'wer         : %f' % (float(d) / float(l))
 
   def run_encoder(self, sess, utt):
     feed_dict = {}
@@ -147,6 +155,16 @@ class Decoder(object):
       shape = state.get_shape().as_list()
       shape[0] = 1
       initial_state.append(np.zeros(shape, dtype=np.float32))
+    return initial_state
+
+  def create_decoder_alignments_zero(self):
+    initial_state = []
+    for state in self.model.decoder_alignments_initial:
+      shape = state.get_shape().as_list()
+      shape[0] = 1
+      state = np.zeros(shape, dtype=np.float32)
+      state[0,0] = 1
+      initial_state.append(state)
     return initial_state
 
   def create_decoder_attentions_zero(self):
@@ -180,16 +198,23 @@ class Decoder(object):
       feed_dict[self.model.decoder_states_initial[idx]] = np.vstack(
           [hyp.state_prev[idx] for hyp in hyps] + state_padding)
 
-    # Attention states.
+    # Attention context states.
     for idx in range(len(self.model.decoder_attentions_initial)):
       state_padding = [np.zeros([
           pad_length, hyps[0].attention_prev[idx].shape[1]], dtype=np.float32)]
       feed_dict[self.model.decoder_attentions_initial[idx]] = np.vstack(
           [hyp.attention_prev[idx] for hyp in hyps] + state_padding)
 
+    for idx in range(len(self.model.decoder_alignments_initial)):
+      state_padding = [np.zeros([
+          pad_length, hyps[0].alignment_prev[idx].shape[1]], dtype=np.float32)]
+      feed_dict[self.model.decoder_alignments_initial[idx]] = np.vstack(
+          [hyp.alignment_prev[idx] for hyp in hyps] + state_padding)
+
     # Fetch the next state and the log prob.
     fetches = {}
     fetches["decoder_state_last"] = self.model.decoder_state_last
+    fetches["decoder_alignments_last"] = self.model.decoder_alignment_last
     fetches["decoder_attentions_last"] = self.model.decoder_attention_last
     fetches["logprob"] = self.model.logprob
 
@@ -197,5 +222,6 @@ class Decoder(object):
 
     for idx in range(len(hyps)):
       hyps[idx].state_next = [state[idx:idx+1,:] for state in fetches['decoder_state_last']]
+      hyps[idx].alignment_next = [state[idx:idx+1,:] for state in fetches['decoder_alignments_last']]
       hyps[idx].attention_next = [state[idx:idx+1,:] for state in fetches['decoder_attentions_last']]
       hyps[idx].logprobs = [logprob[idx,:] for logprob in fetches['logprob']][0]

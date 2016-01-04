@@ -5,6 +5,8 @@
 
 import numpy as np
 
+from speech4.models import las_utils
+
 
 class Hypothesis(object):
   def __init__(self):
@@ -14,6 +16,8 @@ class Hypothesis(object):
     self.state_next = None
     self.attention_prev = None
     self.attention_next = None
+    self.alignment_prev = None
+    self.alignment_next = None
     self.logprobs = None
 
   def feed_token(self, token_model):
@@ -38,6 +42,7 @@ class Hypothesis(object):
           partial.text = self.text + token_model.token_to_string[token]
           partial.logprob = self.logprob + logprob
           partial.state_prev = self.state_next
+          partial.alignment_prev = self.alignment_next
           partial.attention_prev = self.attention_next
 
           partials.append(partial)
@@ -56,3 +61,9 @@ class Utterance(object):
 
     self.hypothesis_partial = []
     self.hypothesis_complete = []
+
+  def word_distance(self):
+    ref = self.text.split(' ')
+    hyp = self.hypothesis_complete[0].text.split(' ')
+
+    return las_utils.LevensteinDistance(ref, hyp), len(ref)

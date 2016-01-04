@@ -121,12 +121,12 @@ class LASModel(object):
       self.features, self.features_fbank, self.features_len, _, self.features_weight, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
           serialized, features_len_max=self.model_params.features_len_max,
           tokens_len_max=self.model_params.tokens_len_max + 1)
+      for feature_fbank in self.features_fbank:
+        feature_fbank.set_shape([self.batch_size, 40])
 
     # Add the shape to the features.
     for feature in self.features:
       feature.set_shape([self.batch_size, self.model_params.features_width])
-    for feature_fbank in self.features_fbank:
-      feature_fbank.set_shape([self.batch_size, 40])
     for token in self.tokens:
       token.set_shape([self.batch_size])
 
@@ -172,6 +172,7 @@ class LASModel(object):
     self.decoder_states = []
     self.decoder_states_initial = []
     self.decoder_attentions_initial = []
+    self.decoder_alignments_initial = []
     self.decoder_states.append(self.tokens[:-1])
 
     attention_states = []
@@ -264,6 +265,7 @@ class LASModel(object):
           self.prob.append(prob)
           self.logprob.append(tf.log(prob, name="LogProb_%d" % decoder_time_idx))
       self.decoder_state_last = states[1:]
+      self.decoder_alignment_last = filter(None, alignments)
       self.decoder_attention_last = filter(None, attentions)
 
   def create_decoder_cell(
@@ -308,8 +310,11 @@ class LASModel(object):
           e = attention_mask_ops.attention_mask_window(
               self.encoder_states[-1][1], decoder_time_idx, e)
         elif prev_attention and self.model_params.attention_params.type == "median":
+          window_l = self.model_params.attention_params.median_window_l
+          window_r = self.model_params.attention_params.median_window_r
           e = attention_mask_ops.attention_mask_median(
-              self.encoder_states[-1][1], e, prev_attention, window_l=100, window_r=100)
+              self.encoder_states[-1][1], e, prev_attention, window_l=window_l,
+              window_r=window_r)
         else:
           e = attention_mask_ops.attention_mask(self.encoder_states[-1][1], e)
 
@@ -366,7 +371,12 @@ class LASModel(object):
       new_states.append(h)
       if attention:
         prev_alignment = None
-        if prev_alignments:
+        if self.model_params.input_layer == "placeholder":
+          prev_alignment = tf.placeholder(
+              tf.float32, shape=[batch_size, len(self.encoder_states[-1][0])],
+              name="alignment_%d" % stack_idx)
+          self.decoder_alignments_initial.append(prev_alignment)
+        elif prev_alignments:
           prev_alignment = prev_alignments[stack_idx]
         a, c = create_attention(h, prev_alignment)
         new_attentions.append(c)
