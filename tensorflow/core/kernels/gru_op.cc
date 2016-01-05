@@ -472,11 +472,11 @@ class TokenSampleOp : public OpKernel {
           float prob = 0.0f;
           int64 v = 0;
           for (; v < vocab_size; ++v) {
-            if (prob > sample_token_prob[b]) break;
             prob += token_distribution->matrix<float>()(b, v);
+            if (prob >= sample_token_prob[b]) break;
           }
 
-          token->vec<int32>()(b) = v - 1;
+          token->vec<int32>()(b) = v;
         }
       }
     }
