@@ -413,6 +413,11 @@ tf_gen_op_wrapper_py(
 )
 
 tf_gen_op_wrapper_py(
+    name = "decoding_ops",
+    require_shape_functions = True,
+)
+
+tf_gen_op_wrapper_py(
     name = "gru_ops",
     hidden = [
         "Gru",
@@ -622,12 +627,14 @@ py_library(
         "ops/control_flow_ops.py",
         "ops/data_flow_grad.py",
         "ops/data_flow_ops.py",
+        "ops/decoding_ops.py",
         "ops/embedding_ops.py",
         "ops/gen_array_ops.py",
         "ops/gen_attention_ops.py",
         "ops/gen_attention_mask_ops.py",
         "ops/gen_control_flow_ops.py",
         "ops/gen_data_flow_ops.py",
+        "ops/gen_decoding_ops.py",
         "ops/gen_gru_ops.py",
         "ops/gen_image_ops.py",
         "ops/gen_io_ops.py",
