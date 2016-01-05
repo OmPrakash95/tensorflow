@@ -112,6 +112,9 @@ tf.app.flags.DEFINE_float('optimization_params_sample_prob', 0.1,
 tf.app.flags.DEFINE_float('optimization_params_encoder_lm_loss_weight', 0.01,
                            """This loss should be perhaps decayed?""")
 
+tf.app.flags.DEFINE_float('optimization_params_gaussian_noise_stddev', 0.0,
+                           """Noise on the gradients.""")
+
 tf.app.flags.DEFINE_string("visualization_params", "", """VisualizationParamsProto""")
 
 tf.app.flags.DEFINE_string('logdir', '',
@@ -173,6 +176,7 @@ def create_optimization_params(global_epochs):
     optimization_params.sample_prob = FLAGS.optimization_params_sample_prob
 
   optimization_params.encoder_lm_loss_weight = FLAGS.optimization_params_encoder_lm_loss_weight
+  optimization_params.gaussian_noise_stddev = FLAGS.optimization_params_gaussian_noise_stddev
 
   if os.path.isfile(FLAGS.optimization_params):
     with open(FLAGS.optimization_params, "r") as proto_file:
