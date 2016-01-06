@@ -88,6 +88,8 @@ tf.app.flags.DEFINE_float('optimization_params_adagrad_learning_rate', 0.1,
 
 tf.app.flags.DEFINE_float('optimization_params_adagrad_initial_accumulator_value', 0.1,
                            """Adagrad""")
+tf.app.flags.DEFINE_boolean('optimization_params_adagrad_reset', False,
+                           """Adagrad""")
 
 tf.app.flags.DEFINE_float('optimization_params_adam_learning_rate', 0.001,
                            """Adam""")
@@ -161,6 +163,8 @@ def create_optimization_params(global_epochs):
   if optimization_params.type == "adagrad":
     optimization_params.adagrad.learning_rate = FLAGS.optimization_params_adagrad_learning_rate
     optimization_params.adagrad.initial_accumulator_value = FLAGS.optimization_params_adagrad_initial_accumulator_value
+    if FLAGS.optimization_params_adagrad_reset:
+      optimization_params.adagrad.reset = True
   elif optimization_params.type == "adam":
     optimization_params.adam.learning_rate = FLAGS.optimization_params_adam_learning_rate
     optimization_params.adam.beta1 = FLAGS.optimization_params_adam_beta1

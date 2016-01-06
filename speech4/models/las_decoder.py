@@ -95,10 +95,11 @@ class Decoder(object):
 
       edit_distance.edit_distance += utt.proto.wer.edit_distance
       edit_distance.ref_length += utt.proto.wer.ref_length
+      edit_distance.error_rate = float(edit_distance.edit_distance) / float(edit_distance.ref_length)
 
+      print("accum wer: %f (%d / %d)" % (edit_distance.error_rate, edit_distance.edit_distance, edit_distance.ref_length))
       utts.append(utt)
 
-    edit_distance.error_rate = float(edit_distance.edit_distance) / float(edit_distance.ref_length)
 
     with open(os.path.join(self.logdir, "decode_results.pbtxt"), "w") as proto_file:
       proto_file.write(str(edit_distance.error_rate))

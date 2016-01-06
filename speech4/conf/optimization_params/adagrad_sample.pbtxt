@@ -1,0 +1,6 @@
+type: "adagrad"
+adagrad {
+  learning_rate: 0.1
+  initial_accumulator_value: 1.0
+}
+sample_prob: 0.1

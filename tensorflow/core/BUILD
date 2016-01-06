@@ -413,6 +413,7 @@ tf_gen_op_libs(
         "candidate_sampling_ops",
         "control_flow_ops",
         "data_flow_ops",
+        "decoding_ops",
         "gru_ops",
         "image_ops",
         "io_ops",
