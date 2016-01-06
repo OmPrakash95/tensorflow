@@ -60,6 +60,8 @@ class LASModel(object):
       self.create_optimizer()
 
     variables = tf.all_variables()
+    sess.run(tf.initialize_all_variables())
+
     if optimization_params:
       if optimization_params.adam.reset:
         filtered_variables = []
@@ -75,13 +77,11 @@ class LASModel(object):
         variables = filtered_variables
     for v in variables:
       print "laoding: %s" % v.name
-    self.saver = tf.train.Saver(tf.all_variables())
+    self.saver = tf.train.Saver(variables)
 
     if gfile.Exists(ckpt):
       print("Reading model parameters from %s" % ckpt)
       self.saver.restore(sess, ckpt)
-    else:
-      sess.run(tf.initialize_all_variables())
 
   def create_input_layer(self, forward_only):
     if self.model_params.input_layer == 'placeholder':
