@@ -539,10 +539,10 @@ class LASModel(object):
 
     if self.optimization_params.gaussian_noise_stddev:
       ngrads = []
-      for grad in grads:
-        if isinstance(grad, ops.Tensor):
+      for weight, grad in zip(params, grads):
+        if isinstance(grad, tf.Tensor):
           noise = tf.random_normal(
-              grad.get_shape(),
+              weight.get_shape(),
               stddev=self.optimization_params.gaussian_noise_stddev,
               seed=self.global_epochs)
           ngrad = grad + noise
