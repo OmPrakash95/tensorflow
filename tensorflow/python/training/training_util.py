@@ -69,9 +69,10 @@ def write_graph(graph_def, logdir, name, as_text=True):
   if not gfile.IsDirectory(logdir):
     gfile.MakeDirs(logdir)
   path = os.path.join(logdir, name)
-  f = gfile.FastGFile(path, "w")
   if as_text:
+    f = gfile.FastGFile(path, "w")
     f.write(str(graph_def))
   else:
+    f = gfile.FastGFile(path, "wb")
     f.write(graph_def.SerializeToString())
   f.close()
