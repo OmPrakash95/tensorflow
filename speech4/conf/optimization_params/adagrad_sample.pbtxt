@@ -1,6 +1,7 @@
 type: "adagrad"
 adagrad {
   learning_rate: 0.1
-  initial_accumulator_value: 1.0
+  initial_accumulator_value: 0.1
+  reset: true
 }
 sample_prob: 0.1
