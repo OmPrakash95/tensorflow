@@ -63,6 +63,16 @@ struct GruCopy {
 };
 
 template <typename Device>
+struct GruBias {
+  void operator()(const Device& d, const Tensor& b, Tensor* y);
+};
+
+template <typename Device>
+struct GruBiasGrad {
+  void operator()(const Device& d, const Tensor& dx, Tensor* db);
+};
+
+template <typename Device>
 struct GruWxhrz {
   void operator()(
       const Device& d, const Tensor& wxr, const Tensor& whr, const Tensor& wxz,
@@ -142,6 +152,8 @@ struct GruDg {
 void GruDeviceSynchronizeGPU(const GPUDevice& d);
 void GruSetZeroGPU(const GPUDevice& d, Tensor* x);
 void GruCopyGPU(const GPUDevice& d, const Tensor& x, Tensor* y);
+void GruBiasGPU(const GPUDevice& d, const Tensor& b, Tensor* y);
+void GruBiasGradGPU(const GPUDevice& d, const Tensor& dx, Tensor* db);
 void GruWxhrzGPU(
     const GPUDevice& d, const Tensor& wxr, const Tensor& whr, const Tensor& wxz,
     const Tensor& whz, Tensor* w);

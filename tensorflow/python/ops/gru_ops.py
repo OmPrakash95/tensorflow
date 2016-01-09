@@ -10,6 +10,7 @@ from tensorflow.python.ops import common_shapes
 # pylint: disable=wildcard-import
 # 'Constant' gets imported in the module 'array_ops'.
 from tensorflow.python.ops.constant_op import constant
+from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops import gen_gru_ops
 
@@ -29,12 +30,6 @@ def gru_cell(cell_size, sequence_len, h_prev, x, name=None, scope=None, time_idx
 
   Args:
     sequence_len: A `Tensor` of type `int64`.
-    wxr: A `Tensor` of type `float32`.
-    whr: A `Tensor` of type `float32`.
-    wxz: A `Tensor` of type `float32`.
-    whz: A `Tensor` of type `float32`.
-    wxh: A `Tensor` of type `float32`.
-    whh: A `Tensor` of type `float32`.
     h_prev: A `Tensor` of type `float32`.
     x: A `Tensor` of type `float32`.
     cell_size: An `int`.
@@ -58,9 +53,13 @@ def gru_cell(cell_size, sequence_len, h_prev, x, name=None, scope=None, time_idx
     wxh = vs.get_variable("wxh", [input_size, cell_size])
     whh = vs.get_variable("whh", [cell_size, cell_size])
 
+    br = vs.get_variable("br", [cell_size], initializer=init_ops.constant_initializer(1.0))
+    bz = vs.get_variable("bz", [cell_size], initializer=init_ops.constant_initializer(1.0))
+    bh = vs.get_variable("bh", [cell_size], initializer=init_ops.constant_initializer(0.0))
+
     return gen_gru_ops._gru_cell(cell_size=cell_size, sequence_len=sequence_len,
-        wxr=wxr, whr=whr, wxz=wxz, whz=whz, wxh=wxh, whh=whh, h_prev=h_prev,
-        x=x, name=name, time_idx=time_idx)
+        wxr=wxr, whr=whr, wxz=wxz, whz=whz, wxh=wxh, whh=whh, br=br, bz=bz,
+        bh=bh, h_prev=h_prev, x=x, name=name, time_idx=time_idx)
 
 
 @ops.RegisterShape("GruCell")
@@ -81,8 +80,11 @@ def _GruCellGrad(op, *grad):
       whz=op.inputs[4],
       wxh=op.inputs[5],
       whh=op.inputs[6],
-      h_prev=op.inputs[7],
-      x=op.inputs[8],
+      br=op.inputs[7],
+      bz=op.inputs[8],
+      bh=op.inputs[9],
+      h_prev=op.inputs[10],
+      x=op.inputs[11],
       r=op.outputs[0],
       z=op.outputs[1],
       rh=op.outputs[2],
@@ -108,6 +110,7 @@ def _GruCellGradShape(op):
 
   return [tensor_shape.TensorShape([input_size, cell_size]),
           tensor_shape.TensorShape([cell_size, cell_size])] * 3 + [
+          tensor_shape.TensorShape([cell_size])] * 3 + [
           tensor_shape.TensorShape([batch_size, cell_size])] + [
           tensor_shape.TensorShape([batch_size, input_size])]
 
@@ -139,8 +142,13 @@ def gru(cell_size, sequence_len, xs, name=None, scope=None):
     wxh = vs.get_variable("wxh", [input_size, cell_size])
     whh = vs.get_variable("whh", [cell_size, cell_size])
 
+    br = vs.get_variable("br", [cell_size], initializer=init_ops.constant_initializer(1.0))
+    bz = vs.get_variable("bz", [cell_size], initializer=init_ops.constant_initializer(1.0))
+    bh = vs.get_variable("bh", [cell_size], initializer=init_ops.constant_initializer(0.0))
+
     return gen_gru_ops._gru(cell_size=cell_size, sequence_len=sequence_len,
-        wxr=wxr, whr=whr, wxz=wxz, whz=whz, wxh=wxh, whh=whh, xs=xs, name=name)
+        wxr=wxr, whr=whr, wxz=wxz, whz=whz, wxh=wxh, whh=whh, br=br, bz=bz,
+        bh=bh, xs=xs, name=name)
 
 
 @ops.RegisterShape("Gru")
@@ -148,7 +156,7 @@ def _GruShape(op):
   batch_size = op.inputs[0].get_shape()[0].value
   cell_size = op.get_attr("cell_size")
 
-  return [tensor_shape.TensorShape([batch_size, cell_size])] * ((len(op.inputs) - 7) * 5)
+  return [tensor_shape.TensorShape([batch_size, cell_size])] * ((len(op.inputs) - 10) * 5)
 
 
 @ops.RegisterShape("Sink")
@@ -168,7 +176,10 @@ def _GruGrad(op, *grad):
       whz=op.inputs[4],
       wxh=op.inputs[5],
       whh=op.inputs[6],
-      xs=op.inputs[7:],
+      br=op.inputs[7],
+      bz=op.inputs[8],
+      bh=op.inputs[9],
+      xs=op.inputs[10:],
       rs=outputs[0],
       zs=outputs[1],
       rhs=outputs[2],
@@ -193,7 +204,8 @@ def _GruGradShape(op):
 
   return [tensor_shape.TensorShape([input_size, cell_size]),
           tensor_shape.TensorShape([cell_size, cell_size])] * 3 + [
-          tensor_shape.TensorShape([batch_size, input_size])] * ((len(op.inputs) - 7) / 7)
+          tensor_shape.TensorShape([cell_size])] * 3 + [
+          tensor_shape.TensorShape([batch_size, input_size])] * ((len(op.inputs) - 10) / 7)
 
 
 def gru_fused(cell_size, sequence_len, xs, name=None, scope=None):
