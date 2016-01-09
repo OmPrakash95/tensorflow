@@ -69,7 +69,7 @@ tf.app.flags.DEFINE_integer('vocab_size', 64,
 tf.app.flags.DEFINE_integer('embedding_size', 32,
                             """Token vocabulary size.""")
 
-tf.app.flags.DEFINE_integer('encoder_cell_size', 512,
+tf.app.flags.DEFINE_integer('encoder_cell_size', 384,
                             """encoder cell size.""")
 tf.app.flags.DEFINE_integer('decoder_cell_size', 256,
                             """Decoder cell size.""")
