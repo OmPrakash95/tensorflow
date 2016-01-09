@@ -147,10 +147,10 @@ def create_model_params():
       google.protobuf.text_format.Merge(proto_file.read(), model_params)
 
   if model_params.attention_params.type == "median":
-    if not model_params.attention_params.window_l:
-      model_params.attention_params.window_l = 100
-    if not model_params.attention_params.window_r:
-      model_params.attention_params.window_r = 100
+    if not model_params.attention_params.median_window_l:
+      model_params.attention_params.median_window_l = 100
+    if not model_params.attention_params.median_window_r:
+      model_params.attention_params.median_window_r = 100
 
   return model_params
 
