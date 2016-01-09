@@ -203,7 +203,7 @@ class LASModel(object):
     with vs.variable_scope("encoder_embedding"):
       k = vs.get_variable("W", [1, 1, attn_size, self.model_params.attention_embedding_size])
     encoder_embedding = nn_ops.conv2d(encoder_states, k, [1, 1, 1, 1], "SAME")
-    encoder_embedding = tf.nn.relu(encoder_embedding)
+    #encoder_embedding = tf.nn.relu(encoder_embedding)
 
     #self.create_decoder_layer(attention_states=attention_states)
     #self.create_decoder_layer_v1(output_projection=True)
@@ -740,7 +740,7 @@ class LASModel(object):
     if report:
       logperp = 0
       if 'logperp' in fetches:
-        fetches['logperp']
+        logperp = fetches['logperp']
 
       if "encoder_lm_loss" in fetches:
         print fetches["encoder_lm_loss"]
