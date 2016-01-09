@@ -31,7 +31,7 @@ class LASModel(object):
     self.batch_size = batch_size
 
     self.model_params = model_params
-    
+
     self.optimization_params = optimization_params
     self.visualization_params = visualization_params
 
@@ -76,7 +76,7 @@ class LASModel(object):
             filtered_variables.append(v)
         variables = filtered_variables
     for v in variables:
-      print "laoding: %s" % v.name
+      print "loading: %s" % v.name
     self.saver = tf.train.Saver(variables)
 
     if gfile.Exists(ckpt):
@@ -417,7 +417,7 @@ class LASModel(object):
 
       log_perps = seq2seq.sequence_loss(
           self.logits, targets, weights, self.model_params.vocab_size)
-      self.logperp =log_perps
+      self.logperp = log_perps
       self.losses.append(log_perps)
 
     if self.model_params.encoder_lm:
