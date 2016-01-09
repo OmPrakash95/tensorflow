@@ -34,6 +34,10 @@ class LASModel(object):
     
     self.optimization_params = optimization_params
     self.visualization_params = visualization_params
+    if forward_only and self.optimization_params:
+      self.optimization_params.sample_prob = 0.0
+
+    print self.optimization_params
 
     self.step_total = 0
     self.step_time_total = 0
@@ -415,7 +419,7 @@ class LASModel(object):
 
     if self.model_params.encoder_lm:
       # self.create_loss_encoder_lm(self.encoder_states[2][0], self.features_fbank)
-      self.create_loss_encoder_copy_and_predict(self.encoder_states[2][0], self.features_fbank)
+      self.create_loss_encoder_copy_and_predict_delta(self.encoder_states[2][0], self.features_fbank)
 
     print('create_loss graph time %f' % (time.time() - start_time))
 
@@ -479,6 +483,41 @@ class LASModel(object):
         self.encoder_predictions.append(prediction)
 
         label = array_ops.concat(1, frames[idx - frames_to_predict:idx] + frames[idx + 1:idx + frames_to_predict + 1])
+
+        weight = np.concatenate([np.linspace(10, 1, frames_to_predict), np.linspace(1, 10, frames_to_predict)])
+        weight = np.tile(np.repeat(weight, label_dim), [batch_size, 1]) * self.optimization_params.encoder_lm_loss_weight
+        weight = tf.convert_to_tensor(weight, dtype=tf.float32)
+        loss = tf.nn.l2_loss((label - prediction) * weight)
+
+        loss = loss * self.features_weight[idx + frames_to_predict]
+        self.loss_encoder_lm_losses.append(loss)
+      self.loss_encoder_lm_loss = tf.reduce_sum(tf.add_n(self.loss_encoder_lm_losses)) / (
+          tf.reduce_sum(tf.add_n(self.features_weight[:-(frames_to_predict)])))
+      self.losses.append(self.loss_encoder_lm_loss)
+
+  def create_loss_encoder_copy_and_predict_delta(
+      self, encoder_states, frames, frames_to_predict=10):
+    self.encoder_predictions = []
+    assert len(encoder_states) == len(frames)
+    with vs.variable_scope("encoder_lm"):
+      batch_size = self.batch_size
+      state_dim = encoder_states[0].get_shape()[1].value
+      label_dim = frames[0].get_shape()[1].value
+      prediction_dim = label_dim * frames_to_predict * 2
+
+      W = vs.get_variable("W", [state_dim, prediction_dim])
+      b = vs.get_variable("b", [prediction_dim])
+
+      self.loss_encoder_lm_losses = []
+      for idx in range(frames_to_predict, len(encoder_states) - frames_to_predict):
+        encoder_state = encoder_states[idx]
+        prediction = nn_ops.xw_plus_b(encoder_state, W, b, name="encoder_lm_prediction_%d" % idx)
+        self.encoder_predictions.append(prediction)
+
+        label = frames[idx - frames_to_predict:idx] + frames[idx + 1:idx + frames_to_predict + 1]
+        # We want to predict the delta rather than the absolute -- absolute becomes just a low pass filter.
+        label = [l - frames[idx] for l in label]
+        label = array_ops.concat(1, label)
 
         weight = np.concatenate([np.linspace(10, 1, frames_to_predict), np.linspace(1, 10, frames_to_predict)])
         weight = np.tile(np.repeat(weight, label_dim), [batch_size, 1]) * self.optimization_params.encoder_lm_loss_weight
