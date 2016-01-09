@@ -19,6 +19,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import math
+
 import tensorflow.python.platform
 
 import numpy as np
@@ -55,6 +57,11 @@ class UnaryOpTest(tf.test.TestCase):
       tf_cpu = y.eval()
       self.assertShapeEqual(np_ans, y)
       self.assertAllClose(np_ans, tf_cpu)
+
+      # TODO(ebrevdo): add gradient for lgamma (digamma) and remove lgamma here.
+      if tf_func in (tf.lgamma,):
+        return  # Return early
+
       if x.dtype == np.float32:
         s = list(np.shape(x))
         jacob_t, jacob_n = tf.test.compute_gradient(inx,
@@ -94,6 +101,17 @@ class UnaryOpTest(tf.test.TestCase):
   def _sigmoid(self, x):
     return 1.0 / (1.0 + np.exp(-x))
 
+  def _replace_domain_error_with_inf(self, fn):
+    def func(x):
+      try:
+        return fn(x)
+      except ValueError, e:
+        if "domain error" in e.message:
+          return np.inf * np.ones_like(x)
+        else:
+          raise e
+    return func
+
   def testFloatBasic(self):
     x = np.arange(-3, 3).reshape(1, 3, 2).astype(np.float32)
     y = (x + .5).astype(np.float32)     # no zero
@@ -113,6 +131,12 @@ class UnaryOpTest(tf.test.TestCase):
     self._compareBoth(y, np.sign, tf.sign)
     self._compareBoth(x, np.sin, tf.sin)
     self._compareBoth(x, np.cos, tf.cos)
+    self._compareBoth(
+        x,
+        np.vectorize(self._replace_domain_error_with_inf(math.lgamma)),
+        tf.lgamma)
+    self._compareBoth(x, np.vectorize(math.erf), tf.erf)
+    self._compareBoth(x, np.vectorize(math.erfc), tf.erfc)
 
   def testFloatTanhEdge(self):
     x = np.arange(40, 40 + 6).reshape(6).astype(np.float32)
@@ -210,9 +234,10 @@ class BinaryOpTest(tf.test.TestCase):
       np_left = tf_func(x, iny).eval()
       np_right = tf_func(inx, y).eval()
 
-    self.assertAllClose(np_ans, tf_cpu)
-    self.assertAllClose(np_ans, np_left)
-    self.assertAllClose(np_ans, np_right)
+    if np_ans.dtype != np.object:
+      self.assertAllClose(np_ans, tf_cpu)
+      self.assertAllClose(np_ans, np_left)
+      self.assertAllClose(np_ans, np_right)
     self.assertShapeEqual(np_ans, out)
 
   def _compareGradientX(self, x, y, np_func, tf_func):
@@ -368,6 +393,20 @@ class BinaryOpTest(tf.test.TestCase):
     self._compareCpu(x, y, np.subtract, _SUB)
     self._compareCpu(x, y, np.multiply, _MUL)
     self._compareCpu(x, y + 0.1, np.true_divide, _TRUEDIV)
+
+  def testString(self):
+    x = np.array([["x_0_0", "x_0_1", "x_0_2"],
+                  ["x_1_0", "x_1_1", "x_1_2"],
+                  ["x_2_0", "x_2_1", "x_2_2"]], dtype=np.object)
+    y = np.array([["y_0_0", "y_0_1", "y_0_2"],
+                  ["y_1_0", "y_1_1", "y_1_2"],
+                  ["y_2_0", "y_2_1", "y_2_2"]], dtype=np.object)
+    z = np.array([["z_0", "z_1", "z_2"]], dtype=np.object)
+    w = np.array("w", dtype=np.object)
+    self._compareCpu(x, y, _ADD, _ADD)
+    self._compareCpu(x, z, _ADD, _ADD)
+    self._compareCpu(x, w, _ADD, _ADD)
+    self._compareCpu(z, w, _ADD, _ADD)
 
   def _compareBCast(self, xs, ys, dtype, np_func, tf_func):
     x = (1 + np.linspace(0, 5, np.prod(xs))).astype(dtype).reshape(xs)

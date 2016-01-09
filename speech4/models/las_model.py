@@ -31,7 +31,7 @@ class LASModel(object):
     self.batch_size = batch_size
 
     self.model_params = model_params
-    
+
     self.optimization_params = optimization_params
     self.visualization_params = visualization_params
     if forward_only and self.optimization_params:
@@ -64,6 +64,8 @@ class LASModel(object):
       self.create_optimizer()
 
     variables = tf.all_variables()
+    sess.run(tf.initialize_all_variables())
+
     if optimization_params:
       if optimization_params.adam.reset:
         filtered_variables = []
@@ -71,15 +73,19 @@ class LASModel(object):
           if 'Adam' not in v.name and 'beta1_power' not in v.name and 'beta2_power' not in v.name:
             filtered_variables.append(v)
         variables = filtered_variables
+      if optimization_params.adagrad.reset:
+        filtered_variables = []
+        for v in variables:
+          if 'Adagrad' not in v.name:
+            filtered_variables.append(v)
+        variables = filtered_variables
     for v in variables:
-      print "laoding: %s" % v.name
-    self.saver = tf.train.Saver(tf.all_variables())
+      print "loading: %s" % v.name
+    self.saver = tf.train.Saver(variables)
 
     if gfile.Exists(ckpt):
       print("Reading model parameters from %s" % ckpt)
       self.saver.restore(sess, ckpt)
-    else:
-      sess.run(tf.initialize_all_variables())
 
   def create_input_layer(self, forward_only):
     if self.model_params.input_layer == 'placeholder':
@@ -196,6 +202,7 @@ class LASModel(object):
     with vs.variable_scope("encoder_embedding"):
       k = vs.get_variable("W", [1, 1, attn_size, self.model_params.attention_embedding_size])
     encoder_embedding = nn_ops.conv2d(encoder_states, k, [1, 1, 1, 1], "SAME")
+    encoder_embedding = tf.nn.relu(encoder_embedding)
 
     #self.create_decoder_layer(attention_states=attention_states)
     #self.create_decoder_layer_v1(output_projection=True)
@@ -414,7 +421,7 @@ class LASModel(object):
 
       log_perps = seq2seq.sequence_loss(
           self.logits, targets, weights, self.model_params.vocab_size)
-      self.logperp =log_perps
+      self.logperp = log_perps
       self.losses.append(log_perps)
 
     if self.model_params.encoder_lm:
@@ -578,10 +585,10 @@ class LASModel(object):
 
     if self.optimization_params.gaussian_noise_stddev:
       ngrads = []
-      for grad in grads:
-        if isinstance(grad, ops.Tensor):
+      for weight, grad in zip(params, grads):
+        if isinstance(grad, tf.Tensor):
           noise = tf.random_normal(
-              grad.get_shape(),
+              weight.get_shape(),
               stddev=self.optimization_params.gaussian_noise_stddev,
               seed=self.global_epochs)
           ngrad = grad + noise

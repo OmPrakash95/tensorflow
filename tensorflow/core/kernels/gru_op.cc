@@ -137,7 +137,7 @@ struct GruDeviceSynchronize<GPUDevice> {
 template <>
 struct GruSetZero<CPUDevice> {
   void operator()(const CPUDevice& d, Tensor* x) {
-    x->matrix<float>().device(d) = x->matrix<float>().constant(0.0f);
+    x->flat<float>().device(d) = x->flat<float>().constant(0.0f);
   }
 };
 
@@ -159,6 +159,37 @@ template <>
 struct GruCopy<GPUDevice> {
   void operator()(const GPUDevice& d, const Tensor& x, Tensor* y) {
     GruCopyGPU(d, x, y);
+  }
+};
+
+template <>
+struct GruBias<CPUDevice> {
+  void operator()(const CPUDevice& d, const Tensor& b, Tensor* y) {
+    const int batch_size = y->dim_size(0);
+    y->matrix<float>().device(d) =
+        y->matrix<float>() + b.vec<float>().broadcast(Eigen::array<int, 2>({batch_size, 1}));
+  }
+};
+
+template <>
+struct GruBias<GPUDevice> {
+  void operator()(const GPUDevice& d, const Tensor& b, Tensor* y) {
+    GruBiasGPU(d, b, y);
+  }
+};
+
+template <>
+struct GruBiasGrad<CPUDevice> {
+  void operator()(const CPUDevice& d, const Tensor& dx, Tensor* db) {
+    db->vec<float>().device(d) =
+        db->vec<float>() + dx.matrix<float>().sum(Eigen::array<int, 1>(0));
+  }
+};
+
+template <>
+struct GruBiasGrad<GPUDevice> {
+  void operator()(const GPUDevice& d, const Tensor& dx, Tensor* db) {
+    GruBiasGradGPU(d, dx, db);
   }
 };
 
@@ -472,11 +503,11 @@ class TokenSampleOp : public OpKernel {
           float prob = 0.0f;
           int64 v = 0;
           for (; v < vocab_size; ++v) {
-            if (prob > sample_token_prob[b]) break;
             prob += token_distribution->matrix<float>()(b, v);
+            if (prob >= sample_token_prob[b]) break;
           }
 
-          token->vec<int32>()(b) = v - 1;
+          token->vec<int32>()(b) = v;
         }
       }
     }
@@ -509,6 +540,10 @@ class GruCellOp : public OpKernel {
     INPUT_TENSOR(wxh);
     INPUT_TENSOR(whh);
 
+    INPUT_TENSOR(br);
+    INPUT_TENSOR(bz);
+    INPUT_TENSOR(bh);
+
     #define OUTPUT_TENSOR(NAME, SHAPE)                                         \
       Tensor* NAME = nullptr;                                                  \
       ctx->allocate_output(#NAME, SHAPE, &NAME);                               \
@@ -540,11 +575,13 @@ class GruCellOp : public OpKernel {
     // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
     GruMatMul<Device>(ctx, false, *x, false, *wxr, 0.0f, r);
     GruMatMul<Device>(ctx, false, *h_prev, false, *whr, 1.0f, r);
+    GruBias<Device>()(ctx->eigen_device<Device>(), *br, r);
     GruActivationSigmoid<Device>()(ctx->eigen_device<Device>(), r);
 
     // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
     GruMatMul<Device>(ctx, false, *x, false, *wxz, 0.0f, z);
     GruMatMul<Device>(ctx, false, *h_prev, false, *whz, 1.0f, z);
+    GruBias<Device>()(ctx->eigen_device<Device>(), *bz, z);
     GruActivationSigmoid<Device>()(ctx->eigen_device<Device>(), z);
 
     // rh[t] = r[t] .* h_prev[t]
@@ -552,6 +589,7 @@ class GruCellOp : public OpKernel {
     GruCWiseMult<Device>()(ctx->eigen_device<Device>(), *r, *h_prev, 0.0f, rh);
     GruMatMul<Device>(ctx, false, *x, false, *wxh, 0.0f, g);
     GruMatMul<Device>(ctx, false, *rh, false, *whh, 1.0f, g);
+    GruBias<Device>()(ctx->eigen_device<Device>(), *bh, g);
     GruActivationTanh<Device>()(ctx->eigen_device<Device>(), g);
 
     // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
@@ -586,6 +624,10 @@ class GruCellGradOp : public OpKernel {
     INPUT_TENSOR(wxh);
     INPUT_TENSOR(whh);
 
+    INPUT_TENSOR(br);
+    INPUT_TENSOR(bz);
+    INPUT_TENSOR(bh);
+
     INPUT_TENSOR(h_prev);
     INPUT_TENSOR(x);
     INPUT_TENSOR(r);
@@ -616,6 +658,10 @@ class GruCellGradOp : public OpKernel {
     OUTPUT_TENSOR(dwhz, whz->shape());
     OUTPUT_TENSOR(dwxh, wxh->shape());
     OUTPUT_TENSOR(dwhh, whh->shape());
+
+    OUTPUT_TENSOR(dbr, br->shape());
+    OUTPUT_TENSOR(dbz, bz->shape());
+    OUTPUT_TENSOR(dbh, bh->shape());
 
     const int64 input_size = wxr->dim_size(0);
     OUTPUT_TENSOR(dx, TensorShape({batch_size, input_size}));
@@ -669,6 +715,10 @@ class GruCellGradOp : public OpKernel {
     GruMatMul<Device>(ctx, true, *h_prev, false, dr, 0.0f, dwhr);
     GruMatMul<Device>(ctx, true, *h_prev, false, dz, 0.0f, dwhz);
     GruMatMul<Device>(ctx, true, *rh, false, dg, 0.0f, dwhh);
+
+    GruBiasGrad<Device>()(ctx->eigen_device<Device>(), dr, dbr);
+    GruBiasGrad<Device>()(ctx->eigen_device<Device>(), dz, dbz);
+    GruBiasGrad<Device>()(ctx->eigen_device<Device>(), dg, dbh);
   }
 
  private:
@@ -712,6 +762,10 @@ class GruOp : public OpKernel {
     INPUT_TENSOR(whz);
     INPUT_TENSOR(wxh);
     INPUT_TENSOR(whh);
+
+    INPUT_TENSOR(br);
+    INPUT_TENSOR(bz);
+    INPUT_TENSOR(bh);
 
     // Fused matrix mult is faster.
     const int64 input_size = wxr->dim_size(0);
@@ -767,11 +821,13 @@ class GruOp : public OpKernel {
       // r[t] = sigm(x[t] Wxr + h[t - 1] Whr)
       // GruMatMul<Device>(ctx, false, x, false, *wxr, 0.0f, r);
       // if (t > 0) GruMatMul<Device>(ctx, false, *h_prev, false, *whr, 1.0f, r);
+      GruBias<Device>()(ctx->eigen_device<Device>(), *br, r);
       GruActivationSigmoid<Device>()(ctx->eigen_device<Device>(), r);
 
       // z[t] = sigm(x[t] Wxz + h[t - 1] Whz)
       // GruMatMul<Device>(ctx, false, x, false, *wxz, 0.0f, z);
       // if (t > 0) GruMatMul<Device>(ctx, false, *h_prev, false, *whz, 1.0f, z);
+      GruBias<Device>()(ctx->eigen_device<Device>(), *bz, z);
       GruActivationSigmoid<Device>()(ctx->eigen_device<Device>(), z);
 
       // rh[t] = r[t] .* h_prev[t]
@@ -783,6 +839,7 @@ class GruOp : public OpKernel {
       }
       GruMatMul<Device>(ctx, false, x, false, *wxh, 0.0f, g);
       if (t > 0) GruMatMul<Device>(ctx, false, *rh, false, *whh, 1.0f, g);
+      GruBias<Device>()(ctx->eigen_device<Device>(), *bh, g);
       GruActivationTanh<Device>()(ctx->eigen_device<Device>(), g);
 
       // h[t] = z[t] .* h[t - 1] + (1 - z[t]) .* g[t]
@@ -974,6 +1031,10 @@ class GruGradOp : public OpKernel {
     INPUT_TENSOR(wxh);
     INPUT_TENSOR(whh);
 
+    INPUT_TENSOR(br);
+    INPUT_TENSOR(bz);
+    INPUT_TENSOR(bh);
+
     INPUT_LIST(xs);
     INPUT_LIST(rs);
     INPUT_LIST(zs);
@@ -997,6 +1058,10 @@ class GruGradOp : public OpKernel {
     OUTPUT_TENSOR(dwhz, whz->shape());
     OUTPUT_TENSOR(dwxh, wxh->shape());
     OUTPUT_TENSOR(dwhh, whh->shape());
+
+    OUTPUT_TENSOR(dbr, br->shape());
+    OUTPUT_TENSOR(dbz, bz->shape());
+    OUTPUT_TENSOR(dbh, bh->shape());
 
     OUTPUT_LIST(dxs);
 
@@ -1072,6 +1137,10 @@ class GruGradOp : public OpKernel {
         GruMatMul<Device>(ctx, true, *h_prev, false, dz, 1.0f, dwhz);
         GruMatMul<Device>(ctx, true, rh, false, dg, 1.0f, dwhh);
       }
+
+      GruBiasGrad<Device>()(ctx->eigen_device<Device>(), dr, dbr);
+      GruBiasGrad<Device>()(ctx->eigen_device<Device>(), dz, dbz);
+      GruBiasGrad<Device>()(ctx->eigen_device<Device>(), dg, dbh);
     }
   }
 

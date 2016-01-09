@@ -12,11 +12,22 @@ void GruDeviceSynchronizeGPU(const GPUDevice& d) {
 }
 
 void GruSetZeroGPU(const GPUDevice& d, Tensor* x) {
-  x->matrix<float>().device(d) = x->matrix<float>().constant(0.0f);
+  x->flat<float>().device(d) = x->flat<float>().constant(0.0f);
 }
 
 void GruCopyGPU(const GPUDevice& d, const Tensor& x, Tensor* y) {
   y->matrix<float>().device(d) = x.matrix<float>();
+}
+
+void GruBiasGPU(const GPUDevice& d, const Tensor& b, Tensor* y) {
+  const int batch_size = y->dim_size(0);
+  y->matrix<float>().device(d) =
+      y->matrix<float>() + b.vec<float>().broadcast(Eigen::array<int, 2>({batch_size, 1}));
+}
+
+void GruBiasGradGPU(const GPUDevice& d, const Tensor& dx, Tensor* db) {
+  db->vec<float>().device(d) =
+      db->vec<float>() + dx.matrix<float>().sum(Eigen::array<int, 1>(0));
 }
 
 void GruWxhrzGPU(

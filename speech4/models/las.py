@@ -69,7 +69,7 @@ tf.app.flags.DEFINE_integer('vocab_size', 64,
 tf.app.flags.DEFINE_integer('embedding_size', 32,
                             """Token vocabulary size.""")
 
-tf.app.flags.DEFINE_integer('encoder_cell_size', 384,
+tf.app.flags.DEFINE_integer('encoder_cell_size', 512,
                             """encoder cell size.""")
 tf.app.flags.DEFINE_integer('decoder_cell_size', 256,
                             """Decoder cell size.""")
@@ -87,6 +87,8 @@ tf.app.flags.DEFINE_float('optimization_params_adagrad_learning_rate', 0.1,
                            """Adagrad""")
 
 tf.app.flags.DEFINE_float('optimization_params_adagrad_initial_accumulator_value', 0.1,
+                           """Adagrad""")
+tf.app.flags.DEFINE_boolean('optimization_params_adagrad_reset', False,
                            """Adagrad""")
 
 tf.app.flags.DEFINE_float('optimization_params_adam_learning_rate', 0.001,
@@ -145,10 +147,10 @@ def create_model_params():
       google.protobuf.text_format.Merge(proto_file.read(), model_params)
 
   if model_params.attention_params.type == "median":
-    if not model_params.attention_params.window_l:
-      model_params.attention_params.window_l = 100
-    if not model_params.attention_params.window_r:
-      model_params.attention_params.window_r = 100
+    if not model_params.attention_params.median_window_l:
+      model_params.attention_params.median_window_l = 100
+    if not model_params.attention_params.median_window_r:
+      model_params.attention_params.median_window_r = 100
 
   return model_params
 
@@ -161,6 +163,8 @@ def create_optimization_params(global_epochs):
   if optimization_params.type == "adagrad":
     optimization_params.adagrad.learning_rate = FLAGS.optimization_params_adagrad_learning_rate
     optimization_params.adagrad.initial_accumulator_value = FLAGS.optimization_params_adagrad_initial_accumulator_value
+    if FLAGS.optimization_params_adagrad_reset:
+      optimization_params.adagrad.reset = True
   elif optimization_params.type == "adam":
     optimization_params.adam.learning_rate = FLAGS.optimization_params_adam_learning_rate
     optimization_params.adam.beta1 = FLAGS.optimization_params_adam_beta1

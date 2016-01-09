@@ -408,7 +408,7 @@ Computes exponential of x element-wise.  \\(y = e^x\\).
 
 ### `tf.log(x, name=None)` {#log}
 
-Computes natural logrithm of x element-wise.
+Computes natural logarithm of x element-wise.
 
 I.e., \\(y = \log_e x\\).
 
@@ -525,6 +525,63 @@ Computes sin of x element-wise.
 ##### Returns:
 
   A `Tensor`. Has the same type as `x`.
+
+
+- - -
+
+### `tf.lgamma(x, name=None)` {#lgamma}
+
+Computes `ln(|gamma(x)|)` element-wise.
+
+##### Args:
+
+
+*  <b>`x`</b>: A Tensor with type `float`, `double`, `int32`, `int64`,
+    or `qint32`.
+*  <b>`name`</b>: A name for the operation (optional).
+
+##### Returns:
+
+  A Tensor with the same type as `x` if `x.dtype != qint32` otherwise
+    the return type is `quint8`.
+
+
+- - -
+
+### `tf.erf(x, name=None)` {#erf}
+
+Computes Gauss error function of `x` element-wise.
+
+##### Args:
+
+
+*  <b>`x`</b>: A Tensor with type `float`, `double`, `int32`, `int64`,
+    or `qint32`.
+*  <b>`name`</b>: A name for the operation (optional).
+
+##### Returns:
+
+  A Tensor with the same type as `x` if `x.dtype != qint32` otherwise
+    the return type is `quint8`.
+
+
+- - -
+
+### `tf.erfc(x, name=None)` {#erfc}
+
+Computes complementary error function of `x` element-wise.
+
+##### Args:
+
+
+*  <b>`x`</b>: A Tensor with type `float`, `double`, `int32`, `int64`,
+    or `qint32`.
+*  <b>`name`</b>: A name for the operation (optional).
+
+##### Returns:
+
+  A Tensor with the same type as `x` if `x.dtype != qint32` otherwise
+    the return type is `quint8`.
 
 
 
@@ -1961,7 +2018,7 @@ Computes the inverse permutation of a tensor.
 
 This operation computes the inverse of an index permutation. It takes a 1-D
 integer tensor `x`, which represents the indices of a zero-based array, and
-swaps each value with its index position. In other words, for an ouput tensor
+swaps each value with its index position. In other words, for an output tensor
 `y` and an input tensor `x`, this operation computes the following:
 
 `y[x[i]] = i for i in [0, 1, ..., len(x) - 1]`

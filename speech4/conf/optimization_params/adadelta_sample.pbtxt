@@ -1,8 +1,0 @@
-type: "adam"
-adam {
-  learning_rate: 0.001
-  beta1: 0.9
-  beta2: 0.999
-  epsilon: 1e-9
-}
-sample_prob: 0.1

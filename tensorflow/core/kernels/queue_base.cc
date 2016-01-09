@@ -16,6 +16,7 @@ limitations under the License.
 #include "tensorflow/core/kernels/queue_base.h"
 
 #include "tensorflow/core/lib/core/errors.h"
+#include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/port.h"
 #include "tensorflow/core/public/tensor_shape.h"
 
@@ -345,7 +346,14 @@ Status QueueBase::CopySliceToElement(const Tensor& parent, Tensor* element,
   HANDLE_TYPE(DT_INT16);
   HANDLE_TYPE(DT_INT8);
   HANDLE_TYPE(DT_STRING);
+  HANDLE_TYPE(DT_COMPLEX64);
   HANDLE_TYPE(DT_INT64);
+  HANDLE_TYPE(DT_BOOL);
+  HANDLE_TYPE(DT_QINT8);
+  HANDLE_TYPE(DT_QUINT8);
+  HANDLE_TYPE(DT_QINT32);
+  HANDLE_TYPE(DT_QINT16);
+  HANDLE_TYPE(DT_QUINT16);
 #undef HANDLE_TYPE
   return errors::Unimplemented("Unhandled data type: ", parent.dtype());
 }
@@ -365,7 +373,14 @@ Status QueueBase::CopyElementToSlice(const Tensor& element, Tensor* parent,
   HANDLE_TYPE(DT_INT16);
   HANDLE_TYPE(DT_INT8);
   HANDLE_TYPE(DT_STRING);
+  HANDLE_TYPE(DT_COMPLEX64);
   HANDLE_TYPE(DT_INT64);
+  HANDLE_TYPE(DT_BOOL);
+  HANDLE_TYPE(DT_QINT8);
+  HANDLE_TYPE(DT_QUINT8);
+  HANDLE_TYPE(DT_QINT32);
+  HANDLE_TYPE(DT_QINT16);
+  HANDLE_TYPE(DT_QUINT16);
 #undef HANDLE_TYPE
   return errors::Unimplemented("Unhandled data type: ", element.dtype());
 }
