@@ -86,6 +86,7 @@ class LASModel(object):
     if gfile.Exists(ckpt):
       print("Reading model parameters from %s" % ckpt)
       self.saver.restore(sess, ckpt)
+    self.saver = tf.train.Saver(tf.all_variables())
 
   def create_input_layer(self, forward_only):
     if self.model_params.input_layer == 'placeholder':
@@ -402,8 +403,8 @@ class LASModel(object):
 
     with vs.variable_scope("1"):
       create_gru_cell(attention=True)
-    with vs.variable_scope("2"):
-      create_gru_cell(attention=False)
+    #with vs.variable_scope("2"):
+    #  create_gru_cell(attention=False)
 
     return new_outputs, new_states, new_attentions, new_alignments
 
