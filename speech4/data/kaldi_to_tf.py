@@ -27,12 +27,15 @@ def main():
   parser.add_argument('--type', type=str, default='wsj')
   args   = vars(parser.parse_args())
 
-  convert(args['kaldi_scp'], args['kaldi_txt'], args['tf_records'],
-      args['token_model_pbtxt'], args['kaldi_cmvn_scp'], args['kaldi_utt2spk'],
-      args['sort'])
+  convert(
+      args['kaldi_scp'], args['kaldi_txt'], args['tf_records'],
+      args['token_model_pbtxt'], args['type'], args['kaldi_cmvn_scp'],
+      args['kaldi_utt2spk'], args['sort'])
 
 
-def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=None, kaldi_utt2spk=None, sort=False):
+def convert(
+    kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, normalize_text,
+    kaldi_cmvn_scp=None, kaldi_utt2spk=None, sort=False):
   # Load the token model.
   token_model_proto = token_model_pb2.TokenModelProto()
 
@@ -48,22 +51,31 @@ def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=
   lines = [line.strip() for line in open(kaldi_txt, 'r')]
   sorted_uttids = []
   for line in lines:
-    [uttid, utt] = normalize_text_wsj(line)
+    if normalize_text == 'wsj':
+      [uttid, utt] = normalize_text_wsj(line)
+    elif normalize_text == 'eval2000':
+      [uttid, utt] = normalize_text_eval2000(line)
+    elif normalize_text == 'swbd':
+      [uttid, utt] = normalize_text_swbd(line)
+    else:
+      raise Exception('Unknown normalize_text: %s' % normalize_text)
     utterance_map[uttid] = utt
     sorted_uttids.append((uttid, utt))
   sorted_uttids = sorted(sorted_uttids, key=lambda x: len(x[1]))
 
   # Read the speaker normalization.
   normalization_map = {}
-  kaldi_cmvn_reader = kaldi_io.SequentialBaseFloatMatrixReader(kaldi_cmvn_scp)
-  for [spkid, mean_var] in kaldi_cmvn_reader:
-    normalization_map[spkid] = mean_var
+  if kaldi_cmvn_scp:
+    kaldi_cmvn_reader = kaldi_io.SequentialBaseFloatMatrixReader(kaldi_cmvn_scp)
+    for [spkid, mean_var] in kaldi_cmvn_reader:
+      normalization_map[spkid] = mean_var
 
   utt2spk_map = {}
-  lines = [line.strip() for line in open(kaldi_utt2spk, 'r')]
-  for line in lines:
-    [uttid, spkid] = line.split(' ')
-    utt2spk_map[uttid] = spkid
+  if kaldi_utt2spk:
+    lines = [line.strip() for line in open(kaldi_utt2spk, 'r')]
+    for line in lines:
+      [uttid, spkid] = line.split(' ')
+      utt2spk_map[uttid] = spkid
 
   # Process the utterances.
   tf_record_writer = tf.python_io.TFRecordWriter(tf_records)
@@ -74,19 +86,22 @@ def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=
       feats = kaldi_feat_reader[uttid]
 
       # CMVN.
-      spkid = utt2spk_map[uttid]
-      mean_var = normalization_map[spkid]
+      if utt2spk_map and normalization_map:
+        spkid = utt2spk_map[uttid]
+        mean_var = normalization_map[spkid]
 
-      dim = mean_var.shape[1] - 1
-      count = mean_var[0, dim]
+        dim = mean_var.shape[1] - 1
+        count = mean_var[0, dim]
 
-      mean = mean_var[0, :-1] / count
-      var = (mean_var[1, :-1] / count) - mean * mean
+        mean = mean_var[0, :-1] / count
+        var = (mean_var[1, :-1] / count) - mean * mean
 
-      scale = 1.0 / np.sqrt(var)
-      offset = - mean * scale
+        scale = 1.0 / np.sqrt(var)
+        offset = - mean * scale
 
-      feats_normalized = feats * scale[np.newaxis, :] + offset
+        feats_normalized = feats * scale[np.newaxis, :] + offset
+      else:
+        feats_normalized = feats
 
       # Corresponding tokens.
       tokens = [token_model_proto.token_sos] * 2 + [character_to_token_map[c] for c in text] + [token_model_proto.token_eos]
@@ -106,19 +121,22 @@ def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt, kaldi_cmvn_scp=
     kaldi_feat_reader = kaldi_io.SequentialBaseFloatMatrixReader(kaldi_scp)
     for uttid, feats in kaldi_feat_reader:
       # CMVN.
-      spkid = utt2spk_map[uttid]
-      mean_var = normalization_map[spkid]
+      if utt2spk_map and normalization_map:
+        spkid = utt2spk_map[uttid]
+        mean_var = normalization_map[spkid]
 
-      dim = mean_var.shape[1] - 1
-      count = mean_var[0, dim]
+        dim = mean_var.shape[1] - 1
+        count = mean_var[0, dim]
 
-      mean = mean_var[0, :-1] / count
-      var = (mean_var[1, :-1] / count) - mean * mean
+        mean = mean_var[0, :-1] / count
+        var = (mean_var[1, :-1] / count) - mean * mean
 
-      scale = 1.0 / np.sqrt(var)
-      offset = - mean * scale
+        scale = 1.0 / np.sqrt(var)
+        offset = - mean * scale
 
-      feats_normalized = feats * scale[np.newaxis, :] + offset
+        feats_normalized = feats * scale[np.newaxis, :] + offset
+      else:
+        feats_normalized = feats
 
       # Corresponding text transcript.
       text = utterance_map[uttid]
@@ -222,9 +240,7 @@ def normalize_text_wsj(line):
   return [uttid, utt]
 
 
-def normalize_text_swbd(lines, utterance_list_proto):
-  utterance_proto = utterance_list_proto.utterances.add()
-
+def normalize_text_swbd(line):
   cols = line.split(' ', 1)
   assert len(cols) >= 1 and len(cols) <= 2
   uttid = cols[0]
@@ -234,8 +250,6 @@ def normalize_text_swbd(lines, utterance_list_proto):
     utt = cols[1]
 
   assert '#' not in utt
-
-  utterance_proto.transcript = utt
 
   # Normalize to uppercase.
   utt = utt.upper()
@@ -275,12 +289,7 @@ def normalize_text_swbd(lines, utterance_list_proto):
   # Remove double spaces.
   utt = ' '.join(filter(bool, utt.split(' ')))
 
-  utterance_proto.uttid = uttid
-  utterance_proto.transcript_normalized = utt
-
-  # for c in utt:
-  #   if c == '#': c = '<UNK>'
-  #   utterance_proto.tokens.append(c)
+  return [uttid, utt]
 
 
 def normalize_text_eval2000(line):

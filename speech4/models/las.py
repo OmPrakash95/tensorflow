@@ -42,6 +42,13 @@ tf.app.flags.DEFINE_integer('device', 0,
 tf.app.flags.DEFINE_string('ckpt', '',
                             """Checkpoint to recover from.""")
 
+tf.app.flags.DEFINE_string('dataset_train', 'train_si284',
+                            """Dataset.""")
+tf.app.flags.DEFINE_string('dataset_valid', 'test_dev93',
+                            """Dataset.""")
+tf.app.flags.DEFINE_string('dataset_test', 'test_eval92',
+                            """Dataset.""")
+
 tf.app.flags.DEFINE_integer('random_seed', 1000,
                             """Random seed.""")
 
@@ -244,6 +251,12 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
   elif dataset == 'test_eval92':
     dataset = 'speech4/data/test_eval92.tfrecords'
     dataset_size = 333
+  elif dataset == "swbd":
+    dataset = "speech4/data/swbd.tfrecords"
+    dataset_size = 263775
+  elif dataset_size == "eval2000":
+    dataset = "speech4/data/eval2000.tfrecords"
+    dataset_size = 4458
 
   # Create our graph.
   with tf.device(device):
