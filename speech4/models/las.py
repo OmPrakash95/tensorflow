@@ -326,9 +326,9 @@ def main(_):
   tf.set_random_seed(FLAGS.random_seed)
 
   for global_epochs in range(FLAGS.global_epochs, FLAGS.global_epochs_max):
-    run('train', 'train_si284', global_epochs)
-    run('valid', 'test_dev93', global_epochs)
-    #run('test', 'test_eval92', global_epochs)
+    run('train', FLAGS.dataset_train, global_epochs)
+    run('valid', FLAGS.dataset_valid, global_epochs)
+    #run('test', FLAGS.dataset_test, global_epochs)
 
 if __name__ == '__main__':
   tf.app.run()
