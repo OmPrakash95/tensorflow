@@ -86,6 +86,7 @@ class LASModel(object):
     if gfile.Exists(ckpt):
       print("Reading model parameters from %s" % ckpt)
       self.saver.restore(sess, ckpt)
+    self.saver = tf.train.Saver(tf.all_variables())
 
   def create_input_layer(self, forward_only):
     if self.model_params.input_layer == 'placeholder':
@@ -202,7 +203,7 @@ class LASModel(object):
     with vs.variable_scope("encoder_embedding"):
       k = vs.get_variable("W", [1, 1, attn_size, self.model_params.attention_embedding_size])
     encoder_embedding = nn_ops.conv2d(encoder_states, k, [1, 1, 1, 1], "SAME")
-    encoder_embedding = tf.nn.relu(encoder_embedding)
+    #encoder_embedding = tf.nn.relu(encoder_embedding)
 
     #self.create_decoder_layer(attention_states=attention_states)
     #self.create_decoder_layer_v1(output_projection=True)
@@ -402,8 +403,8 @@ class LASModel(object):
 
     with vs.variable_scope("1"):
       create_gru_cell(attention=True)
-    with vs.variable_scope("2"):
-      create_gru_cell(attention=False)
+    #with vs.variable_scope("2"):
+    #  create_gru_cell(attention=False)
 
     return new_outputs, new_states, new_attentions, new_alignments
 
@@ -739,7 +740,7 @@ class LASModel(object):
     if report:
       logperp = 0
       if 'logperp' in fetches:
-        fetches['logperp']
+        logperp = fetches['logperp']
 
       if "encoder_lm_loss" in fetches:
         print fetches["encoder_lm_loss"]
