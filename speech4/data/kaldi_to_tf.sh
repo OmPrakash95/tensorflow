@@ -10,27 +10,42 @@ echo "---------------------------------------------------------------------"
 
 KALDI_ROOT=/data-local/wchan/kaldi
 
-if [ -z $KALDI_RECIPE_PATH ]; then
-  KALDI_RECIPE_PATH=/data-local/wchan/kaldi/egs/wsj/s5
-fi
-
-for dataset in train_si284 test_dev93 test_eval92; do
+# WSJ
+for dataset in train_si284; do
   python speech4/data/kaldi_to_tf.py \
-      --kaldi_cmvn_scp scp:${KALDI_RECIPE_PATH}/data/${dataset}/cmvn.scp \
-      --kaldi_scp scp:${KALDI_RECIPE_PATH}/data/${dataset}/feats.scp \
-      --kaldi_txt ${KALDI_RECIPE_PATH}/data/${dataset}/text \
-      --kaldi_utt2spk ${KALDI_RECIPE_PATH}/data/${dataset}/utt2spk \
+      --kaldi_cmvn_scp scp:${KALDI_ROOT}/egs/wsj/s5/data/${dataset}/cmvn.scp \
+      --kaldi_scp scp:${KALDI_ROOT}/egs/wsj/s5/data/${dataset}/feats.scp \
+      --kaldi_txt ${KALDI_ROOT}/egs/wsj/s5/data/${dataset}/text \
+      --kaldi_utt2spk ${KALDI_ROOT}/egs/wsj/s5/data/${dataset}/utt2spk \
       --tf_records speech4/data/${dataset}.tfrecords \
       --type wsj
 done
 
-for dataset in train_si284 test_dev93 test_eval92; do
+for dataset in test_dev93 test_eval92; do
   python speech4/data/kaldi_to_tf.py \
-      --kaldi_cmvn_scp scp:${KALDI_RECIPE_PATH}/data/${dataset}/cmvn.scp \
-      --kaldi_scp scp:${KALDI_RECIPE_PATH}/data/${dataset}/feats.scp \
-      --kaldi_txt ${KALDI_RECIPE_PATH}/data/${dataset}/text \
-      --kaldi_utt2spk ${KALDI_RECIPE_PATH}/data/${dataset}/utt2spk \
+      --kaldi_cmvn_scp scp:${KALDI_ROOT}/egs/wsj/s5/data/${dataset}/cmvn.scp \
+      --kaldi_scp scp:${KALDI_ROOT}/egs/wsj/s5/data/${dataset}/feats.scp \
+      --kaldi_txt ${KALDI_ROOT}/egs/wsj/s5/data/${dataset}/text \
+      --kaldi_utt2spk ${KALDI_ROOT}/egs/wsj/s5/data/${dataset}/utt2spk \
       --sort \
       --tf_records speech4/data/${dataset}_sorted.tfrecords \
       --type wsj
 done
+
+# SWBD
+data="${KALDI_ROOT}/egs/swbd/s5c/data/train"
+feats="ark,s,cs:${KALDI_ROOT}/src/featbin/apply-cmvn --norm-vars=true --utt2spk=ark:${data}/utt2spk scp:${data}/cmvn.scp scp:${data}/feats.scp ark:- |"
+python speech4/data/kaldi_to_tf.py \
+    --kaldi_scp "${feats}" \
+    --kaldi_txt ${data}/text \
+    --tf_records speech4/data/swbd.tfrecords \
+    --type swbd
+
+# eval2000
+data="${KALDI_ROOT}/egs/swbd/s5c/data/eval2000"
+feats="ark,s,cs:${KALDI_ROOT}/src/featbin/apply-cmvn --norm-vars=true --utt2spk=ark:${data}/utt2spk scp:${data}/cmvn.scp scp:${data}/feats.scp ark:- |"
+python speech4/data/kaldi_to_tf.py \
+    --kaldi_scp "${feats}" \
+    --kaldi_txt ${data}/text \
+    --tf_records speech4/data/eval2000.tfrecords \
+    --type eval2000
