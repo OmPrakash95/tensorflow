@@ -114,6 +114,12 @@ class LASModel(object):
         self.dataset_size = 503
       elif 'test_eval92' in self.dataset:
         self.dataset_size = 333
+      elif 'swbd' in self.dataset:
+        self.dataset_size = 263775
+      elif 'eval2000' in self.dataset:
+        self.dataset_size = 4458
+      else:
+        raise Exception("Unknown dataset: %s" % self.dataset)
       filename_queue = tf.train.string_input_producer([self.dataset])
 
       reader = tf.TFRecordReader()
@@ -403,8 +409,8 @@ class LASModel(object):
 
     with vs.variable_scope("1"):
       create_gru_cell(attention=True)
-    #with vs.variable_scope("2"):
-    #  create_gru_cell(attention=False)
+    with vs.variable_scope("2"):
+      create_gru_cell(attention=False)
 
     return new_outputs, new_states, new_attentions, new_alignments
 
