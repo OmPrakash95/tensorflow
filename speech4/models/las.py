@@ -254,7 +254,7 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
   elif dataset == "swbd":
     dataset = "speech4/data/swbd.tfrecords"
     dataset_size = 263775
-  elif dataset_size == "eval2000":
+  elif dataset == "eval2000":
     dataset = "speech4/data/eval2000.tfrecords"
     dataset_size = 4458
 
