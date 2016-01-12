@@ -83,6 +83,7 @@ tf.app.flags.DEFINE_integer('decoder_cell_size', 256,
 tf.app.flags.DEFINE_integer('attention_embedding_size', 128,
                             """Attention embedding size.""")
 
+tf.app.flags.DEFINE_string("decoder_params", "", """decoder_params proto""")
 tf.app.flags.DEFINE_string("model_params", "", """model_params proto""")
 tf.app.flags.DEFINE_string("optimization_params", "", """model_params proto""")
 
@@ -306,6 +307,10 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
 
         decoder_params = speech4_pb2.DecoderParamsProto()
         decoder_params.beam_width = FLAGS.beam_width
+
+        if os.path.isfile(FLAGS.decoder_params):
+          with open(FLAGS.decoder_params, "r") as proto_file:
+            google.protobuf.text_format.Merge(proto_file.read(), decoder_params)
 
         decoder = las_decoder.Decoder(
             sess, dataset, dataset_size, FLAGS.logdir, ckpt, decoder_params, model_params)

@@ -1,1 +1,1 @@
-token_model: "speech4/conf/token_model_character_simple.pbtxt"
+token_model: "speech4/conf/token_model_gale_chinese.pbtxt"

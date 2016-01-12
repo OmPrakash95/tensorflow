@@ -37,8 +37,6 @@ class LASModel(object):
     if forward_only and self.optimization_params:
       self.optimization_params.sample_prob = 0.0
 
-    print self.optimization_params
-
     self.step_total = 0
     self.step_time_total = 0
     self.global_epochs = 0

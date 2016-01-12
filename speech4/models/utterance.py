@@ -64,24 +64,24 @@ class Utterance(object):
     self.hypothesis_complete = []
 
   def compute_word_distance(self, proto):
-    ref = self.text.split(' ')
-    hyp = self.hypothesis_complete[0].text.split(' ')
+    ref = proto.ref.split(' ')
+    hyp = proto.hyp.split(' ')
 
-    proto.edit_distance = las_utils.LevensteinDistance(ref, hyp)
-    proto.ref_length = len(ref)
-    proto.hyp_length = len(hyp)
+    proto.wer.edit_distance = las_utils.LevensteinDistance(ref, hyp)
+    proto.wer.ref_length = len(ref)
+    proto.wer.hyp_length = len(hyp)
 
-    proto.error_rate = float(proto.edit_distance) / float(proto.ref_length)
+    proto.wer.error_rate = float(proto.wer.edit_distance) / float(proto.wer.ref_length)
 
   def compute_character_distance(self, proto):
-    ref = list(self.text)
-    hyp = list(self.hypothesis_complete[0].text)
+    ref = list(proto.ref)
+    hyp = list(proto.hyp)
 
-    proto.edit_distance = las_utils.LevensteinDistance(ref, hyp)
-    proto.ref_length = len(ref)
-    proto.hyp_length = len(hyp)
+    proto.cer.edit_distance = las_utils.LevensteinDistance(ref, hyp)
+    proto.cer.ref_length = len(ref)
+    proto.cer.hyp_length = len(hyp)
 
-    proto.error_rate = float(proto.edit_distance) / float(proto.ref_length)
+    proto.cer.error_rate = float(proto.cer.edit_distance) / float(proto.cer.ref_length)
 
   def create_proto(self, token_model):
     proto = speech4_pb2.UtteranceResultsProto()
@@ -90,10 +90,10 @@ class Utterance(object):
     proto.hyp = self.hypothesis_complete[0].text
 
     if token_model.proto.remove_eow:
-      proto.ref = ''.join(proto.ref.split(token_model.token_string_eow))
-      proto.hyp = ''.join(proto.hyp.split(token_model.token_string_eow))
+      proto.ref = ''.join(proto.ref.split(token_model.proto.token_string_eow))
+      proto.hyp = ''.join(proto.hyp.split(token_model.proto.token_string_eow))
 
-    self.compute_word_distance(proto.wer)
-    self.compute_character_distance(proto.cer)
+    self.compute_word_distance(proto)
+    self.compute_character_distance(proto)
 
     self.proto = proto
