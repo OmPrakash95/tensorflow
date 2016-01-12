@@ -120,6 +120,10 @@ class LASModel(object):
         self.dataset_size = 58058
       elif "gale_mandarin_dev" in self.dataset:
         self.dataset_size = 5191
+      elif "gale_arabic_train" in self.dataset:
+        self.dataset_size = 146228
+      elif "gale_arabic_test" in self.dataset:
+        self.dataset_size = 4151
       else:
         raise Exception("Unknown dataset: %s" % self.dataset)
       assert os.path.isfile(self.dataset)

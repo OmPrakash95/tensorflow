@@ -264,6 +264,12 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
   elif dataset == "gale_mandarin_dev":
     dataset = "speech4/data/gale_mandarin_dev.tfrecords"
     dataset_size = 5191
+  elif dataset == "gale_arabic_train":
+    dataset = "speech4/data/gale_arabic_train.tfrecords"
+    dataset_size = 146228
+  elif dataset == "gale_arabic_test":
+    dataset = "speech4/data/gale_arabic_test.tfrecords"
+    dataset_size = 4151
   else:
     raise Exception("Unknown dataset %s" % dataset)
 
