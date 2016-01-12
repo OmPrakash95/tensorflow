@@ -20,13 +20,14 @@ def main():
   args = vars(parser.parse_args())
 
   utterances = {}
-  with codecs.open(args['text'], "r", "utf-8") as text_file:
-    for line in text_file.read().splitlines():
-      cols = line.split(" ", 1)
-      uttid = cols[0]
-      utterance = cols[1]
+  for filename in args['text'].split(','):
+    with codecs.open(filename, "r", "utf-8") as text_file:
+      for line in text_file.read().splitlines():
+        cols = line.split(" ", 1)
+        uttid = cols[0]
+        utterance = cols[1]
 
-      utterances[uttid] = utterance
+        utterances[uttid] = utterance
 
   vocab = {}
   for uttid, utterance in utterances.iteritems():
