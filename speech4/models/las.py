@@ -138,7 +138,7 @@ tf.app.flags.DEFINE_integer('beam_width', 1,
 
 def create_model_params():
   model_params = speech4_pb2.ModelParamsProto()
-  
+
   model_params.features_width = FLAGS.features_width
   model_params.features_len_max = FLAGS.features_len_max
   model_params.tokens_len_max = FLAGS.tokens_len_max
@@ -257,6 +257,14 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
   elif dataset == "eval2000":
     dataset = "speech4/data/eval2000.tfrecords"
     dataset_size = 4458
+  elif dataset == "gale_mandarin_train":
+    dataset = "speech4/data/gale_mandarin_train.tfrecords"
+    dataset_size = 58058
+  elif dataset == "gale_mandarin_dev":
+    dataset = "speech4/data/gale_mandarin_dev.tfrecords"
+    dataset_size = 5191
+  else:
+    raise Exception("Unknown dataset %s" % dataset)
 
   # Create our graph.
   with tf.device(device):
@@ -326,9 +334,9 @@ def main(_):
   tf.set_random_seed(FLAGS.random_seed)
 
   for global_epochs in range(FLAGS.global_epochs, FLAGS.global_epochs_max):
-    run('train', FLAGS.dataset_train, global_epochs)
-    run('valid', FLAGS.dataset_valid, global_epochs)
-    #run('test', FLAGS.dataset_test, global_epochs)
+    #run('train', FLAGS.dataset_train, global_epochs)
+    #run('valid', FLAGS.dataset_valid, global_epochs)
+    run('test', FLAGS.dataset_test, global_epochs)
 
 if __name__ == '__main__':
   tf.app.run()

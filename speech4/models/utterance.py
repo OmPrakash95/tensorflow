@@ -73,12 +73,27 @@ class Utterance(object):
 
     proto.error_rate = float(proto.edit_distance) / float(proto.ref_length)
 
-  def create_proto(self):
+  def compute_character_distance(self, proto):
+    ref = list(self.text)
+    hyp = list(self.hypothesis_complete[0].text)
+
+    proto.edit_distance = las_utils.LevensteinDistance(ref, hyp)
+    proto.ref_length = len(ref)
+    proto.hyp_length = len(hyp)
+
+    proto.error_rate = float(proto.edit_distance) / float(proto.ref_length)
+
+  def create_proto(self, token_model):
     proto = speech4_pb2.UtteranceResultsProto()
     proto.uttid = self.uttid
     proto.ref = self.text
     proto.hyp = self.hypothesis_complete[0].text
 
+    if token_model.proto.remove_eow:
+      proto.ref = ''.join(proto.ref.split(token_model.token_string_eow))
+      proto.hyp = ''.join(proto.hyp.split(token_model.token_string_eow))
+
     self.compute_word_distance(proto.wer)
+    self.compute_character_distance(proto.cer)
 
     self.proto = proto

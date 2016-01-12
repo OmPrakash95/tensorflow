@@ -46,6 +46,8 @@ message ModelParamsProto {
   bool encoder_lm = 11;
 
   AttentionParamsProto attention_params = 12;
+
+  repeated string encoder_layer = 13;
 };
 
 message AdagradParamsProto {
@@ -89,6 +91,7 @@ message OptimizationParamsProto {
 
 message DecoderParamsProto {
   int64 beam_width = 1;
+  string token_model = 2;
 };
 
 message EditDistanceResultsProto {

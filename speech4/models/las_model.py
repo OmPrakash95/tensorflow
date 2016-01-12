@@ -118,8 +118,13 @@ class LASModel(object):
         self.dataset_size = 263775
       elif 'eval2000' in self.dataset:
         self.dataset_size = 4458
+      elif "gale_mandarin_train" in self.dataset:
+        self.dataset_size = 58058
+      elif "gale_mandarin_dev" in self.dataset:
+        self.dataset_size = 5191
       else:
         raise Exception("Unknown dataset: %s" % self.dataset)
+      assert os.path.isfile(self.dataset)
       filename_queue = tf.train.string_input_producer([self.dataset])
 
       reader = tf.TFRecordReader()
@@ -152,10 +157,14 @@ class LASModel(object):
 
     self.encoder_states = [[self.features, self.features_len]]
 
-    self.create_encoder_layer()
-    self.create_encoder_layer()
-    self.create_encoder_layer(subsample_input=2)
-    self.create_encoder_layer(subsample_input=2)
+    if self.model_params.encoder_layer:
+      for s in self.model_params.encoder_layer:
+        self.create_encoder_layer(subsample_input=int(s))
+    else:
+      self.create_encoder_layer()
+      self.create_encoder_layer()
+      self.create_encoder_layer(subsample_input=2)
+      self.create_encoder_layer(subsample_input=2)
 
     print('create_encoder graph time %f' % (time.time() - start_time))
 
