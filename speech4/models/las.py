@@ -263,6 +263,8 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
   elif dataset == "gale_mandarin_dev":
     dataset = "speech4/data/gale_mandarin_dev.tfrecords"
     dataset_size = 5191
+  else:
+    raise Exception("Unknown dataset %s" % dataset)
 
   # Create our graph.
   with tf.device(device):
@@ -332,9 +334,9 @@ def main(_):
   tf.set_random_seed(FLAGS.random_seed)
 
   for global_epochs in range(FLAGS.global_epochs, FLAGS.global_epochs_max):
-    run('train', FLAGS.dataset_train, global_epochs)
-    run('valid', FLAGS.dataset_valid, global_epochs)
-    #run('test', FLAGS.dataset_test, global_epochs)
+    #run('train', FLAGS.dataset_train, global_epochs)
+    #run('valid', FLAGS.dataset_valid, global_epochs)
+    run('test', FLAGS.dataset_test, global_epochs)
 
 if __name__ == '__main__':
   tf.app.run()

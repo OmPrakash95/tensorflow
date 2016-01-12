@@ -89,7 +89,7 @@ class Utterance(object):
     proto.ref = self.text
     proto.hyp = self.hypothesis_complete[0].text
 
-    if token_model.remove_eow:
+    if token_model.proto.remove_eow:
       proto.ref = ''.join(proto.ref.split(token_model.token_string_eow))
       proto.hyp = ''.join(proto.hyp.split(token_model.token_string_eow))
 
