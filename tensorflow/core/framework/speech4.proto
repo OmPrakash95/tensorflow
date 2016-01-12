@@ -46,6 +46,8 @@ message ModelParamsProto {
   bool encoder_lm = 11;
 
   AttentionParamsProto attention_params = 12;
+
+  repeated string encoder_layer = 13;
 };
 
 message AdagradParamsProto {

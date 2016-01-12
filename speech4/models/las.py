@@ -138,7 +138,7 @@ tf.app.flags.DEFINE_integer('beam_width', 1,
 
 def create_model_params():
   model_params = speech4_pb2.ModelParamsProto()
-  
+
   model_params.features_width = FLAGS.features_width
   model_params.features_len_max = FLAGS.features_len_max
   model_params.tokens_len_max = FLAGS.tokens_len_max
@@ -257,6 +257,12 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
   elif dataset == "eval2000":
     dataset = "speech4/data/eval2000.tfrecords"
     dataset_size = 4458
+  elif dataset == "gale_manadarin_train":
+    dataset = "speech4/data/gale_mandarin_train.tfrecords"
+    dataset_size = 58058
+  elif dataset == "gale_mandarin_dev":
+    dataset = "speech4/data/gale_mandarin_dev.tfrecords"
+    dataset_size = 5191
 
   # Create our graph.
   with tf.device(device):
