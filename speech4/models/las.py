@@ -257,7 +257,7 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
   elif dataset == "eval2000":
     dataset = "speech4/data/eval2000.tfrecords"
     dataset_size = 4458
-  elif dataset == "gale_manadarin_train":
+  elif dataset == "gale_mandarin_train":
     dataset = "speech4/data/gale_mandarin_train.tfrecords"
     dataset_size = 58058
   elif dataset == "gale_mandarin_dev":

@@ -124,6 +124,7 @@ class LASModel(object):
         self.dataset_size = 5191
       else:
         raise Exception("Unknown dataset: %s" % self.dataset)
+      assert os.path.isfile(self.dataset)
       filename_queue = tf.train.string_input_producer([self.dataset])
 
       reader = tf.TFRecordReader()
