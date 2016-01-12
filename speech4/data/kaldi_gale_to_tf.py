@@ -81,7 +81,7 @@ def convert(kaldi_scp, kaldi_txt, tf_records, token_model_pbtxt):
     tokens = [token_model_proto.token_sos] * 2 + [character_to_token_map[c] for c in text] + [token_model_proto.token_eos]
     assert len(tokens)
 
-    text = "no_text"
+    text = text.encode("utf8")
     uttid = uttid.encode("ascii", "ignore")
     example = tf.train.Example(features=tf.train.Features(feature={
         'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats_normalized.shape[0]])),
