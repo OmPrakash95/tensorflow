@@ -29,4 +29,6 @@ message TokenModelProto {
 
   bool character_model = 11;
   bool word_model = 12;
+
+  bool remove_eow = 13;
 };

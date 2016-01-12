@@ -91,6 +91,7 @@ message OptimizationParamsProto {
 
 message DecoderParamsProto {
   int64 beam_width = 1;
+  string token_model = 2;
 };
 
 message EditDistanceResultsProto {

@@ -34,10 +34,14 @@ class Decoder(object):
   def __init__(
       self, sess, dataset, dataset_size, logdir, ckpt, decoder_params,
       model_params):
-    self.token_model = token_model.TokenModel(
-        "speech4/conf/token_model_character_simple.pbtxt")
-
     self.decoder_params = decoder_params
+
+    if self.decoder_params.token_model:
+      self.token_model = token_model.TokenModel(
+          self.decoder_params.token_model)
+    else:
+      self.token_model = token_model.TokenModel(
+          "speech4/conf/token_model_character_simple.pbtxt")
 
     self.model_params = model_params
     self.model_params.attention_params.type = "median"
@@ -87,22 +91,28 @@ class Decoder(object):
     return utt
 
   def decode(self, sess):
-    edit_distance = speech4_pb2.EditDistanceResultsProto()
+    cer = speech4_pb2.EditDistanceResultsProto()
+    wer = speech4_pb2.EditDistanceResultsProto()
     utts = []
     for _ in range(self.dataset_size):
       utt = self.read_utterance(sess)
       self.decode_utterance(sess, utt)
 
-      edit_distance.edit_distance += utt.proto.wer.edit_distance
-      edit_distance.ref_length += utt.proto.wer.ref_length
-      edit_distance.error_rate = float(edit_distance.edit_distance) / float(edit_distance.ref_length)
+      cer.edit_distance += utt.proto.cer.edit_distance
+      cer.ref_length += utt.proto.cer.ref_length
+      cer.error_rate = float(cer.edit_distance) / float(cer.ref_length)
 
-      print("accum wer: %f (%d / %d)" % (edit_distance.error_rate, edit_distance.edit_distance, edit_distance.ref_length))
+      wer.edit_distance += utt.proto.wer.edit_distance
+      wer.ref_length += utt.proto.wer.ref_length
+      wer.error_rate = float(wer.edit_distance) / float(wer.ref_length)
+
+      print("accum wer: %f (%d / %d); cer: %f" % (wer.error_rate, wer.edit_distance, wer_distance.ref_length, cer.error_rate))
       utts.append(utt)
 
-
-    with open(os.path.join(self.logdir, "decode_results.pbtxt"), "w") as proto_file:
-      proto_file.write(str(edit_distance.error_rate))
+    with open(os.path.join(self.logdir, "decode_results_cer.pbtxt"), "w") as proto_file:
+      proto_file.write(str(cer.error_rate))
+    with open(os.path.join(self.logdir, "decode_results_wer.pbtxt"), "w") as proto_file:
+      proto_file.write(str(wer.error_rate))
 
     with open(os.path.join(self.logdir, "decode_results_details.pbtxt"), "w") as proto_file:
       for utt in utts:
@@ -155,7 +165,7 @@ class Decoder(object):
     utt.hypothesis_complete = utt.hypothesis_complete[:self.decoder_params.beam_width]
     print 'ground_truth: %s' % utt.text
     print 'top hyp     : %s' % utt.hypothesis_complete[0].text
-    utt.create_proto()
+    utt.create_proto(self.token_model)
     print 'wer         : %f' % utt.proto.wer.error_rate
 
   def run_encoder(self, sess, utt):
