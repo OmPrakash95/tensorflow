@@ -1,0 +1,207 @@
+tokens {
+  token_id: 2
+  token_string: " "
+  token_count: 2344048
+}
+tokens {
+  token_id: 4
+  token_string: "A"
+  token_count: 1528844
+}
+tokens {
+  token_id: 5
+  token_string: "l"
+  token_count: 1208200
+}
+tokens {
+  token_id: 6
+  token_string: "y"
+  token_count: 875249
+}
+tokens {
+  token_id: 7
+  token_string: "m"
+  token_count: 646995
+}
+tokens {
+  token_id: 8
+  token_string: "n"
+  token_count: 624177
+}
+tokens {
+  token_id: 9
+  token_string: "w"
+  token_count: 555319
+}
+tokens {
+  token_id: 10
+  token_string: "r"
+  token_count: 471350
+}
+tokens {
+  token_id: 11
+  token_string: "t"
+  token_count: 442423
+}
+tokens {
+  token_id: 12
+  token_string: "E"
+  token_count: 381109
+}
+tokens {
+  token_id: 13
+  token_string: "b"
+  token_count: 368885
+}
+tokens {
+  token_id: 14
+  token_string: "h"
+  token_count: 335092
+}
+tokens {
+  token_id: 15
+  token_string: "p"
+  token_count: 332601
+}
+tokens {
+  token_id: 16
+  token_string: ">"
+  token_count: 314970
+}
+tokens {
+  token_id: 17
+  token_string: "d"
+  token_count: 306715
+}
+tokens {
+  token_id: 18
+  token_string: "s"
+  token_count: 270766
+}
+tokens {
+  token_id: 19
+  token_string: "f"
+  token_count: 252411
+}
+tokens {
+  token_id: 20
+  token_string: "q"
+  token_count: 233991
+}
+tokens {
+  token_id: 21
+  token_string: "k"
+  token_count: 215919
+}
+tokens {
+  token_id: 22
+  token_string: "H"
+  token_count: 206349
+}
+tokens {
+  token_id: 23
+  token_string: "<"
+  token_count: 137956
+}
+tokens {
+  token_id: 24
+  token_string: "j"
+  token_count: 130635
+}
+tokens {
+  token_id: 25
+  token_string: "T"
+  token_count: 110168
+}
+tokens {
+  token_id: 26
+  token_string: "$"
+  token_count: 108421
+}
+tokens {
+  token_id: 27
+  token_string: "S"
+  token_count: 88362
+}
+tokens {
+  token_id: 28
+  token_string: "Y"
+  token_count: 87529
+}
+tokens {
+  token_id: 29
+  token_string: "x"
+  token_count: 83939
+}
+tokens {
+  token_id: 30
+  token_string: "*"
+  token_count: 78861
+}
+tokens {
+  token_id: 31
+  token_string: "D"
+  token_count: 68604
+}
+tokens {
+  token_id: 32
+  token_string: "z"
+  token_count: 58816
+}
+tokens {
+  token_id: 33
+  token_string: "v"
+  token_count: 58767
+}
+tokens {
+  token_id: 34
+  token_string: "}"
+  token_count: 49166
+}
+tokens {
+  token_id: 35
+  token_string: "g"
+  token_count: 33532
+}
+tokens {
+  token_id: 36
+  token_string: "\'"
+  token_count: 33173
+}
+tokens {
+  token_id: 37
+  token_string: "Z"
+  token_count: 17969
+}
+tokens {
+  token_id: 38
+  token_string: "&"
+  token_count: 14733
+}
+tokens {
+  token_id: 39
+  token_string: "|"
+  token_count: 13107
+}
+tokens {
+  token_id: 40
+  token_string: "6"
+  token_count: 1
+}
+tokens {
+  token_id: 41
+  token_string: "9"
+  token_count: 1
+}
+tokens {
+  token_id: 42
+  token_string: "8"
+  token_count: 1
+}
+token_string_sos: "<S>"
+token_eos: 1
+token_string_eos: "</S>"
+token_eow: 2
+token_string_eow: " "
+token_unk: 3
+token_string_unk: "<UNK>"
