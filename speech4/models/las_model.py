@@ -422,7 +422,7 @@ class LASModel(object):
 
     if self.model_params.decoder_layer:
       for idx, s in enumerate(self.model_params.decoder_layer):
-        with vs.variable_scope(str(idx)):
+        with vs.variable_scope(str(idx + 1)):
           create_gru_cell(attention=(s == "attention"))
     else:
       with vs.variable_scope("1"):
@@ -793,7 +793,7 @@ class LASModel(object):
 
       if not forward_only:
         self.saver.save(
-            sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs + self.global_epochs)
+            sess, os.path.join(self.logdir, 'ckpt'), global_step=self.epochs + self.global_epochs + 1)
 
       print("step_total %d, avg_step_time: %f, accuracy %f, perplexity %f, gradient_norm %f" % (
           self.step_total, self.avg_step_time, accuracy, perplexity, gradient_norm))
