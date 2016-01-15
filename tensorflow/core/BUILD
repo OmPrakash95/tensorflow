@@ -375,11 +375,13 @@ cc_library(
         "platform/test.cc",
     ] + tf_additional_test_srcs(),
     hdrs = [
+        "lib/core/status_test_util.h",
         "platform/test.h",
         "platform/test_benchmark.h",
     ],
     copts = tf_copts(),
     linkopts = ["-lm"],
+    visibility = ["//visibility:public"],
     deps = [
         ":lib",
         "//tensorflow/core/platform/default/build_config:gtest",
@@ -850,6 +852,7 @@ cc_library(
     copts = [
         "-mfpu=neon",
         "-std=c++11",
+        "-DMIN_LOG_LEVEL=0",
         "-O2",
     ],
     tags = [
