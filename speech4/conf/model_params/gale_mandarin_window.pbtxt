@@ -1,16 +1,17 @@
 features_width: 43
-features_len_max: 4256
-tokens_len_max: 256
+features_len_max: 7000
+tokens_len_max: 160
 vocab_size: 4096
 embedding_size: 128
 attention_params {
   type: "window"
   s_min: 0
-  s_max: 50
-  v_min: 1.2
-  v_max: 2.0
+  s_max: 40
+  v_min: 1.0
+  v_max: 1.5
 }
 encoder_layer: "1"
+encoder_layer: "2"
 encoder_layer: "2"
 encoder_layer: "2"
 encoder_layer: "2"
