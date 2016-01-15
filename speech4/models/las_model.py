@@ -116,9 +116,11 @@ class LASModel(object):
         self.dataset_size = 263775
       elif 'eval2000' in self.dataset:
         self.dataset_size = 4458
-      elif "gale_mandarin_train" in self.dataset:
+      elif "gale_mandarin_train" in self.dataset or "gale_mandarin_sorted_train" in self.dataset:
         self.dataset_size = 58058
-      elif "gale_mandarin_dev" in self.dataset:
+      elif "gale_mandarin_10_train" in self.dataset:
+        self.dataset_size = 9569
+      elif "gale_mandarin_dev" in self.dataset or "gale_mandarin_sorted_dev" in self.dataset:
         self.dataset_size = 5191
       elif "gale_arabic_train" in self.dataset:
         self.dataset_size = 146228
@@ -418,10 +420,15 @@ class LASModel(object):
         new_alignments.append(None)
       new_outputs.append(h)
 
-    with vs.variable_scope("1"):
-      create_gru_cell(attention=True)
-    with vs.variable_scope("2"):
-      create_gru_cell(attention=False)
+    if self.model_params.decoder_layer:
+      for idx, s in enumerate(self.model_params.decoder_layer):
+        with vs.variable_scope(str(idx)):
+          create_gru_cell(attention=(s == "attention"))
+    else:
+      with vs.variable_scope("1"):
+        create_gru_cell(attention=True)
+      with vs.variable_scope("2"):
+        create_gru_cell(attention=False)
 
     return new_outputs, new_states, new_attentions, new_alignments
 

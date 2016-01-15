@@ -55,9 +55,6 @@ tf.app.flags.DEFINE_integer('random_seed', 1000,
 tf.app.flags.DEFINE_integer('batch_size', 16,
                             """Number of utterances to process in a batch.""")
 
-tf.app.flags.DEFINE_boolean("shuffle", True,
-                         """Shuffle the data.""");
-
 tf.app.flags.DEFINE_integer('global_epochs', 0,
                             """Global epochs.""")
 tf.app.flags.DEFINE_integer('global_epochs_max', 20,
@@ -90,6 +87,9 @@ tf.app.flags.DEFINE_string("optimization_params", "", """model_params proto""")
 # optimization_params
 tf.app.flags.DEFINE_string('optimization_params_type', 'adam',
                            """adam, gd""")
+
+tf.app.flags.DEFINE_boolean("optimization_params_shuffle", True,
+                            """Shuffle the data.""");
 
 tf.app.flags.DEFINE_float('optimization_params_adagrad_learning_rate', 0.1,
                            """Adagrad""")
@@ -166,7 +166,7 @@ def create_optimization_params(global_epochs):
   optimization_params = speech4_pb2.OptimizationParamsProto()
   optimization_params.type = FLAGS.optimization_params_type
   optimization_params.epochs = 1
-  optimization_params.shuffle = FLAGS.shuffle
+  optimization_params.shuffle = FLAGS.optimization_params_shuffle
 
   if optimization_params.type == "adagrad":
     optimization_params.adagrad.learning_rate = FLAGS.optimization_params_adagrad_learning_rate
@@ -261,8 +261,17 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
   elif dataset == "gale_mandarin_train":
     dataset = "speech4/data/gale_mandarin_train.tfrecords"
     dataset_size = 58058
+  elif dataset == "gale_mandarin_10_train":
+    dataset = "speech4/data/gale_mandarin_10_train.tfrecords"
+    dataset_size = 9569
+  elif dataset == "gale_mandarin_sorted_train":
+    dataset = "speech4/data/gale_mandarin_sorted_train.tfrecords"
+    dataset_size = 58058
   elif dataset == "gale_mandarin_dev":
     dataset = "speech4/data/gale_mandarin_dev.tfrecords"
+    dataset_size = 5191
+  elif dataset == "gale_mandarin_sorted_dev":
+    dataset = "speech4/data/gale_mandarin_sorted_dev.tfrecords"
     dataset_size = 5191
   elif dataset == "gale_arabic_train":
     dataset = "speech4/data/gale_arabic_train.tfrecords"

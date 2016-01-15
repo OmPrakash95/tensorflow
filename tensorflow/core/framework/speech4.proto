@@ -48,6 +48,7 @@ message ModelParamsProto {
   AttentionParamsProto attention_params = 12;
 
   repeated string encoder_layer = 13;
+  repeated string decoder_layer = 14;
 };
 
 message AdagradParamsProto {
