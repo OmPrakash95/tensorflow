@@ -98,7 +98,7 @@ tf.app.flags.DEFINE_float('optimization_params_adagrad_initial_accumulator_value
 tf.app.flags.DEFINE_boolean('optimization_params_adagrad_reset', False,
                            """Adagrad""")
 
-tf.app.flags.DEFINE_float('optimization_params_adadelta_learning_rate', 0.1,
+tf.app.flags.DEFINE_float('optimization_params_adadelta_learning_rate', 1.0,
                            """Adadelta""")
 tf.app.flags.DEFINE_float('optimization_params_adadelta_decay_rate', 0.95,
                            """Adadelta""")
