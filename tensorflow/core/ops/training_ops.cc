@@ -59,6 +59,34 @@ use_locking: If True, updating of the var and accum tensors will be protected by
 a lock; otherwise the behavior is undefined, but may exhibit less contention.
 )doc");
 
+REGISTER_OP("ApplyAdadelta")
+    .Input("var: Ref(T)")
+    .Input("accum_grad: Ref(T)")
+    .Input("accum_update: Ref(T)")
+    .Input("lr: T")
+    .Input("decay_rate: T")
+    .Input("epsilon: T")
+    .Input("grad: T")
+    .Output("out: Ref(T)")
+    .Attr("T: numbertype")
+    .Attr("max_weight_col_norm: float = 1")
+    .Attr("use_locking: bool = false")
+    .Doc(R"doc(
+Update '*var' according to the adagrad scheme.
+
+var: Should be from a Variable().
+accum_grad: Should be from a Variable().
+accum_update: Should be from a Variable().
+lr: Scaling factor. Must be a scalar.
+decay_rate: Decay factor. Must be a scalar.
+epsilon: Constant factor. Must be a scalar.
+grad: The gradient.
+out: Same as "var".
+use_locking: If True, updating of the var and accum tensors will be protected by
+a lock; otherwise the behavior is undefined, but may exhibit less contention.
+)doc");
+
+
 REGISTER_OP("SparseApplyAdagrad")
     .Input("var: Ref(T)")
     .Input("accum: Ref(T)")
@@ -79,6 +107,33 @@ var -= lr * grad * (1 / sqrt(accum))
 var: Should be from a Variable().
 accum: Should be from a Variable().
 lr: Learning rate. Must be a scalar.
+grad: The gradient.
+indices: A vector of indices into the first dimension of var and accum.
+out: Same as "var".
+use_locking: If True, updating of the var and accum tensors will be protected by
+a lock; otherwise the behavior is undefined, but may exhibit less contention.
+)doc");
+
+REGISTER_OP("SparseApplyAdadelta")
+    .Input("var: Ref(T)")
+    .Input("accum_grad: Ref(T)")
+    .Input("accum_update: Ref(T)")
+    .Input("lr: T")
+    .Input("decay_rate: T")
+    .Input("epsilon: T")
+    .Input("grad: T")
+    .Input("indices: Tindices")
+    .Output("out: Ref(T)")
+    .Attr("T: numbertype")
+    .Attr("Tindices: {int32, int64}")
+    .Attr("use_locking: bool = false")
+    .Doc(R"doc(
+var: Should be from a Variable().
+accum_grad: Should be from a Variable().
+accum_update:: Should be from a Variable().
+lr: Learning rate. Must be a scalar.
+decay_rate: Decay factor. Must be a scalar.
+epsilon: Constant factor. Must be a scalar.
 grad: The gradient.
 indices: A vector of indices into the first dimension of var and accum.
 out: Same as "var".

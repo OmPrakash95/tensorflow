@@ -77,6 +77,12 @@ class LASModel(object):
           if 'Adagrad' not in v.name:
             filtered_variables.append(v)
         variables = filtered_variables
+      if optimization_params.adadelta.reset:
+        filtered_variables = []
+        for v in variables:
+          if 'Adadelta' not in v.name:
+            filtered_variables.append(v)
+        variables = filtered_variables
     for v in variables:
       print "loading: %s" % v.name
     self.saver = tf.train.Saver(variables)
@@ -631,6 +637,11 @@ class LASModel(object):
       opt = tf.train.AdagradOptimizer(
           learning_rate=self.optimization_params.adagrad.learning_rate,
           initial_accumulator_value=self.optimization_params.adagrad.initial_accumulator_value)
+    elif self.optimization_params.type == "adadelta":
+      opt = tf.train.AdadeltaOptimizer(
+          learning_rate=self.optimization_params.adadelta.learning_rate,
+          decay_rate=self.optimization_params.adadelta.decay_rate,
+          epsilon=self.optimization_params.adadelta.epsilon)
     elif self.optimization_params.type == "adam":
       opt = tf.train.AdamOptimizer(
           learning_rate=self.optimization_params.adam.learning_rate,

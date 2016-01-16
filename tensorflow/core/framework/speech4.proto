@@ -58,6 +58,14 @@ message AdagradParamsProto {
   bool reset = 3;
 };
 
+message AdadeltaParamsProto {
+  float learning_rate = 1;
+  float decay_rate = 2;
+  float epsilon = 3;
+
+  bool reset = 4;
+};
+
 message AdamParamsProto {
   float learning_rate = 1;
   float beta1 = 2;
@@ -80,8 +88,9 @@ message OptimizationParamsProto {
   float max_gradient_norm = 3;
 
   AdagradParamsProto adagrad = 4;
-  AdamParamsProto adam = 5;
-  GradientDescentParamsProto gd = 6;
+  AdadeltaParamsProto adadelta = 5;
+  AdamParamsProto adam = 6;
+  GradientDescentParamsProto gd = 7;
 
   float sample_prob = 100;
 
