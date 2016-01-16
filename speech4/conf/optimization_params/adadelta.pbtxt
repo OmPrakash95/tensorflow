@@ -1,0 +1,5 @@
+type: "adadelta"
+adadelta {
+  decay_rate: 0.95
+  epsilon: 1e-8
+}

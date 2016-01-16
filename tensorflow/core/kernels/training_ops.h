@@ -42,6 +42,17 @@ struct ApplyAdagrad {
 };
 
 template <typename Device, typename T>
+struct ApplyAdadelta {
+  void operator()(const Device& d, typename TTypes<T>::Flat var,
+                  typename TTypes<T>::Flat accum_grad,
+                  typename TTypes<T>::Flat accum_update,
+                  typename TTypes<T>::ConstScalar lr,
+                  typename TTypes<T>::ConstScalar decay_rate,
+                  typename TTypes<T>::ConstScalar epsilon,
+                  typename TTypes<T>::ConstFlat grad);
+};
+
+template <typename Device, typename T>
 struct ApplyMomentum {
   void operator()(const Device& d, typename TTypes<T>::Flat var,
                   typename TTypes<T>::Flat accum,

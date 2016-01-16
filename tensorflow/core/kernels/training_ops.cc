@@ -58,6 +58,29 @@ struct ApplyAdagrad<CPUDevice, T> {
 };
 
 template <typename T>
+struct ApplyAdadelta<CPUDevice, T> {
+  void operator()(const CPUDevice& d, typename TTypes<T>::Flat var,
+                  typename TTypes<T>::Flat accum_grad,
+                  typename TTypes<T>::Flat accum_update,
+                  typename TTypes<T>::ConstScalar lr,
+                  typename TTypes<T>::ConstScalar decay_rate,
+                  typename TTypes<T>::ConstScalar epsilon,
+                  typename TTypes<T>::ConstFlat grad) {
+    if (DoInline(var.size())) {
+      accum_grad = accum_update * decay_rate() + grad.square() * (1 - decay_rate());
+      const auto update = (accum_update + epsilon()).sqrt() * (accum_grad + epsilon()).rsqrt() * grad;
+      accum_update = accum_update * decay_rate() + update.square() * (1 - decay_rate());
+      var -= accum_update * lr();
+    } else {
+      accum_grad.device(d) = accum_update * decay_rate() + grad.square() * (1 - decay_rate());
+      const auto update = (accum_update + epsilon()).sqrt() * (accum_grad + epsilon()).rsqrt() * grad;
+      accum_update.device(d) = accum_update * decay_rate() + update.square() * (1 - decay_rate());
+      var.device(d) -= update * lr();
+    }
+  }
+};
+
+template <typename T>
 struct ApplyMomentum<CPUDevice, T> {
   void operator()(const CPUDevice& d, typename TTypes<T>::Flat var,
                   typename TTypes<T>::Flat accum,
@@ -448,6 +471,274 @@ class SparseApplyAdagradOp : public OpKernel {
                               .TypeConstraint<T>("T")                \
                               .TypeConstraint<Tindices>("Tindices"), \
                           SparseApplyAdagradOp<T, Tindices>);
+
+REGISTER_KERNELS(float, int32);
+REGISTER_KERNELS(float, int64);
+REGISTER_KERNELS(double, int32);
+REGISTER_KERNELS(double, int64);
+#undef REGISTER_KERNELS
+
+template <typename Device, typename T>
+class ApplyAdadeltaOp : public OpKernel {
+ public:
+  explicit ApplyAdadeltaOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("use_locking", &use_exclusive_lock_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("max_weight_col_norm", &max_weight_col_norm_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    if (use_exclusive_lock_) {
+      mutex_lock l1(*ctx->input_ref_mutex(0));
+      // Don't try to acquire a lock on the second ref as they share the same
+      // mutex.
+      //
+      // mutex_lock l2(*ctx->input_ref_mutex(1));
+      DoValidate(ctx);
+      if (!ctx->status().ok()) return;
+      DoCompute(ctx);
+    } else {
+      DoValidate(ctx);
+      if (!ctx->status().ok()) return;
+      DoCompute(ctx);
+    }
+    ctx->forward_ref_input_to_ref_output(0, 0);
+  }
+
+ private:
+  bool use_exclusive_lock_;
+  float max_weight_col_norm_;
+
+  void DoValidate(OpKernelContext* ctx) {
+    Tensor var = ctx->mutable_input(0, use_exclusive_lock_);
+    Tensor accum_grad = ctx->mutable_input(1, use_exclusive_lock_);
+    Tensor accum_update = ctx->mutable_input(2, use_exclusive_lock_);
+    OP_REQUIRES(
+        ctx, var.IsInitialized(),
+        errors::FailedPrecondition(
+            "Attempting to use uninitialized variables: ", def().input(0)));
+    OP_REQUIRES(
+        ctx, accum_grad.IsInitialized(),
+        errors::FailedPrecondition(
+            "Attempting to use uninitialized variables: ", def().input(1)));
+    OP_REQUIRES(
+        ctx, accum_update.IsInitialized(),
+        errors::FailedPrecondition(
+            "Attempting to use uninitialized variables: ", def().input(2)));
+    const Tensor& lr = ctx->input(3);
+    OP_REQUIRES(ctx, IsLegacyScalar(lr.shape()),
+                errors::InvalidArgument("lr is not a scalar: ",
+                                        lr.shape().DebugString()));
+    const Tensor& decay_rate = ctx->input(4);
+    OP_REQUIRES(ctx, IsLegacyScalar(decay_rate.shape()),
+                errors::InvalidArgument("decay_rate is not a scalar: ",
+                                        decay_rate.shape().DebugString()));
+    const Tensor& epsilon = ctx->input(5);
+    OP_REQUIRES(ctx, IsLegacyScalar(epsilon.shape()),
+                errors::InvalidArgument("epsilon is not a scalar: ",
+                                        epsilon.shape().DebugString()));
+    const Tensor& grad = ctx->input(6);
+    OP_REQUIRES(
+        ctx, var.shape().IsSameSize(accum_grad.shape()),
+        errors::InvalidArgument("var and accum_grad do not have the same shape",
+                                var.shape().DebugString(), " ",
+                                accum_grad.shape().DebugString()));
+    OP_REQUIRES(
+        ctx, var.shape().IsSameSize(accum_update.shape()),
+        errors::InvalidArgument("var and accum_update do not have the same shape",
+                                var.shape().DebugString(), " ",
+                                accum_update.shape().DebugString()));
+    OP_REQUIRES(
+        ctx, var.shape().IsSameSize(grad.shape()),
+        errors::InvalidArgument("var and grad do not have the same shape",
+                                var.shape().DebugString(), " ",
+                                grad.shape().DebugString()));
+  }
+
+  void DoCompute(OpKernelContext* ctx) {
+    const Device& device = ctx->template eigen_device<Device>();
+    Tensor var = ctx->mutable_input(0, use_exclusive_lock_);
+    Tensor accum_grad = ctx->mutable_input(1, use_exclusive_lock_);
+    Tensor accum_update = ctx->mutable_input(2, use_exclusive_lock_);
+    const Tensor& lr = ctx->input(3);
+    const Tensor& decay_rate = ctx->input(4);
+    const Tensor& epsilon = ctx->input(5);
+    const Tensor& grad = ctx->input(6);
+    functor::ApplyAdadelta<Device, T>()(
+        device, var.flat<T>(), accum_grad.flat<T>(), accum_update.flat<T>(),
+        lr.scalar<T>(), decay_rate.scalar<T>(), epsilon.scalar<T>(),
+        grad.flat<T>());
+
+    if (var.dims() == 2 && max_weight_col_norm_ > 0.0f) {
+      Tensor scale;
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(
+            var.dtype(), TensorShape({var.dim_size(1)}), &scale));
+
+      functor::ApplyMaxWeightColNorm<Device, T>()(
+          device, var.matrix<T>(), scale.vec<T>(),
+          max_weight_col_norm_);
+    }
+  }
+};
+
+typedef Eigen::ThreadPoolDevice CPUDevice;
+typedef Eigen::GpuDevice GPUDevice;
+
+#define REGISTER_KERNELS(D, T)                                         \
+  REGISTER_KERNEL_BUILDER(                                             \
+      Name("ApplyAdadelta").Device(DEVICE_##D).TypeConstraint<T>("T"), \
+      ApplyAdadeltaOp<D##Device, T>);
+
+REGISTER_KERNELS(CPU, float);
+REGISTER_KERNELS(CPU, double);
+
+#if GOOGLE_CUDA
+// Forward declarations of the functor specializations for GPU.
+namespace functor {
+#define DECLARE_GPU_SPEC(T)                                               \
+  template <>                                                             \
+  void ApplyAdadelta<GPUDevice, T>::operator()(                           \
+      const GPUDevice& d, typename TTypes<T>::Flat var,                   \
+      typename TTypes<T>::Flat accum_grad,                                \
+      typename TTypes<T>::Flat accum_update,                              \
+      typename TTypes<T>::ConstScalar lr,                                 \
+      typename TTypes<T>::ConstScalar decay_rate,                         \
+      typename TTypes<T>::ConstScalar epsilon,                            \
+      typename TTypes<T>::ConstFlat grad);                                \
+  extern template struct ApplyAdadelta<GPUDevice, T>;
+DECLARE_GPU_SPEC(float);
+DECLARE_GPU_SPEC(double);
+#undef DECLARE_GPU_SPEC
+}  // namespace functor
+
+REGISTER_KERNELS(GPU, float);
+REGISTER_KERNELS(GPU, double);
+#endif
+#undef REGISTER_KERNELS
+
+// Note, this op works on cpu only.
+template <typename T, typename Tindex>
+class SparseApplyAdadeltaOp : public OpKernel {
+ public:
+  explicit SparseApplyAdadeltaOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("use_locking", &use_exclusive_lock_));
+  }
+
+  void Compute(OpKernelContext* ctx) override NO_THREAD_SAFETY_ANALYSIS {
+    mutex* mu_var = ctx->input_ref_mutex(0);
+    // mu_accum is actually the same mutex as mu_var since currently we use a
+    // global mutex.
+    //
+    // mutex* mu_accum = ctx->input_ref_mutex(1);
+    if (use_exclusive_lock_) {
+      mu_var->lock();
+    }
+    Tensor var = ctx->mutable_input(0, use_exclusive_lock_);
+    Tensor accum_grad = ctx->mutable_input(1, use_exclusive_lock_);
+    Tensor accum_update = ctx->mutable_input(2, use_exclusive_lock_);
+    OP_REQUIRES(
+        ctx, var.IsInitialized(),
+        errors::FailedPrecondition(
+            "Attempting to use uninitialized variables: ", def().input(0)));
+    OP_REQUIRES(
+        ctx, accum_grad.IsInitialized(),
+        errors::FailedPrecondition(
+            "Attempting to use uninitialized variables: ", def().input(1)));
+    OP_REQUIRES(
+        ctx, accum_update.IsInitialized(),
+        errors::FailedPrecondition(
+            "Attempting to use uninitialized variables: ", def().input(2)));
+    OP_REQUIRES(
+        ctx, var.shape().IsSameSize(accum_grad.shape()),
+        errors::InvalidArgument("var and accum_grad do not have the same shape",
+                                var.shape().DebugString(), " ",
+                                accum_grad.shape().DebugString()));
+    OP_REQUIRES(
+        ctx, var.shape().IsSameSize(accum_update.shape()),
+        errors::InvalidArgument("var and accum_update do not have the same shape",
+                                var.shape().DebugString(), " ",
+                                accum_update.shape().DebugString()));
+    OP_REQUIRES(ctx, TensorShapeUtils::IsVectorOrHigher(var.shape()),
+                errors::InvalidArgument("var must be at least 1 dimensional"));
+
+    const Tensor& lr = ctx->input(3);
+    OP_REQUIRES(ctx, IsLegacyScalar(lr.shape()),
+                errors::InvalidArgument("lr is not a scalar: ",
+                                        lr.shape().DebugString()));
+    const Tensor& decay_rate = ctx->input(4);
+    OP_REQUIRES(ctx, IsLegacyScalar(decay_rate.shape()),
+                errors::InvalidArgument("decay_rate is not a scalar: ",
+                                        decay_rate.shape().DebugString()));
+    const Tensor& epsilon = ctx->input(5);
+    OP_REQUIRES(ctx, IsLegacyScalar(epsilon.shape()),
+                errors::InvalidArgument("epsilon is not a scalar: ",
+                                        epsilon.shape().DebugString()));
+    const Tensor& grad = ctx->input(6);
+    const Tensor& indices = ctx->input(7);
+    OP_REQUIRES(ctx, TensorShapeUtils::IsVector(indices.shape()),
+                errors::InvalidArgument("indices must be one-dimensional"));
+
+    for (int d = 1; d < var.dims(); d++) {
+      OP_REQUIRES(ctx, var.dim_size(d) == grad.dim_size(d),
+                  errors::InvalidArgument(strings::StrCat(
+                      "var and grad must match in dimension ", d)));
+    }
+    const Tindex N = indices.dim_size(0);
+    OP_REQUIRES(
+        ctx, grad.dim_size(0) == N,
+        errors::InvalidArgument(
+            "grad must be the same size as indices in the first dimension."));
+
+    if (N > 0) {
+      const Tindex first_dim_size = var.dim_size(0);
+      // Validate all the indices are in range
+      auto indices_vec = indices.vec<Tindex>();
+      for (Tindex i = 0; i < N; i++) {
+        const Tindex index = indices_vec(i);
+        OP_REQUIRES(ctx, index >= 0 && index < first_dim_size,
+                    errors::InvalidArgument(
+                        strings::StrCat("Index ", index, " at offset ", i,
+                                        " in indices is out of range")));
+      }
+
+      auto var_flat = var.flat_outer_dims<T>();
+      auto accum_grad_flat = accum_grad.flat_outer_dims<T>();
+      auto accum_update_flat = accum_update.flat_outer_dims<T>();
+      auto grad_flat = grad.flat_outer_dims<T>();
+      T lr_scalar = lr.scalar<T>()();
+      T decay_rate_scalar = decay_rate.scalar<T>()();
+      T epsilon_scalar = epsilon.scalar<T>()();
+
+      for (Tindex i = 0; i < N; i++) {
+        const Tindex index = indices_vec(i);
+        auto ag = accum_grad_flat.template chip<0>(index);
+        auto au = accum_update_flat.template chip<0>(index);
+        auto g = grad_flat.template chip<0>(i);
+
+        ag = au * au.constant(decay_rate_scalar) + g.square() * g.constant(1 - decay_rate_scalar);
+        const auto update = (au + au.constant(epsilon_scalar)).sqrt() * (ag + ag.constant(epsilon_scalar)).rsqrt() * g;
+        au = au * au.constant(decay_rate_scalar) + update.square() * update.constant(1 - decay_rate_scalar);
+
+        auto v = var_flat.template chip<0>(index);
+        v -= update * update.constant(lr_scalar);
+      }
+    }
+    if (use_exclusive_lock_) {
+      mu_var->unlock();
+    }
+
+    ctx->forward_ref_input_to_ref_output(0, 0);
+  }
+
+ private:
+  bool use_exclusive_lock_;
+};
+
+#define REGISTER_KERNELS(T, Tindices)                                \
+  REGISTER_KERNEL_BUILDER(Name("SparseApplyAdadelta")                \
+                              .Device(DEVICE_CPU)                    \
+                              .TypeConstraint<T>("T")                \
+                              .TypeConstraint<Tindices>("Tindices"), \
+                          SparseApplyAdadeltaOp<T, Tindices>);
 
 REGISTER_KERNELS(float, int32);
 REGISTER_KERNELS(float, int64);

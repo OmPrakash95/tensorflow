@@ -85,19 +85,27 @@ tf.app.flags.DEFINE_string("model_params", "", """model_params proto""")
 tf.app.flags.DEFINE_string("optimization_params", "", """model_params proto""")
 
 # optimization_params
-tf.app.flags.DEFINE_string('optimization_params_type', 'adam',
-                           """adam, gd""")
+tf.app.flags.DEFINE_string('optimization_params_type', 'adadelta',
+                           """adadelta, adagrad, adam, gd""")
 
 tf.app.flags.DEFINE_boolean("optimization_params_shuffle", True,
                             """Shuffle the data.""");
 
 tf.app.flags.DEFINE_float('optimization_params_adagrad_learning_rate', 0.1,
                            """Adagrad""")
-
 tf.app.flags.DEFINE_float('optimization_params_adagrad_initial_accumulator_value', 0.1,
                            """Adagrad""")
 tf.app.flags.DEFINE_boolean('optimization_params_adagrad_reset', False,
                            """Adagrad""")
+
+tf.app.flags.DEFINE_float('optimization_params_adadelta_learning_rate', 0.1,
+                           """Adadelta""")
+tf.app.flags.DEFINE_float('optimization_params_adadelta_decay_rate', 0.95,
+                           """Adadelta""")
+tf.app.flags.DEFINE_float('optimization_params_adadelta_epsilon', 1e-8,
+                           """Adadelta""")
+tf.app.flags.DEFINE_boolean('optimization_params_adadelta_reset', False,
+                           """Adadelta""")
 
 tf.app.flags.DEFINE_float('optimization_params_adam_learning_rate', 0.001,
                            """Adam""")
@@ -173,6 +181,12 @@ def create_optimization_params(global_epochs):
     optimization_params.adagrad.initial_accumulator_value = FLAGS.optimization_params_adagrad_initial_accumulator_value
     if global_epochs == 0 and FLAGS.optimization_params_adagrad_reset:
       optimization_params.adagrad.reset = True
+  elif optimization_params.type == "adadelta":
+    optimization_params.adadelta.learning_rate = FLAGS.optimization_params_adadelta_learning_rate
+    optimization_params.adadelta.decay_rate = FLAGS.optimization_params_adadelta_decay_rate
+    optimization_params.adadelta.epsilon = FLAGS.optimization_params_adadelta_epsilon
+    if global_epochs == 0 and FLAGS.optimization_params_adadelta_reset:
+      optimization_params.adadelta.reset = True
   elif optimization_params.type == "adam":
     optimization_params.adam.learning_rate = FLAGS.optimization_params_adam_learning_rate
     optimization_params.adam.beta1 = FLAGS.optimization_params_adam_beta1
@@ -194,6 +208,7 @@ def create_optimization_params(global_epochs):
     with open(FLAGS.optimization_params, "r") as proto_file:
       google.protobuf.text_format.Merge(proto_file.read(), optimization_params)
 
+  print str(optimization_params)
   return optimization_params
 
 def create_visualization_params():
