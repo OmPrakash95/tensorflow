@@ -119,7 +119,7 @@ class LASModel(object):
       elif "gale_mandarin_train" in self.dataset or "gale_mandarin_sorted_train" in self.dataset:
         self.dataset_size = 58058
       elif "gale_mandarin_10_train" in self.dataset:
-        self.dataset_size = 9569
+        self.dataset_size = 9568
       elif "gale_mandarin_dev" in self.dataset or "gale_mandarin_sorted_dev" in self.dataset:
         self.dataset_size = 5191
       elif "gale_arabic_train" in self.dataset:
@@ -728,6 +728,7 @@ class LASModel(object):
 
     targets = {}
     if report:
+      #targets['features_fbank'] = self.features_fbank
       targets['uttid'] = self.uttid
       targets['text'] = self.text
       targets['tokens'] = self.tokens
@@ -763,6 +764,13 @@ class LASModel(object):
 
     if report:
       logperp = 0
+
+      # Save our filter banks.
+      #features_fbank = fetches["features_fbank"]
+      #features_fbank = [x[0,:] for x in features_fbank]
+      #features_fbank = np.transpose(np.vstack(features_fbank))
+      #np.save(os.path.join(self.logdir, "features_fbank"), features_fbank)
+
       if 'logperp' in fetches:
         logperp = fetches['logperp']
 
