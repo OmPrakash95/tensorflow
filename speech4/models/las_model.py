@@ -31,6 +31,12 @@ class LASModel(object):
     self.batch_size = batch_size
 
     self.model_params = model_params
+    if not self.model_params.encoder_prefix:
+      self.model_params.encoder_prefix = "encoder"
+    if not self.model_params.encoder_embedding:
+      self.model_params.encoder_embedding = "encoder_embedding"
+    if not self.model_params.decoder_prefix:
+      self.model_params.decoder_prefix = "decoder"
 
     self.optimization_params = optimization_params
     self.visualization_params = visualization_params
@@ -183,7 +189,7 @@ class LASModel(object):
     print('create_encoder graph time %f' % (time.time() - start_time))
 
   def create_encoder_layer(self, subsample_input=1, use_monolithic=True):
-    with vs.variable_scope('encoder_layer_%d' % (len(self.encoder_states))):
+    with vs.variable_scope('%s_%d' % (self.model_params.encoder_prefix, len(self.encoder_states))):
       sequence_len_factor = tf.constant(
           subsample_input, shape=[self.batch_size], dtype=tf.int64)
       sequence_len = tf.div(self.encoder_states[-1][1], sequence_len_factor)
@@ -229,7 +235,7 @@ class LASModel(object):
 
     encoder_states = array_ops.reshape(
         attention_states, [batch_size, attn_length, 1, attn_size])
-    with vs.variable_scope("encoder_embedding"):
+    with vs.variable_scope(self.model_params.encoder_embedding):
       k = vs.get_variable("W", [1, 1, attn_size, self.model_params.attention_embedding_size])
     encoder_embedding = nn_ops.conv2d(encoder_states, k, [1, 1, 1, 1], "SAME")
     #encoder_embedding = tf.nn.relu(encoder_embedding)
@@ -279,7 +285,7 @@ class LASModel(object):
 
   def create_decoder_sequence(
       self, attention_states, encoder_states, encoder_embedding, scope=None):
-    with vs.variable_scope("decoder_layer" or scope):
+    with vs.variable_scope(self.model_params.decoder_prefix or scope):
       self.decoder_states = []
       self.prob = []
       self.logprob = []
