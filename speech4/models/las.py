@@ -276,6 +276,9 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
   elif dataset == "gale_mandarin_train":
     dataset = "speech4/data/gale_mandarin_train.tfrecords"
     dataset_size = 58058
+  elif dataset == "gale_mandarin_pinyin_train":
+    dataset = "speech4/data/gale_mandarin_pinyin_train.tfrecords"
+    dataset_size = 49364
   elif dataset == "gale_mandarin_10_train":
     dataset = "speech4/data/gale_mandarin_10_train.tfrecords"
     dataset_size = 9568
@@ -285,6 +288,9 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
   elif dataset == "gale_mandarin_dev":
     dataset = "speech4/data/gale_mandarin_dev.tfrecords"
     dataset_size = 5191
+  elif dataset == "gale_mandarin_pinyin_dev":
+    dataset = "speech4/data/gale_mandarin_pinyin_dev.tfrecords"
+    dataset_size = 4332
   elif dataset == "gale_mandarin_sorted_dev":
     dataset = "speech4/data/gale_mandarin_sorted_dev.tfrecords"
     dataset_size = 5191

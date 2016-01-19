@@ -124,10 +124,14 @@ class LASModel(object):
         self.dataset_size = 4458
       elif "gale_mandarin_train" in self.dataset or "gale_mandarin_sorted_train" in self.dataset:
         self.dataset_size = 58058
+      elif "gale_mandarin_pinyin_train" in self.dataset:
+        self.dataset_size = 49364
       elif "gale_mandarin_10_train" in self.dataset:
         self.dataset_size = 9568
       elif "gale_mandarin_dev" in self.dataset or "gale_mandarin_sorted_dev" in self.dataset:
         self.dataset_size = 5191
+      elif "gale_mandarin_pinyin_dev" in self.dataset:
+        self.dataset_size = 4332
       elif "gale_arabic_train" in self.dataset:
         self.dataset_size = 146228
       elif "gale_arabic_test" in self.dataset:
