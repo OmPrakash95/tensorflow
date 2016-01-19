@@ -49,6 +49,7 @@ message ModelParamsProto {
 
   string encoder_prefix = 100;
   repeated string encoder_layer = 101;
+  string encoder_embedding = 102;
 
   string decoder_prefix = 200;
   repeated string decoder_layer = 201;
