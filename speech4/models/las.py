@@ -42,6 +42,9 @@ tf.app.flags.DEFINE_integer('device', 0,
 tf.app.flags.DEFINE_string('ckpt', '',
                             """Checkpoint to recover from.""")
 
+tf.app.flags.DEFINE_string('dataset', 'gale_mandarin',
+                            """Dataset.""")
+
 tf.app.flags.DEFINE_string('dataset_train', 'train_si284',
                             """Dataset.""")
 tf.app.flags.DEFINE_string('dataset_valid', 'test_dev93',
@@ -379,6 +382,11 @@ def main(_):
   print("logdir: %s" % FLAGS.logdir)
 
   tf.set_random_seed(FLAGS.random_seed)
+
+  if FLAGS.dataset:
+    FLAGS.dataset_train = "gale_mandarin_train"
+    FLAGS.dataset_dev = "gale_mandarin_dev"
+    FLAGS.dataset_test = "gale_mandarin_dev"
 
   for global_epochs in range(FLAGS.global_epochs, FLAGS.global_epochs_max):
     run('train', FLAGS.dataset_train, global_epochs)
