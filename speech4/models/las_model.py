@@ -89,6 +89,12 @@ class LASModel(object):
           if 'Adadelta' not in v.name:
             filtered_variables.append(v)
         variables = filtered_variables
+      #filtered_variables = []
+      #for v in variables:
+      #  if "encoder_0" in v.name or "encoder_1" in v.name or "encoder_2" in v.name or "encoder_3" in v.name:
+      #    print v.name
+      #    filtered_variables.append(v)
+      #variables = filtered_variables
     for v in variables:
       print "loading: %s" % v.name
     self.saver = tf.train.Saver(variables)
