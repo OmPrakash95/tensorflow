@@ -385,7 +385,7 @@ def main(_):
 
   if FLAGS.dataset:
     FLAGS.dataset_train = "gale_mandarin_train"
-    FLAGS.dataset_dev = "gale_mandarin_dev"
+    FLAGS.dataset_valid = "gale_mandarin_dev"
     FLAGS.dataset_test = "gale_mandarin_dev"
 
   for global_epochs in range(FLAGS.global_epochs, FLAGS.global_epochs_max):

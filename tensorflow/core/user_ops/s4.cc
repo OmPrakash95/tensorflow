@@ -34,6 +34,8 @@ REGISTER_OP("S4ParseUtterance")
     .Attr("tokens_len_max: int")
     .Attr("eow_weight: float = 1.0")
     .Attr("token_model: string = 'speech4/conf/token_model_character_simple.pbtxt'")
+    .Attr("frame_stack: int = 1")
+    .Attr("frame_skip: int = 1")
     .Input("serialized: string")
     .Output("features: features_len_max * float")
     .Output("features_fbank: features_len_max * float")
@@ -56,6 +58,10 @@ class S4ParseUtterance : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("features_len_max", &features_len_max_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("tokens_len_max", &tokens_len_max_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("eow_weight", &eow_weight_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("frame_stack", &frame_stack_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("frame_skip", &frame_skip_));
+    if (frame_stack_ == 0) frame_stack_ = 1;
+    if (frame_skip_ == 0) frame_skip_ = 1;
 
     // Read the TokenModelProto.
     string token_model_pbtxt_path;
@@ -103,7 +109,13 @@ class S4ParseUtterance : public OpKernel {
 
       // The features_width is a function of len(features) and features_len.
       if (features.value().size()) CHECK_EQ(features.value().size() % features_len, 0);
-      const int64 features_width = features_len ? features.value().size() / features_len : 0;
+      const int64 frame_width =
+          features_len ? features.value().size() / features_len : 0;
+
+      // Adjust for frame_stack and frame_skip.
+      const int64 features_width = frame_width * frame_stack_;
+      const int64 frame_total = features_len;
+      features_len = features_len / frame_skip_;
 
       if (b == 0) {
         // Allocate the memory.
@@ -172,15 +184,22 @@ class S4ParseUtterance : public OpKernel {
         features_len = features_len_max_;
       }
       for (int64 t = 0; t < features_len; ++t) {
-        Tensor* feature_slice = output_list_features[t];
-        std::copy_n(features.value().data() + t * features_width,
-                    features_width,
-                    feature_slice->flat<float>().data() + b * features_width);
+        // Copy the features from the proto to our Tensor.
+        const int64 frame_remaining = frame_total - t * frame_skip_;
+        CHECK_GE(frame_remaining, 0);
+        const int64 copy_width = std::min(features_width, frame_remaining);
 
+        Tensor* feature_slice = output_list_features[t];
         Tensor* feature_fbank_slice = output_list_features_fbank[t];
-        std::copy_n(features.value().data() + t * features_width,
-                    features_fbank_dim_,
-                    feature_fbank_slice->flat<float>().data() + b * features_fbank_dim_);
+
+        std::copy_n(features.value().data() + t * frame_skip_ * frame_width,
+                    copy_width,
+                    feature_slice->flat<float>().data() + b * features_width);
+        if (frame_stack_ == 1 && frame_skip_ == 1) {
+          std::copy_n(features.value().data() + t * frame_skip_ * frame_width,
+                      features_fbank_dim_,
+                      feature_fbank_slice->flat<float>().data() + b * features_fbank_dim_);
+        }
 
         Tensor* feature_weight = output_list_features_weight[t];
         feature_weight->flat<float>().data()[b] = 1.0f;
@@ -231,6 +250,8 @@ class S4ParseUtterance : public OpKernel {
   int64 features_len_max_;
   int64 tokens_len_max_;
   float eow_weight_;
+  int64 frame_stack_;
+  int64 frame_skip_;
 
   speech4::TokenModelProto token_model_proto_;
 };
