@@ -1083,8 +1083,8 @@ class Operation(object):
     self._traceback = _extract_stack()
     # Add this op to the current control flow context:
     self._control_flow_context = g._get_control_flow_context()
-    if g._get_control_flow_context() is not None:
-      g._get_control_flow_context().AddOp(self)
+    if self._control_flow_context is not None:
+      self._control_flow_context.AddOp(self)
     # NOTE(keveman): Control flow context's AddOp could be creating new ops and
     # setting op.inputs[index] = new_op. Thus the new ops' id could be larger
     # than this op's id even though this op depend on them. Therefore, delaying
@@ -1782,6 +1782,26 @@ class Graph(object):
           raise ValueError("GraphDef cannot be larger than 2GB.")
       graph.library.function.extend(self._functions.values())
     return graph
+
+  def _is_function(self, name):
+    """Tests whether 'name' is registered in this graph's function library.
+
+    Args:
+      name: string op name.
+    Returns:
+      bool indicating whether or not 'name' is registered in function library.
+    """
+    return name in self._functions
+
+  def _get_function(self, name):
+    """Returns the function definition for 'name'.
+
+    Args:
+      name: string function name.
+    Returns:
+      The function def proto.
+    """
+    return self._functions[name]
 
   def _add_function(self, function_def):
     """Adds a function to the graph.

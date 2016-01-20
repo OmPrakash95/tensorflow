@@ -87,9 +87,11 @@ TF_CALL_ALL_TYPES(REGISTER_CPU_SWITCH);
 TF_CALL_ALL_TYPES(REGISTER_CPU_REF_SWITCH);
 
 TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU_SWITCH);
+REGISTER_GPU_SWITCH(int64);
 REGISTER_GPU_SWITCH(bool);
 TF_CALL_GPU_NUMBER_TYPES(REGISTER_GPU_REF_SWITCH);
 REGISTER_GPU_REF_SWITCH(int32);
+REGISTER_GPU_REF_SWITCH(int64);
 REGISTER_GPU_REF_SWITCH(bool);
 
 #undef REGISTER_CPU_SWITCH
@@ -260,6 +262,21 @@ REGISTER_KERNEL_BUILDER(Name("Enter")
                             .HostMemory("data")
                             .HostMemory("output")
                             .TypeConstraint<int32>("T"),
+                        EnterOp);
+
+// Special GPU kernels for string.
+REGISTER_KERNEL_BUILDER(Name("Enter")
+                            .Device(DEVICE_GPU)
+                            .HostMemory("data")
+                            .HostMemory("output")
+                            .TypeConstraint<string>("T"),
+                        EnterOp);
+
+REGISTER_KERNEL_BUILDER(Name("RefEnter")
+                            .Device(DEVICE_GPU)
+                            .HostMemory("data")
+                            .HostMemory("output")
+                            .TypeConstraint<string>("T"),
                         EnterOp);
 
 // An exit op has one input and one output. It exits the current
