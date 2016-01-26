@@ -111,7 +111,7 @@ class LASModel(object):
       self.tokens_weights = []
       for idx in range(self.model_params.features_len_max):
         self.features.append(tf.placeholder(
-          tf.float32, shape=(self.batch_size, self.model_params.features_width),
+          tf.float32, shape=(self.batch_size, self.model_params.features_width * self.model_params.frame_stack),
           name="features_%d" % idx))
       for idx in range(self.model_params.tokens_len_max + 1):
         self.tokens.append(tf.placeholder(
@@ -177,6 +177,7 @@ class LASModel(object):
         self.dataset_size = 3869
       else:
         raise Exception("Unknown dataset: %s" % self.dataset)
+      print("Dataset: %s" % self.dataset)
       assert os.path.isfile(self.dataset)
       filename_queue = tf.train.string_input_producer([self.dataset])
 
@@ -195,13 +196,15 @@ class LASModel(object):
       # Parse the batched of serialized strings into the relevant utterance features.
       self.features, self.features_fbank, self.features_len, _, self.features_weight, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
           serialized, features_len_max=self.model_params.features_len_max,
-          tokens_len_max=self.model_params.tokens_len_max + 1)
+          tokens_len_max=self.model_params.tokens_len_max + 1,
+          frame_stack=self.model_params.frame_stack,
+          frame_skip=self.model_params.frame_skip)
       for feature_fbank in self.features_fbank:
         feature_fbank.set_shape([self.batch_size, 40])
 
     # Add the shape to the features.
     for feature in self.features:
-      feature.set_shape([self.batch_size, self.model_params.features_width])
+      feature.set_shape([self.batch_size, self.model_params.features_width * self.model_params.frame_stack])
     for token in self.tokens:
       token.set_shape([self.batch_size])
 
