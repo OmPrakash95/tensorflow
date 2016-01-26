@@ -387,6 +387,10 @@ def main(_):
     FLAGS.dataset_train = "gale_mandarin_train"
     FLAGS.dataset_valid = "gale_mandarin_dev"
     FLAGS.dataset_test = "gale_mandarin_dev"
+  elif FLAGS.dataset == "gale_mandarin_pinyin":
+    FLAGS.dataset_train = "gale_mandarin_pinyin_train"
+    FLAGS.dataset_valid = "gale_mandarin_pinyin_dev"
+    FLAGS.dataset_test = "gale_mandarin_pinyin_dev"
   elif FLAGS.dataset == "gale_arabic_200":
     FLAGS.dataset_train = "gale_arabic_200_train"
     FLAGS.datsaet_valid = "gale_arabic_200_test"
