@@ -40,6 +40,7 @@ message ModelParamsProto {
   int64 decoder_cell_size = 7;
   int64 attention_embedding_size = 8;
 
+  // placeholder (old decoder), decoder_greedy (greedy decoder).
   string input_layer = 9;
 
   bool encoder_only = 10;
