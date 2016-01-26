@@ -21,8 +21,8 @@ new_http_archive(
 
 new_http_archive(
   name = "eigen_archive",
-  url = "https://bitbucket.org/eigen/eigen/get/5651786.tar.gz",
-  sha256 = "57a47fa93ed4e3eef8964ca8654e463f8268f5a0c5e5520e21c69586ada61683",
+  url = "https://bitbucket.org/eigen/eigen/get/c8e5d09.tar.gz",
+  sha256 = "be61d1ce686e950d9a3a61b2aa83562ba4582ce1813e475869146e0a05915857",
   build_file = "eigen.BUILD",
 )
 
@@ -47,12 +47,6 @@ new_http_archive(
   url = "http://www.ijg.org/files/jpegsrc.v9a.tar.gz",
   sha256 = "3a753ea48d917945dd54a2d97de388aa06ca2eb1066cbfdc6652036349fe05a7",
   build_file = "jpeg.BUILD",
-)
-
-git_repository(
-  name = "gemmlowp",
-  remote = "https://github.com/google/gemmlowp.git",
-  commit = "cc5d3a0",
 )
 
 new_http_archive(

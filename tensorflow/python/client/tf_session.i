@@ -19,7 +19,7 @@ limitations under the License.
 
 #include "tensorflow/python/client/tf_session_helper.h"
 #include "tensorflow/core/lib/core/errors.h"
-#include "tensorflow/core/public/status.h"
+#include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/public/version.h"
 
 %}
@@ -262,6 +262,7 @@ tensorflow::ImportNumpy();
 %rename(TF_Run) tensorflow::TF_Run_wrapper;
 %unignore tensorflow;
 %unignore TF_Run;
+%unignore EqualGraphDefWrapper;
 
 %include "tensorflow/python/client/tf_session_helper.h"
 

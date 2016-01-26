@@ -63,6 +63,13 @@ class Buffer : public TensorBuffer {
     if (alloc_->TracksAllocationSizes()) {
       int64 ab = alloc_->AllocatedSize(data_);
       proto->set_allocated_bytes(ab);
+      int64 id = alloc_->AllocationId(data_);
+      if (id > 0) {
+        proto->set_allocation_id(id);
+      }
+      if (RefCountIsOne()) {
+        proto->set_has_single_reference(true);
+      }
     }
   }
 
@@ -178,6 +185,7 @@ PROTO_TRAITS(float, float, float);
 PROTO_TRAITS(double, double, double);
 PROTO_TRAITS(int32, int32, int);
 PROTO_TRAITS(uint8, int32, int);
+PROTO_TRAITS(uint16, int32, int);
 PROTO_TRAITS(int16, int32, int);
 PROTO_TRAITS(int8, int32, int);
 PROTO_TRAITS(int64, int64, int64);
@@ -349,6 +357,7 @@ void Tensor::CopyFromInternal(const Tensor& other, const TensorShape& shape) {
     CASE(double, SINGLE_ARG(STMTS))                   \
     CASE(int32, SINGLE_ARG(STMTS))                    \
     CASE(uint8, SINGLE_ARG(STMTS))                    \
+    CASE(uint16, SINGLE_ARG(STMTS))                   \
     CASE(int16, SINGLE_ARG(STMTS))                    \
     CASE(int8, SINGLE_ARG(STMTS))                     \
     CASE(string, SINGLE_ARG(STMTS))                   \
@@ -530,6 +539,7 @@ string Tensor::SummarizeValue(int64 max_entries) const {
         CASE(DT_DOUBLE);
         CASE(DT_INT32);
         CASE(DT_UINT8);
+        CASE(DT_UINT16);
         CASE(DT_INT16);
         CASE(DT_INT8);
         CASE(DT_INT64);
@@ -551,17 +561,30 @@ StringPiece Tensor::tensor_data() const {
   return StringPiece(static_cast<char*>(buf_->data()), TotalBytes());
 }
 
+bool Tensor::SharesBufferWith(const Tensor& b) const {
+  CHECK_NE(nullptr, buf_);
+  CHECK_NE(nullptr, b.buf_);
+  return buf_->root_buffer() == b.buf_->root_buffer();
+}
+
+size_t Tensor::BufferHash() const {
+  CHECK_NE(nullptr, buf_);
+  return std::hash<TensorBuffer*>()(buf_->root_buffer());
+}
+
 string Tensor::DebugString() const {
   return strings::StrCat("Tensor<type: ", DataTypeString(dtype()), " shape: ",
-                         shape().ShortDebugString(), " values: ",
-                         SummarizeValue(3), ">");
+                         shape().DebugString(), " values: ", SummarizeValue(3),
+                         ">");
 }
 
 void Tensor::FillDescription(TensorDescription* description) const {
   description->set_dtype(dtype());
   shape().AsProto(description->mutable_shape());
-  buf_->FillAllocationDescription(
-      description->mutable_allocation_description());
+  if (IsInitialized()) {
+    buf_->FillAllocationDescription(
+        description->mutable_allocation_description());
+  }
 }
 
 }  // namespace tensorflow
