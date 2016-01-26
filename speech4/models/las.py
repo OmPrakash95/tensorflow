@@ -383,10 +383,14 @@ def main(_):
 
   tf.set_random_seed(FLAGS.random_seed)
 
-  if FLAGS.dataset:
+  if FLAGS.dataset == "gale_mandarin":
     FLAGS.dataset_train = "gale_mandarin_train"
     FLAGS.dataset_valid = "gale_mandarin_dev"
     FLAGS.dataset_test = "gale_mandarin_dev"
+  elif FLAGS.dataset == "gale_arabic_200":
+    FLAGS.dataset_train = "gale_arabic_200_train"
+    FLAGS.datsaet_valid = "gale_arabic_200_test"
+    FLAGS.dataset_test = "gale_arabic_200_test"
 
   for global_epochs in range(FLAGS.global_epochs, FLAGS.global_epochs_max):
     run('train', FLAGS.dataset_train, global_epochs)
