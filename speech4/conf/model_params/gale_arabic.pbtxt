@@ -1,8 +1,10 @@
 features_width: 40
 features_len_max: 4096
-tokens_len_max: 500
+tokens_len_max: 210
 vocab_size: 64
 encoder_layer: "1"
 encoder_layer: "2"
 encoder_layer: "2"
 encoder_layer: "2"
+encoder_prefix: "encoder_layer"
+decoder_prefix: "decoder_layer"
