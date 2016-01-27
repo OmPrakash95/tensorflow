@@ -65,7 +65,7 @@ class LASModel(object):
       self.create_decoder()
 
     # Create the loss.
-    if not self.model_params.input_layer == 'placeholder':
+    if not self.model_params.input_layer:
       self.create_loss()
 
     if not forward_only:
@@ -110,10 +110,10 @@ class LASModel(object):
     self.saver = tf.train.Saver(tf.all_variables())
 
   def create_input_layer(self, forward_only):
+    self.features = []
+    self.tokens = []
+    self.tokens_weights = []
     if self.model_params.input_layer == 'placeholder':
-      self.features = []
-      self.tokens = []
-      self.tokens_weights = []
       for idx in range(self.model_params.features_len_max):
         self.features.append(tf.placeholder(
           tf.float32, shape=(self.batch_size, self.model_params.features_width * self.model_params.frame_stack),
@@ -128,10 +128,7 @@ class LASModel(object):
           tf.int64, shape=(self.batch_size), name="features_len")
       self.tokens_len = tf.placeholder(
           tf.int64, shape=(self.batch_size), name="tokens_len")
-    elif self.model_params.input_layer == "decoder_greedy":
-      self.features = []
-      self.tokens = []
-      self.tokens_weights = []
+    elif self.model_params.input_layer == "decoder":
       for idx in range(self.model_params.features_len_max):
         self.features.append(tf.placeholder(
           tf.float32, shape=(self.batch_size, self.model_params.features_width),
@@ -211,7 +208,8 @@ class LASModel(object):
     for feature in self.features:
       feature.set_shape([self.batch_size, self.model_params.features_width * self.model_params.frame_stack])
     for token in self.tokens:
-      token.set_shape([self.batch_size])
+      if token:
+        token.set_shape([self.batch_size])
 
   def create_encoder(self):
     start_time = time.time()
@@ -297,6 +295,7 @@ class LASModel(object):
       states = []
       attentions = []
       alignments = None
+      prev_logit = None
       for decoder_time_idx in range(len(self.tokens) - 1):
         if decoder_time_idx > 0:
           vs.get_variable_scope().reuse_variables()
@@ -304,7 +303,7 @@ class LASModel(object):
         # RNN-Attention Decoder.
         (outputs, states, attentions, alignments) = self.create_decoder_cell(
             decoder_time_idx, states, attentions, alignments, encoder_states,
-            encoder_embedding)
+            encoder_embedding, prev_logit)
  
         # Logit.
         with vs.variable_scope("Logit"):
@@ -312,6 +311,7 @@ class LASModel(object):
               outputs[-1],
               vs.get_variable("Matrix", [outputs[-1].get_shape()[1].value, self.model_params.vocab_size]),
               vs.get_variable("Bias", [self.model_params.vocab_size]), name="Logit_%d" % decoder_time_idx)
+          prev_logit = logit
           self.decoder_states.append(logit)
           prob = tf.nn.softmax(logit, name="Softmax_%d" % decoder_time_idx)
           self.prob.append(prob)
@@ -322,7 +322,7 @@ class LASModel(object):
 
   def create_decoder_cell(
       self, decoder_time_idx, states, attentions, prev_alignments, encoder_states,
-      encoder_embedding, scope=None):
+      encoder_embedding, prev_logit, scope=None):
     batch_size = self.batch_size
     attention_embedding_size = self.model_params.attention_embedding_size
     decoder_cell_size = self.model_params.decoder_cell_size
@@ -337,6 +337,11 @@ class LASModel(object):
       if decoder_time_idx == 0 or self.model_params.input_layer == 'placeholder':
         emb = embedding_ops.embedding_lookup(
             embedding, self.tokens[decoder_time_idx])
+      elif self.model_params.input_layer == "decoder":
+        # We want the arg max of the previous token here.
+        assert prev_logit
+        prev_token = math_ops.argmax(prev_logit, 1)
+        emb = embedding_ops.embedding_lookup(embedding, prev_token)
       else:
         emb = embedding_ops.embedding_lookup(embedding, gru_ops.token_sample(
             self.tokens[decoder_time_idx], self.prob[-1],
