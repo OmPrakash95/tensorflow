@@ -38,6 +38,11 @@ class LASModel(object):
     if not self.model_params.decoder_prefix:
       self.model_params.decoder_prefix = "decoder"
 
+    if self.model_params.frame_stack == 0:
+      self.model_params.frame_stack = 1
+    if self.model_params.frame_skip == 0:
+      self.model_params.frame_skip = 0
+
     self.optimization_params = optimization_params
     self.visualization_params = visualization_params
     if forward_only and self.optimization_params:
@@ -115,12 +120,35 @@ class LASModel(object):
           name="features_%d" % idx))
       for idx in range(self.model_params.tokens_len_max + 1):
         self.tokens.append(tf.placeholder(
-          tf.int32, shape=(self.batch_size), name="tokens_%d" % idx))
+            tf.int32, shape=(self.batch_size), name="tokens_%d" % idx))
         self.tokens_weights.append(tf.placeholder(
             tf.float32, shape=(self.batch_size), name="tokens_weights_%d" % idx))
 
       self.features_len = tf.placeholder(
           tf.int64, shape=(self.batch_size), name="features_len")
+      self.tokens_len = tf.placeholder(
+          tf.int64, shape=(self.batch_size), name="tokens_len")
+    elif self.model_params.input_layer == "decoder_greedy":
+      self.features = []
+      self.tokens = []
+      self.tokens_weights = []
+      for idx in range(self.model_params.features_len_max):
+        self.features.append(tf.placeholder(
+          tf.float32, shape=(self.batch_size, self.model_params.features_width),
+          name="features_%d" % idx))
+      self.features_len = tf.placeholder(
+          tf.int64, shape=(self.batch_size), name="features_len")
+
+      # Only the first token is given.
+      self.tokens.append(tf.placeholder(
+          tf.int32, shape=(self.batch_size), name="tokens_0"))
+      self.tokens_weights.append(tf.placeholder(
+          tf.float32, shape=(self.batch_size), name="tokens_weights_0"))
+      # Everything else must come from the graph itself.
+      for idx in range(self.model_params.tokens_len_max):
+        self.tokens.append(None)
+        self.tokens_weights.append(None)
+
       self.tokens_len = tf.placeholder(
           tf.int64, shape=(self.batch_size), name="tokens_len")
     else:
@@ -254,47 +282,11 @@ class LASModel(object):
     #encoder_embedding = tf.nn.relu(encoder_embedding)
 
     #self.create_decoder_layer(attention_states=attention_states)
-    #self.create_decoder_layer_v1(output_projection=True)
     self.create_decoder_sequence(
         attention_states=attention_states, encoder_states=encoder_states,
         encoder_embedding=encoder_embedding)
 
     print('create_decoder graph time %f' % (time.time() - start_time))
-
-  def create_decoder_layer_v1(
-      self, attention_states=None, output_projection=None, scope=None):
-    with vs.variable_scope('decoder_layer_%d' % (len(self.decoder_states))):
-      decoder_initial_state = tf.constant(
-          0, shape=[self.batch_size, self.model_params.decoder_cell_size], dtype=tf.float32)
-      decoder_initial_state.set_shape([self.batch_size, self.model_params.decoder_cell_size])
-
-      cell = rnn_cell.GRUCell(self.model_params.decoder_cell_size)
-      #cell = rnn_cell.GRUCellv2(self.model_params.decoder_cell_size, sequence_len=self.tokens_len)
-      if output_projection == True:
-        cell = rnn_cell.OutputProjectionWrapper(cell, self.model_params.vocab_size)
-
-      if attention_states:
-        if len(self.decoder_states) == 1:
-          self.decoder_states.append(seq2seq.embedding_attention_decoder(
-              self.decoder_states[-1], decoder_initial_state, attention_states,
-              cell, self.model_params.embedding_size, self.model_params.vocab_size,
-              attention_states_sequence_len=self.encoder_states[-1][1],
-              sequence_length=self.tokens_len)[0])
-        else:
-          self.decoder_states.append(seq2seq.attention_decoder(
-              self.decoder_states[-1], decoder_initial_state, attention_states,
-              cell, attention_states_sequence_len=self.encoder_states[-1][1],
-              sequence_length=self.tokens_len)[0])
-      else:
-        if len(self.decoder_states) == 1:
-          self.decoder_states.append(seq2seq.embedding_rnn_decoder(
-              self.decoder_states[-1], decoder_initial_state, cell,
-              self.model_params.embedding_size, self.model_params.vocab_size,
-              sequence_length=self.tokens_len)[0])
-        else:
-          self.decoder_states.append(seq2seq.rnn_decoder(
-              self.decoder_states[-1], decoder_initial_state, cell,
-              sequence_length=self.tokens_len)[0])
 
   def create_decoder_sequence(
       self, attention_states, encoder_states, encoder_embedding, scope=None):

@@ -389,7 +389,8 @@ def embedding_tied_rnn_seq2seq(encoder_inputs, decoder_inputs, cell,
 def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
                       output_size=None, num_heads=1, loop_function=None,
                       dtype=dtypes.float32, attention_states_sequence_len=None,
-                      sequence_length=None, scope=None, initial_state_attention=False):
+                      sequence_length=None, scope=None,
+                      initial_state_attention=False):
   """RNN decoder with attention for the sequence-to-sequence model.
 
   Args:
