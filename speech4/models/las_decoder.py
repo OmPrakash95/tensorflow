@@ -94,7 +94,7 @@ class Decoder(object):
     cer = speech4_pb2.EditDistanceResultsProto()
     wer = speech4_pb2.EditDistanceResultsProto()
     utts = []
-    for _ in range(self.dataset_size):
+    for idx in range(self.dataset_size):
       utt = self.read_utterance(sess)
       self.decode_utterance(sess, utt)
 
@@ -106,7 +106,7 @@ class Decoder(object):
       wer.ref_length += utt.proto.wer.ref_length
       wer.error_rate = float(wer.edit_distance) / float(wer.ref_length)
 
-      print("accum wer: %f (%d / %d); cer: %f" % (wer.error_rate, wer.edit_distance, wer.ref_length, cer.error_rate))
+      print("accum wer: %f (%d / %d); cer: %f; (%d / %d)" % (wer.error_rate, wer.edit_distance, wer.ref_length, cer.error_rate, idx, self.dataset_size))
       utts.append(utt)
 
     with open(os.path.join(self.logdir, "decode_results_cer.pbtxt"), "w") as proto_file:

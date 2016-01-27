@@ -5,6 +5,7 @@ import math
 import numpy as np
 import os.path
 import random
+import shutil
 import string
 import sys
 import tempfile
@@ -379,6 +380,18 @@ def main(_):
     os.makedirs(FLAGS.logdir)
   except:
     pass
+  if FLAGS.model_params:
+    dst = os.path.join(FLAGS.logdir, os.path.basename(FLAGS.model_params));
+    shutil.copy2(FLAGS.model_params, dst)
+    FLAGS.model_params = dst
+  if FLAGS.optimization_params:
+    dst = os.path.join(FLAGS.logdir, os.path.basename(FLAGS.optimization_params))
+    shutil.copy2(FLAGS.optimization_params, dst)
+    FLAGS.optimization_params = dst
+  if FLAGS.decoder_params:
+    dst = os.path.join(FLAGS.logdir, os.path.basename(FLAGS.decoder_params))
+    shutil.copy2(FLAGS.decoder_params, dst)
+    FLAGS.decoder_params = dst
   print("logdir: %s" % FLAGS.logdir)
 
   tf.set_random_seed(FLAGS.random_seed)
