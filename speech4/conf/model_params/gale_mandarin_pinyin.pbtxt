@@ -2,6 +2,10 @@ features_width: 43
 features_len_max: 3500
 tokens_len_max: 210
 vocab_size: 64
+embedding_size: 32
+encoder_cell_size: 384
+decoder_cell_size: 256
+attention_embedding_size: 128
 encoder_layer: "1"
 encoder_layer: "1"
 encoder_layer: "2"

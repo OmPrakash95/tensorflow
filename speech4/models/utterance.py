@@ -10,8 +10,8 @@ from speech4.models import las_utils
 
 
 class Hypothesis(object):
-  def __init__(self):
-    self.text = ""
+  def __init__(self, text=""):
+    self.text = text
     self.logprob = 0.0
     self.state_prev = None
     self.state_next = None
@@ -27,8 +27,7 @@ class Hypothesis(object):
     return token_model.string_to_token[self.text[-1]]
 
   def expand(self, token_model, beam_width):
-    completed = Hypothesis()
-    completed.text = self.text
+    completed = Hypothesis(completed.text)
     completed.logprob = self.logprob + self.logprobs[token_model.proto.token_eos]
 
     candidates = zip(range(self.logprobs.size), self.logprobs.tolist())
@@ -86,8 +85,8 @@ class Utterance(object):
   def create_proto(self, token_model):
     proto = speech4_pb2.UtteranceResultsProto()
     proto.uttid = self.uttid
-    proto.ref = self.text
-    proto.hyp = self.hypothesis_complete[0].text
+    proto.ref = self.text.strip()
+    proto.hyp = self.hypothesis_complete[0].text.strip()
 
     if token_model.proto.remove_eow:
       proto.ref = ''.join(proto.ref.split(token_model.proto.token_string_eow))

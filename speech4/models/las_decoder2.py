@@ -142,12 +142,12 @@ class Decoder2(object):
       fetches['logit_%03d' % idx] = logit
     fetches = self.model.run_graph(sess, fetches, feed_dict=feed_dict)
 
-    hyp = ''
+    hyp_text = ""
     for logit in sorted(fetches)[1:]:
       token = np.argmax(fetches[logit])
 
       if token == self.token_model.proto.token_eos:
         break
-      hyp += self.token_model.token_to_string[token]
-
-    print hyp
+      hyp_text += self.token_model.token_to_string[token]
+    utt.hypothesis_complete.append(utterance.Hypothesis(hyp_text))
+    utt.create_proto(self.token_model)

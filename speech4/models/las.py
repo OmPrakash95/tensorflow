@@ -31,6 +31,7 @@ from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops.gen_user_ops import s4_parse_utterance
 from tensorflow.python.platform import gfile
 from speech4.models import las_decoder
+from speech4.models import las_decoder2
 from speech4.models import las_model
 
 
@@ -358,7 +359,7 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
           with open(FLAGS.decoder_params, "r") as proto_file:
             google.protobuf.text_format.Merge(proto_file.read(), decoder_params)
 
-        decoder = las_decoder.Decoder(
+        decoder = las_decoder2.Decoder2(
             sess, dataset, dataset_size, FLAGS.logdir, ckpt, decoder_params, model_params)
 
         threads = []
@@ -381,15 +382,15 @@ def main(_):
   except:
     pass
   if FLAGS.model_params:
-    dst = os.path.join(FLAGS.logdir, os.path.basename(FLAGS.model_params));
+    dst = os.path.join(FLAGS.logdir, "model_params.pbtxt");
     shutil.copy2(FLAGS.model_params, dst)
     FLAGS.model_params = dst
   if FLAGS.optimization_params:
-    dst = os.path.join(FLAGS.logdir, os.path.basename(FLAGS.optimization_params))
+    dst = os.path.join(FLAGS.logdir, "optimization_params.pbtxt")
     shutil.copy2(FLAGS.optimization_params, dst)
     FLAGS.optimization_params = dst
   if FLAGS.decoder_params:
-    dst = os.path.join(FLAGS.logdir, os.path.basename(FLAGS.decoder_params))
+    dst = os.path.join(FLAGS.logdir, "decoder_params.pbtxt")
     shutil.copy2(FLAGS.decoder_params, dst)
     FLAGS.decoder_params = dst
   print("logdir: %s" % FLAGS.logdir)
