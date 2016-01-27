@@ -41,7 +41,7 @@ class LASModel(object):
     if self.model_params.frame_stack == 0:
       self.model_params.frame_stack = 1
     if self.model_params.frame_skip == 0:
-      self.model_params.frame_skip = 0
+      self.model_params.frame_skip = 1
 
     self.optimization_params = optimization_params
     self.visualization_params = visualization_params
