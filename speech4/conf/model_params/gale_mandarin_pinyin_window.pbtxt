@@ -1,0 +1,15 @@
+features_width: 43
+features_len_max: 3500
+tokens_len_max: 210
+vocab_size: 64
+encoder_layer: "1"
+encoder_layer: "1"
+encoder_layer: "2"
+encoder_layer: "2"
+attention_params {
+  type: "window"
+  s_min: 0
+  s_max: 40
+  v_min: 0.5
+  v_max: 1.5
+}

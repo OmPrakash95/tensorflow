@@ -1,0 +1,8 @@
+features_width: 43
+features_len_max: 3500
+tokens_len_max: 210
+vocab_size: 64
+encoder_layer: "1"
+encoder_layer: "1"
+encoder_layer: "2"
+encoder_layer: "2"
