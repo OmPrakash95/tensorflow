@@ -55,16 +55,13 @@ def rnn_decoder(decoder_inputs, initial_state, cell, loop_function=None,
   Returns:
     outputs: A list of the same length as decoder_inputs of 2D Tensors with
       shape [batch_size x cell.output_size] containing generated outputs.
-    states: The state of each cell in each time-step. This is a list with
-      length len(decoder_inputs) -- one item for each time-step.
-      Each item is a 2D Tensor of shape [batch_size x cell.state_size].
+    state: The state of each cell at the final time-step.
+      It is a 2D Tensor of shape [batch_size x cell.state_size].
       (Note that in some cases, like basic RNN cell or GRU cell, outputs and
        states can be the same. They are different for LSTM cells though.)
   """
   with vs.variable_scope(scope or "rnn_decoder"):
-    batch_size = decoder_inputs[0].get_shape()[0].value
-
-    states = [initial_state]
+    state = initial_state
     outputs = []
     prev = None
 
@@ -86,24 +83,11 @@ def rnn_decoder(decoder_inputs, initial_state, cell, loop_function=None,
           inp = array_ops.stop_gradient(loop_function(prev, i))
       if i > 0:
         vs.get_variable_scope().reuse_variables()
-
-      def output_state():
-        return cell(inp, states[-1])
-
-      if sequence_length:
-        (output, new_state) = control_flow_ops.cond(
-            i >= max_sequence_length,
-            lambda: zero_output_state, output_state)
-      else:
-        (output, new_state) = output_state()
-      output.set_shape([batch_size, cell.output_size])
-      new_state.set_shape([batch_size, cell.state_size])
-
+      output, state = cell(inp, state)
       outputs.append(output)
-      states.append(new_state)
       if loop_function is not None:
         prev = array_ops.stop_gradient(output)
-  return outputs, states
+  return outputs, state
 
 
 def basic_rnn_seq2seq(
@@ -124,13 +108,12 @@ def basic_rnn_seq2seq(
   Returns:
     outputs: A list of the same length as decoder_inputs of 2D Tensors with
       shape [batch_size x cell.output_size] containing the generated outputs.
-    states: The state of each decoder cell in each time-step. This is a list
-      with length len(decoder_inputs) -- one item for each time-step.
-      Each item is a 2D Tensor of shape [batch_size x cell.state_size].
+    state: The state of each decoder cell in the final time-step.
+      It is a 2D Tensor of shape [batch_size x cell.state_size].
   """
   with vs.variable_scope(scope or "basic_rnn_seq2seq"):
-    _, enc_states = rnn.rnn(cell, encoder_inputs, dtype=dtype)
-    return rnn_decoder(decoder_inputs, enc_states[-1], cell)
+    _, enc_state = rnn.rnn(cell, encoder_inputs, dtype=dtype)
+    return rnn_decoder(decoder_inputs, enc_state, cell)
 
 
 def tied_rnn_seq2seq(encoder_inputs, decoder_inputs, cell,
@@ -154,16 +137,16 @@ def tied_rnn_seq2seq(encoder_inputs, decoder_inputs, cell,
   Returns:
     outputs: A list of the same length as decoder_inputs of 2D Tensors with
       shape [batch_size x cell.output_size] containing the generated outputs.
-    states: The state of each decoder cell in each time-step. This is a list
+    state: The state of each decoder cell in each time-step. This is a list
       with length len(decoder_inputs) -- one item for each time-step.
-      Each item is a 2D Tensor of shape [batch_size x cell.state_size].
+      It is a 2D Tensor of shape [batch_size x cell.state_size].
   """
   with vs.variable_scope("combined_tied_rnn_seq2seq"):
     scope = scope or "tied_rnn_seq2seq"
-    _, enc_states = rnn.rnn(
+    _, enc_state = rnn.rnn(
         cell, encoder_inputs, dtype=dtype, scope=scope)
     vs.get_variable_scope().reuse_variables()
-    return rnn_decoder(decoder_inputs, enc_states[-1], cell,
+    return rnn_decoder(decoder_inputs, enc_state, cell,
                        loop_function=loop_function, scope=scope)
 
 
@@ -194,9 +177,9 @@ def embedding_rnn_decoder(decoder_inputs, initial_state, cell,
   Returns:
     outputs: A list of the same length as decoder_inputs of 2D Tensors with
       shape [batch_size x cell.output_size] containing the generated outputs.
-    states: The state of each decoder cell in each time-step. This is a list
+    state: The state of each decoder cell in each time-step. This is a list
       with length len(decoder_inputs) -- one item for each time-step.
-      Each item is a 2D Tensor of shape [batch_size x cell.state_size].
+      It is a 2D Tensor of shape [batch_size x cell.state_size].
 
   Raises:
     ValueError: when output_projection has the wrong shape.
@@ -268,37 +251,37 @@ def embedding_rnn_seq2seq(encoder_inputs, decoder_inputs, cell,
   Returns:
     outputs: A list of the same length as decoder_inputs of 2D Tensors with
       shape [batch_size x num_decoder_symbols] containing the generated outputs.
-    states: The state of each decoder cell in each time-step. This is a list
+    state: The state of each decoder cell in each time-step. This is a list
       with length len(decoder_inputs) -- one item for each time-step.
-      Each item is a 2D Tensor of shape [batch_size x cell.state_size].
+      It is a 2D Tensor of shape [batch_size x cell.state_size].
   """
   with vs.variable_scope(scope or "embedding_rnn_seq2seq"):
     # Encoder.
     encoder_cell = rnn_cell.EmbeddingWrapper(cell, num_encoder_symbols)
-    _, encoder_states = rnn.rnn(encoder_cell, encoder_inputs, dtype=dtype)
+    _, encoder_state = rnn.rnn(encoder_cell, encoder_inputs, dtype=dtype)
 
     # Decoder.
     if output_projection is None:
       cell = rnn_cell.OutputProjectionWrapper(cell, num_decoder_symbols)
 
     if isinstance(feed_previous, bool):
-      return embedding_rnn_decoder(decoder_inputs, encoder_states[-1], cell,
+      return embedding_rnn_decoder(decoder_inputs, encoder_state, cell,
                                    num_decoder_symbols, output_projection,
                                    feed_previous)
     else:  # If feed_previous is a Tensor, we construct 2 graphs and use cond.
-      outputs1, states1 = embedding_rnn_decoder(
-          decoder_inputs, encoder_states[-1], cell, num_decoder_symbols,
+      outputs1, state1 = embedding_rnn_decoder(
+          decoder_inputs, encoder_state, cell, num_decoder_symbols,
           output_projection, True)
       vs.get_variable_scope().reuse_variables()
-      outputs2, states2 = embedding_rnn_decoder(
-          decoder_inputs, encoder_states[-1], cell, num_decoder_symbols,
+      outputs2, state2 = embedding_rnn_decoder(
+          decoder_inputs, encoder_state, cell, num_decoder_symbols,
           output_projection, False)
 
       outputs = control_flow_ops.cond(feed_previous,
                                       lambda: outputs1, lambda: outputs2)
-      states = control_flow_ops.cond(feed_previous,
-                                     lambda: states1, lambda: states2)
-      return outputs, states
+      state = control_flow_ops.cond(feed_previous,
+                                    lambda: state1, lambda: state2)
+      return outputs, state
 
 
 def embedding_tied_rnn_seq2seq(encoder_inputs, decoder_inputs, cell,
@@ -333,9 +316,8 @@ def embedding_tied_rnn_seq2seq(encoder_inputs, decoder_inputs, cell,
   Returns:
     outputs: A list of the same length as decoder_inputs of 2D Tensors with
       shape [batch_size x num_decoder_symbols] containing the generated outputs.
-    states: The state of each decoder cell in each time-step. This is a list
-      with length len(decoder_inputs) -- one item for each time-step.
-      Each item is a 2D Tensor of shape [batch_size x cell.state_size].
+    state: The state of each decoder cell at the final time-step.
+      It is a 2D Tensor of shape [batch_size x cell.state_size].
 
   Raises:
     ValueError: when output_projection has the wrong shape.
@@ -372,18 +354,18 @@ def embedding_tied_rnn_seq2seq(encoder_inputs, decoder_inputs, cell,
       return tied_rnn_seq2seq(emb_encoder_inputs, emb_decoder_inputs, cell,
                               loop_function=loop_function, dtype=dtype)
     else:  # If feed_previous is a Tensor, we construct 2 graphs and use cond.
-      outputs1, states1 = tied_rnn_seq2seq(
+      outputs1, state1 = tied_rnn_seq2seq(
           emb_encoder_inputs, emb_decoder_inputs, cell,
           loop_function=extract_argmax_and_embed, dtype=dtype)
       vs.get_variable_scope().reuse_variables()
-      outputs2, states2 = tied_rnn_seq2seq(
+      outputs2, state2 = tied_rnn_seq2seq(
           emb_encoder_inputs, emb_decoder_inputs, cell, dtype=dtype)
 
       outputs = control_flow_ops.cond(feed_previous,
                                       lambda: outputs1, lambda: outputs2)
-      states = control_flow_ops.cond(feed_previous,
-                                     lambda: states1, lambda: states2)
-      return outputs, states
+      state = control_flow_ops.cond(feed_previous,
+                                    lambda: state1, lambda: state2)
+      return outputs, state
 
 
 def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
@@ -427,9 +409,8 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
         new_attn = softmax(V^T * tanh(W * attention_states + U * new_state))
       and then we calculate the output:
         output = linear(cell_output, new_attn).
-    states: The state of each decoder cell in each time-step. This is a list
-      with length len(decoder_inputs) -- one item for each time-step.
-      Each item is a 2D Tensor of shape [batch_size x cell.state_size].
+    state: The state of each decoder cell the final time-step.
+      It is a 2D Tensor of shape [batch_size x cell.state_size].
 
   Raises:
     ValueError: when num_heads is not positive, there are no inputs, or shapes
@@ -462,20 +443,7 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
       hidden_features.append(nn_ops.conv2d(hidden, k, [1, 1, 1, 1], "SAME"))
       v.append(vs.get_variable("AttnV_%d" % a, [attention_vec_size]))
 
-    if sequence_length:  # Prepare variables
-      zero_output_state = (
-          array_ops.zeros(array_ops.pack([batch_size, output_size]),
-                          dtype),
-          array_ops.zeros(array_ops.pack([batch_size, cell.state_size]),
-                          dtype),
-          array_ops.zeros(array_ops.pack([batch_size, attention_vec_size]),
-                          dtype))
-      zero_output_state[0].set_shape([batch_size, output_size])
-      zero_output_state[1].set_shape([batch_size, cell.state_size])
-      zero_output_state[2].set_shape([batch_size, attention_vec_size])
-      max_sequence_length = math_ops.reduce_max(sequence_length)
-
-    states = [initial_state]
+    state = initial_state
 
     def attention(query):
       """Put attention masks on hidden using hidden_features and query."""
@@ -515,34 +483,16 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
       if loop_function is not None and prev is not None:
         with vs.variable_scope("loop_function", reuse=True):
           inp = array_ops.stop_gradient(loop_function(prev, i))
-      def output_state():
-        # Merge input and previous attentions into one vector of the right size.
-        x = rnn_cell.linear([inp] + attns, cell.input_size, True)
-        # Run the RNN.
-        cell_output, new_state = cell(x, states[-1])
-        # Run the attention mechanism.
-        new_attns = attention(new_state)
-        with vs.variable_scope("AttnOutputProjection"):
-          output = rnn_cell.linear([cell_output] + new_attns, output_size, True)
-        return (output, new_state, new_attns[0])
-
-      if sequence_length:
-        (output, new_state, attns) = control_flow_ops.cond(
-            i >= max_sequence_length,
-            lambda: zero_output_state, output_state)
-      else:
-        (output, new_state, attns) = output_state()
-      output.set_shape([batch_size, cell.output_size])
-      new_state.set_shape([batch_size, cell.state_size])
-      attns = [attns]
-
-      states.append(new_state)
+      # Merge input and previous attentions into one vector of the right size.
+      x = rnn_cell.linear([inp] + attns, cell.input_size, True)
+      # Run the RNN.
+      cell_output, state = cell(x, state)
       # Run the attention mechanism.
       if i == 0 and initial_state_attention:
         with vs.variable_scope(vs.get_variable_scope(), reuse=True):
-          attns = attention(new_state)
+          attns = attention(state)
       else:
-        attns = attention(new_state)
+        attns = attention(state)
 
       with vs.variable_scope("AttnOutputProjection"):
         output = rnn_cell.linear([cell_output] + attns, output_size, True)
@@ -551,7 +501,7 @@ def attention_decoder(decoder_inputs, initial_state, attention_states, cell,
         prev = array_ops.stop_gradient(output)
       outputs.append(output)
 
-  return outputs, states
+  return outputs, state
 
 
 def embedding_attention_decoder(decoder_inputs, initial_state, attention_states,
@@ -593,9 +543,8 @@ def embedding_attention_decoder(decoder_inputs, initial_state, attention_states,
   Returns:
     outputs: A list of the same length as decoder_inputs of 2D Tensors with
       shape [batch_size x output_size] containing the generated outputs.
-    states: The state of each decoder cell in each time-step. This is a list
-      with length len(decoder_inputs) -- one item for each time-step.
-      Each item is a 2D Tensor of shape [batch_size x cell.state_size].
+    state: The state of each decoder cell at the final time-step.
+      It is a 2D Tensor of shape [batch_size x cell.state_size].
 
   Raises:
     ValueError: when output_projection has the wrong shape.
@@ -678,14 +627,13 @@ def embedding_attention_seq2seq(encoder_inputs, decoder_inputs, cell,
   Returns:
     outputs: A list of the same length as decoder_inputs of 2D Tensors with
       shape [batch_size x num_decoder_symbols] containing the generated outputs.
-    states: The state of each decoder cell in each time-step. This is a list
-      with length len(decoder_inputs) -- one item for each time-step.
-      Each item is a 2D Tensor of shape [batch_size x cell.state_size].
+    state: The state of each decoder cell at the final time-step.
+      It is a 2D Tensor of shape [batch_size x cell.state_size].
   """
   with vs.variable_scope(scope or "embedding_attention_seq2seq"):
     # Encoder.
     encoder_cell = rnn_cell.EmbeddingWrapper(cell, num_encoder_symbols)
-    encoder_outputs, encoder_states = rnn.rnn(
+    encoder_outputs, encoder_state = rnn.rnn(
         encoder_cell, encoder_inputs, dtype=dtype)
 
     # First calculate a concatenation of encoder outputs to put attention on.
@@ -701,25 +649,25 @@ def embedding_attention_seq2seq(encoder_inputs, decoder_inputs, cell,
 
     if isinstance(feed_previous, bool):
       return embedding_attention_decoder(
-          decoder_inputs, encoder_states[-1], attention_states, cell,
+          decoder_inputs, encoder_state, attention_states, cell,
           num_decoder_symbols, num_heads, output_size, output_projection,
           feed_previous, initial_state_attention=initial_state_attention)
     else:  # If feed_previous is a Tensor, we construct 2 graphs and use cond.
-      outputs1, states1 = embedding_attention_decoder(
-          decoder_inputs, encoder_states[-1], attention_states, cell,
+      outputs1, state1 = embedding_attention_decoder(
+          decoder_inputs, encoder_state, attention_states, cell,
           num_decoder_symbols, num_heads, output_size, output_projection, True,
           initial_state_attention=initial_state_attention)
       vs.get_variable_scope().reuse_variables()
-      outputs2, states2 = embedding_attention_decoder(
-          decoder_inputs, encoder_states[-1], attention_states, cell,
+      outputs2, state2 = embedding_attention_decoder(
+          decoder_inputs, encoder_state, attention_states, cell,
           num_decoder_symbols, num_heads, output_size, output_projection, False,
           initial_state_attention=initial_state_attention)
 
       outputs = control_flow_ops.cond(feed_previous,
                                       lambda: outputs1, lambda: outputs2)
-      states = control_flow_ops.cond(feed_previous,
-                                     lambda: states1, lambda: states2)
-      return outputs, states
+      state = control_flow_ops.cond(feed_previous,
+                                    lambda: state1, lambda: state2)
+      return outputs, state
 
 
 def sequence_loss_by_example(logits, targets, weights, num_decoder_symbols,
