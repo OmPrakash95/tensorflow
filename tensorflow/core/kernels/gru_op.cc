@@ -506,6 +506,7 @@ class TokenSampleOp : public OpKernel {
             prob += token_distribution->matrix<float>()(b, v);
             if (prob >= sample_token_prob[b]) break;
           }
+          if (v >= vocab_size) v = vocab_size - 1;
 
           token->vec<int32>()(b) = v;
         }
