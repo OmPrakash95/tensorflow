@@ -4,6 +4,13 @@ syntax = "proto3";
 
 package speech4;
 
+message DatasetParamsProto {
+  string name = 1;
+  string train = 2;
+  string valid = 3;
+  string test = 4;
+};
+
 message ExperimentParamsProto {
   string description = 1;
 
@@ -57,6 +64,13 @@ message ModelParamsProto {
 
   string decoder_prefix = 200;
   repeated string decoder_layer = 201;
+
+  // Pinyin extension experiments.
+  bool pinyin_ext = 300;
+  int64 pinyin_dim = 301;
+  int64 pinyin_vocab_size = 302;
+
+  DatasetParamsProto dataset = 1000;
 };
 
 message AdagradParamsProto {

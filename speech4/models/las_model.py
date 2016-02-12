@@ -24,8 +24,9 @@ from tensorflow.python.platform import gfile
 
 class LASModel(object):
   def __init__(self, sess, dataset, logdir, ckpt, forward_only, batch_size,
-      model_params, optimization_params=None, visualization_params=None):
+      model_params, optimization_params=None, visualization_params=None, dataset_size=None):
     self.dataset = dataset
+    self.dataset_size = dataset_size
     self.logdir = logdir
 
     self.batch_size = batch_size
@@ -94,6 +95,11 @@ class LASModel(object):
           if 'Adadelta' not in v.name:
             filtered_variables.append(v)
         variables = filtered_variables
+      filtered_variables = []
+      for v in variables:
+        if 'Pinyin' not in v.name:
+          filtered_variables.append(v)
+      variables = filtered_variables
       #filtered_variables = []
       #for v in variables:
       #  if "encoder_0" in v.name or "encoder_1" in v.name or "encoder_2" in v.name or "encoder_3" in v.name:
@@ -131,7 +137,7 @@ class LASModel(object):
     elif self.model_params.input_layer == "decoder":
       for idx in range(self.model_params.features_len_max):
         self.features.append(tf.placeholder(
-          tf.float32, shape=(self.batch_size, self.model_params.features_width),
+          tf.float32, shape=(self.batch_size, self.model_params.features_width * self.model_params.frame_stack),
           name="features_%d" % idx))
       self.features_len = tf.placeholder(
           tf.int64, shape=(self.batch_size), name="features_len")
@@ -149,36 +155,6 @@ class LASModel(object):
       self.tokens_len = tf.placeholder(
           tf.int64, shape=(self.batch_size), name="tokens_len")
     else:
-      if 'train_si284' in self.dataset:
-        self.dataset_size = 37416
-      elif 'test_dev93' in self.dataset:
-        self.dataset_size = 503
-      elif 'test_eval92' in self.dataset:
-        self.dataset_size = 333
-      elif 'swbd' in self.dataset:
-        self.dataset_size = 263775
-      elif 'eval2000' in self.dataset:
-        self.dataset_size = 4458
-      elif "gale_mandarin_train" in self.dataset or "gale_mandarin_sorted_train" in self.dataset:
-        self.dataset_size = 58058
-      elif "gale_mandarin_pinyin_train" in self.dataset:
-        self.dataset_size = 49364
-      elif "gale_mandarin_10_train" in self.dataset:
-        self.dataset_size = 9568
-      elif "gale_mandarin_dev" in self.dataset or "gale_mandarin_sorted_dev" in self.dataset:
-        self.dataset_size = 5191
-      elif "gale_mandarin_pinyin_dev" in self.dataset:
-        self.dataset_size = 4332
-      elif "gale_arabic_train" in self.dataset:
-        self.dataset_size = 146228
-      elif "gale_arabic_test" in self.dataset:
-        self.dataset_size = 4151
-      elif "gale_arabic_200_train" in self.dataset:
-        self.dataset_size = 135755
-      elif "gale_arabic_200_test" in self.dataset:
-        self.dataset_size = 3869
-      else:
-        raise Exception("Unknown dataset: %s" % self.dataset)
       print("Dataset: %s" % self.dataset)
       assert os.path.isfile(self.dataset)
       filename_queue = tf.train.string_input_producer([self.dataset])
@@ -196,11 +172,15 @@ class LASModel(object):
             capacity=self.batch_size * 4 + 512, min_after_dequeue=512, seed=self.global_epochs)
 
       # Parse the batched of serialized strings into the relevant utterance features.
-      self.features, self.features_fbank, self.features_len, _, self.features_weight, self.text, self.tokens, self.tokens_len, self.tokens_weights, self.uttid = s4_parse_utterance(
+      self.features, self.features_fbank, self.features_len, _, self.features_weight, self.text, self.tokens, self.tokens_pinyin, self.tokens_len, self.tokens_weights, self.tokens_pinyin_weights, self.uttid = s4_parse_utterance(
           serialized, features_len_max=self.model_params.features_len_max,
           tokens_len_max=self.model_params.tokens_len_max + 1,
           frame_stack=self.model_params.frame_stack,
           frame_skip=self.model_params.frame_skip)
+      assert len(self.tokens) == len(self.tokens_weights)
+      if self.model_params.pinyin_ext:
+        assert len(self.tokens) == len(self.tokens_pinyin)
+        assert len(self.tokens) == len(self.tokens_pinyin_weights)
       for feature_fbank in self.features_fbank:
         feature_fbank.set_shape([self.batch_size, 40])
 
@@ -290,6 +270,7 @@ class LASModel(object):
       self, attention_states, encoder_states, encoder_embedding, scope=None):
     with vs.variable_scope(self.model_params.decoder_prefix or scope):
       self.decoder_states = []
+      self.logits_pinyin = []
       self.prob = []
       self.logprob = []
       states = []
@@ -316,6 +297,18 @@ class LASModel(object):
           prob = tf.nn.softmax(logit, name="Softmax_%d" % decoder_time_idx)
           self.prob.append(prob)
           self.logprob.append(tf.log(prob, name="LogProb_%d" % decoder_time_idx))
+
+        # Pinyin Logits.
+        if self.model_params.pinyin_ext:
+          assert self.model_params.pinyin_dim == 7
+          with vs.variable_scope("LogitPinyin"):
+            pinyin_logit = nn_ops.xw_plus_b(
+                outputs[-1],
+                vs.get_variable("Matrix", [outputs[-1].get_shape()[1].value, self.model_params.pinyin_vocab_size * 7]),
+                vs.get_variable("Bias", [self.model_params.pinyin_vocab_size * 7]), name="Logit_%d" % decoder_time_idx)
+            pinyin_logit = array_ops.reshape(pinyin_logit, [self.batch_size * 7, self.model_params.pinyin_vocab_size])
+            self.logits_pinyin.append(pinyin_logit)
+
       self.decoder_state_last = states[1:]
       self.decoder_alignment_last = filter(None, alignments)
       self.decoder_attention_last = filter(None, attentions)
@@ -474,6 +467,12 @@ class LASModel(object):
           self.logits, targets, weights, self.model_params.vocab_size)
       self.logperp = log_perps
       self.losses.append(log_perps)
+
+      if self.model_params.pinyin_ext:
+        assert self.model_params.pinyin_vocab_size
+        pinyin_log_perps = seq2seq.sequence_loss(
+            self.logits_pinyin, self.tokens_pinyin[1:], self.tokens_pinyin_weights[1:], self.model_params.pinyin_vocab_size)
+        self.losses.append(pinyin_log_perps)
 
     if self.model_params.encoder_lm:
       # self.create_loss_encoder_lm(self.encoder_states[2][0], self.features_fbank)

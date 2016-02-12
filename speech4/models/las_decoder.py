@@ -68,7 +68,7 @@ class Decoder(object):
     serialized = tf.train.batch(
         [serialized], batch_size=1, num_threads=2, capacity=2)
 
-    self.features, _, self.features_len, _, _, self.text, _, _, _, self.uttid = s4_parse_utterance(
+    self.features, _, self.features_len, _, _, self.text, _, _, _, _, self.uttid = s4_parse_utterance(
         serialized, features_len_max=self.model_params.features_len_max,
         tokens_len_max=1)
 

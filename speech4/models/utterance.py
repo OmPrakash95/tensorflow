@@ -70,7 +70,10 @@ class Utterance(object):
     proto.wer.ref_length = len(ref)
     proto.wer.hyp_length = len(hyp)
 
-    proto.wer.error_rate = float(proto.wer.edit_distance) / float(proto.wer.ref_length)
+    try:
+      proto.wer.error_rate = float(proto.wer.edit_distance) / float(proto.wer.ref_length)
+    except:
+      pass
 
   def compute_character_distance(self, proto):
     ref = list(proto.ref)
@@ -80,13 +83,20 @@ class Utterance(object):
     proto.cer.ref_length = len(ref)
     proto.cer.hyp_length = len(hyp)
 
-    proto.cer.error_rate = float(proto.cer.edit_distance) / float(proto.cer.ref_length)
+    try:
+      proto.cer.error_rate = float(proto.cer.edit_distance) / float(proto.cer.ref_length)
+    except:
+      pass
 
   def create_proto(self, token_model):
     proto = speech4_pb2.UtteranceResultsProto()
     proto.uttid = self.uttid
     proto.ref = self.text.strip()
     proto.hyp = self.hypothesis_complete[0].text.strip()
+
+    if token_model.proto.remove_eow:
+      proto.ref = proto.ref.replace(" ", "")
+      proto.hyp = proto.hyp.replace(" ", "")
 
     if token_model.proto.remove_eow:
       proto.ref = ''.join(proto.ref.split(token_model.proto.token_string_eow))

@@ -10,24 +10,6 @@
 using namespace tensorflow;
 
 namespace {
-
-REGISTER_OP("S4MaskAttentionEnergies")
-    .Attr("one: int = 1")
-    .Attr("median_window_left: int = 10")
-    .Attr("median_window_right: int = 100")
-    .Attr("mode: {'default', 'sliding_window', 'median'}")
-    .Attr("sliding_window_s_min: int = 0")
-    .Attr("sliding_window_s_max: int = 40")
-    .Attr("sliding_window_v_min: float = 1.2")
-    .Attr("sliding_window_v_max: float = 2.2")
-    .Input("energies: float")
-    .Input("energies_prev: one * float")
-    .Input("energies_len: int64")
-    .Output("masked_energies: float")
-    .Doc(R"doc(
-SPEECH4, parse an utterance!
-)doc");
-
 REGISTER_OP("S4ParseUtterance")
     .Attr("features_fbank_dim: int = 40")
     .Attr("features_len_max: int")
@@ -44,8 +26,10 @@ REGISTER_OP("S4ParseUtterance")
     .Output("features_weight: features_len_max* float")
     .Output("text: string")
     .Output("tokens: tokens_len_max * int32")
+    .Output("tokens_pinyin: tokens_len_max * int32")
     .Output("tokens_len: int64")
     .Output("tokens_weights: tokens_len_max * float")
+    .Output("tokens_pinyin_weights: tokens_len_max * float")
     .Output("uttid: string")
     .Doc(R"doc(
 SPEECH4, parse an utterance!
@@ -85,8 +69,10 @@ class S4ParseUtterance : public OpKernel {
     Tensor* output_tensor_text = nullptr;
     OpOutputList output_list_tokens;
     Tensor* output_tensor_tokens_len = nullptr;
+    OpOutputList output_list_tokens_pinyin;
     Tensor* output_tensor_uttid = nullptr;
     OpOutputList output_list_tokens_weights;
+    OpOutputList output_list_tokens_pinyin_weights;
 
     for (int64 b = 0; b < batch_size; ++b) {
       // Parse our serialized string into our Example proto.
@@ -151,26 +137,38 @@ class S4ParseUtterance : public OpKernel {
             ctx, ctx->allocate_output("text", TensorShape({batch_size}), &output_tensor_text));
 
         OP_REQUIRES_OK(ctx, ctx->output_list("tokens", &output_list_tokens));
+        OP_REQUIRES_OK(ctx, ctx->output_list("tokens_pinyin", &output_list_tokens_pinyin));
         for (int64 s = 0; s < tokens_len_max_; ++s) {
           TensorShape token_shape({batch_size});
-
           Tensor* token_slice = nullptr;
           output_list_tokens.allocate(s, token_shape, &token_slice);
-
           std::fill_n(token_slice->flat<int32>().data(), token_shape.num_elements(), 0);
+
+          TensorShape token_pinyin_shape({batch_size * 7});
+          Tensor* token_pinyin_slice = nullptr;
+          output_list_tokens_pinyin.allocate(s, token_pinyin_shape, &token_pinyin_slice);
+          std::fill_n(token_pinyin_slice->flat<int32>().data(), token_pinyin_shape.num_elements(), 0);
         }
 
         OP_REQUIRES_OK(
             ctx, ctx->allocate_output("tokens_len", TensorShape({batch_size}), &output_tensor_tokens_len));
 
         OP_REQUIRES_OK(ctx, ctx->output_list("tokens_weights", &output_list_tokens_weights));
+        OP_REQUIRES_OK(ctx, ctx->output_list("tokens_pinyin_weights", &output_list_tokens_pinyin_weights));
         for (int64 s = 0; s < tokens_len_max_; ++s) {
-          TensorShape weight_shape({batch_size});
+          {
+            TensorShape weight_shape({batch_size});
+            Tensor* weight_slice = nullptr;
+            output_list_tokens_weights.allocate(s, weight_shape, &weight_slice);
+            std::fill_n(weight_slice->flat<float>().data(), weight_shape.num_elements(), 0.0f);
+          }
 
-          Tensor* weight_slice = nullptr;
-          output_list_tokens_weights.allocate(s, weight_shape, &weight_slice);
-
-          std::fill_n(weight_slice->flat<float>().data(), weight_shape.num_elements(), 0.0f);
+          {
+            TensorShape pinyin_weight_shape({batch_size * 7});
+            Tensor* pinyin_weight_slice = nullptr;
+            output_list_tokens_pinyin_weights.allocate(s, pinyin_weight_shape, &pinyin_weight_slice);
+            std::fill_n(pinyin_weight_slice->flat<float>().data(), pinyin_weight_shape.num_elements(), 0.0f);
+          }
         }
 
         OP_REQUIRES_OK(
@@ -229,12 +227,32 @@ class S4ParseUtterance : public OpKernel {
         token_slice->flat<int32>().data()[b] = token;
 
         Tensor* weight_slice = output_list_tokens_weights[s];
+        Tensor* pinyin_weight_slice = output_list_tokens_pinyin_weights[s];
         if (token == token_model_proto_.token_eow()) {
           weight_slice->flat<float>().data()[b] = eow_weight_;
+          for (int64 u = 0; u < 7; ++u) {
+            pinyin_weight_slice->flat<float>().data()[b * 7 + u] = eow_weight_ / 7.0f;
+          }
         } else {
           weight_slice->flat<float>().data()[b] = 1.0f;
+          for (int64 u = 0; u < 7; ++u) {
+            pinyin_weight_slice->flat<float>().data()[b * 7 + u] = 1.0f / 7.0f;
+          }
         }
       }
+
+      if (feature_dict.find("tokens_pinyin") != feature_dict.end()) {
+        const auto& tokens_pinyin_iter = feature_dict.find("tokens_pinyin");
+        CHECK(tokens_pinyin_iter != feature_dict.end());
+        const auto& tokens_pinyin = tokens_pinyin_iter->second.int64_list();
+        for (int64 s = 0; s < tokens_len; ++s) {
+          Tensor* token_slice = output_list_tokens_pinyin[s];
+          for (int64 u = 0; u < 7; ++u) {
+            int32 token = tokens_pinyin.value(s * 7 + u);
+            token_slice->flat<int32>().data()[b * 7 + u] = token;
+          }
+        }
+      }  // else it is pre-zeroed.
 
       // Copy the uttid across.
       const auto& uttid_iter = feature_dict.find("uttid");
@@ -249,6 +267,7 @@ class S4ParseUtterance : public OpKernel {
   int64 features_fbank_dim_;
   int64 features_len_max_;
   int64 tokens_len_max_;
+  int64 tokens_pinyin_len_max_;
   float eow_weight_;
   int64 frame_stack_;
   int64 frame_skip_;

@@ -28,7 +28,6 @@ from tensorflow.python.ops import rnn_cell
 from tensorflow.python.ops import seq2seq
 from tensorflow.python.ops import sparse_ops
 from tensorflow.python.ops import variable_scope as vs
-from tensorflow.python.ops.gen_user_ops import s4_parse_utterance
 from tensorflow.python.platform import gfile
 from speech4.models import las_decoder
 from speech4.models import las_decoder2
@@ -224,7 +223,7 @@ def create_visualization_params():
   return visualization_params
 
 def create_model(
-    sess, ckpt, dataset, forward_only, global_epochs, model_params=None,
+    sess, ckpt, dataset, dataset_size, forward_only, global_epochs, model_params=None,
     optimization_params=None):
   start_time = time.time()
 
@@ -245,7 +244,7 @@ def create_model(
     model = las_model.LASModel(
         sess, dataset, FLAGS.logdir, ckpt, forward_only, FLAGS.batch_size,
         model_params, optimization_params=optimization_params,
-        visualization_params=visualization_params)
+        visualization_params=visualization_params, dataset_size=dataset_size)
 
   tf.train.write_graph(sess.graph_def, FLAGS.logdir, "graph_def.pbtxt")
 
@@ -284,6 +283,18 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
   elif dataset == "gale_mandarin_pinyin_train":
     dataset = "speech4/data/gale_mandarin_pinyin_train.tfrecords"
     dataset_size = 49364
+  elif dataset == "gale_mandarin_sp_train":
+    dataset = "speech4/data/gale_mandarin_sp_train.tfrecords"
+    dataset_size = 58058
+  elif dataset == "gale_mandarin_sp_train_space":
+    dataset = "speech4/data/gale_mandarin_sp_train_space.tfrecords"
+    dataset_size = 58058
+  elif dataset == "gale_mandarin_sp_dev":
+    dataset = "speech4/data/gale_mandarin_sp_dev.tfrecords"
+    dataset_size = 5191
+  elif dataset == "gale_mandarin_sp_dev_space":
+    dataset = "speech4/data/gale_mandarin_sp_dev_space.tfrecords"
+    dataset_size = 5191
   elif dataset == "gale_mandarin_10_train":
     dataset = "speech4/data/gale_mandarin_10_train.tfrecords"
     dataset_size = 9568
@@ -319,11 +330,11 @@ def run(mode, dataset, global_epochs, model_params=None, optimization_params=Non
     with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
       if mode == 'train':
         model = create_model(
-            sess, ckpt, dataset, False, global_epochs=global_epochs,
+            sess, ckpt, dataset, dataset_size, False, global_epochs=global_epochs,
             model_params=model_params, optimization_params=optimization_params)
       elif mode == 'valid':
         model = create_model(
-            sess, ckpt, dataset, True, global_epochs=global_epochs,
+            sess, ckpt, dataset, dataset_size, True, global_epochs=global_epochs,
             model_params=model_params, optimization_params=optimization_params)
 
       coord = tf.train.Coordinator()
@@ -398,9 +409,13 @@ def main(_):
   tf.set_random_seed(FLAGS.random_seed)
 
   if FLAGS.dataset == "gale_mandarin":
-    FLAGS.dataset_train = "gale_mandarin_train"
-    FLAGS.dataset_valid = "gale_mandarin_dev"
-    FLAGS.dataset_test = "gale_mandarin_dev"
+    FLAGS.dataset_train = "gale_mandarin_sp_train"
+    FLAGS.dataset_valid = "gale_mandarin_sp_dev"
+    FLAGS.dataset_test = "gale_mandarin_sp_dev"
+  elif FLAGS.dataset == "gale_mandarin_space":
+    FLAGS.dataset_train = "gale_mandarin_sp_train_space"
+    FLAGS.dataset_valid = "gale_mandarin_sp_dev_space"
+    FLAGS.dataset_test = "gale_mandarin_sp_dev_space"
   elif FLAGS.dataset == "gale_mandarin_pinyin":
     FLAGS.dataset_train = "gale_mandarin_pinyin_train"
     FLAGS.dataset_valid = "gale_mandarin_pinyin_dev"

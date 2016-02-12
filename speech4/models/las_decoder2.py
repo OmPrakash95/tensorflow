@@ -67,9 +67,21 @@ class Decoder2(object):
     serialized = tf.train.batch(
         [serialized], batch_size=1, num_threads=2, capacity=2)
 
-    self.features, _, self.features_len, _, _, self.text, _, _, _, self.uttid = s4_parse_utterance(
+    #self.features, _, self.features_len, _, _, self.text, _, _, _, _, self.uttid = s4_parse_utterance(
+    #    serialized, features_len_max=self.model_params.features_len_max,
+    #    tokens_len_max=1)
+    self.features, self.features_fbank, self.features_len, _, self.features_weight, self.text, self.tokens, self.tokens_pinyin, self.tokens_len, self.tokens_weights, self.tokens_pinyin_weights, self.uttid = s4_parse_utterance(
         serialized, features_len_max=self.model_params.features_len_max,
-        tokens_len_max=1)
+        tokens_len_max=self.model_params.tokens_len_max + 1,
+        frame_stack=self.model_params.frame_stack,
+        frame_skip=self.model_params.frame_skip)
+
+    # Add the shape to the features.
+    for feature in self.features:
+      feature.set_shape([1, self.model_params.features_width * self.model_params.frame_stack])
+    for token in self.tokens:
+      if token:
+        token.set_shape([1])
 
   # We read one utterance and return it in a dict.
   def read_utterance(self, sess):
@@ -105,6 +117,8 @@ class Decoder2(object):
       wer.ref_length += utt.proto.wer.ref_length
       wer.error_rate = float(wer.edit_distance) / float(wer.ref_length)
 
+      print utt.text
+      print utt.hypothesis_complete[-1].text
       print("accum wer: %f (%d / %d); cer: %f; (%d / %d)" % (wer.error_rate, wer.edit_distance, wer.ref_length, cer.error_rate, idx, self.dataset_size))
       utts.append(utt)
 
