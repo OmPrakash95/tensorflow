@@ -75,6 +75,8 @@ REGISTER_OP("BatchNormWithGlobalNormalization")
     .Doc(R"doc(
 Batch normalization.
 
+This op is deprecated. Prefer `tf.nn.batch_normalization`.
+
 t: A 4D input Tensor.
 m: A 1D mean Tensor with size matching the last dimension of t.
   This is the first output from tf.nn.moments,
@@ -108,6 +110,8 @@ REGISTER_OP("BatchNormWithGlobalNormalizationGrad")
     .Attr("scale_after_normalization: bool")
     .Doc(R"doc(
 Gradients for batch normalization.
+
+This op is deprecated. See `tf.nn.batch_normalization`.
 
 t: A 4D input Tensor.
 m: A 1D mean Tensor with size matching the last dimension of t.
@@ -547,6 +551,29 @@ features: batch_size x num_classes matrix
 labels: batch_size x num_classes matrix
   The caller must ensure that each batch of labels represents a valid
   probability distribution.
+loss: Per example loss (batch_size vector).
+backprop: backpropagated gradients (batch_size x num_classes matrix).
+)doc");
+
+REGISTER_OP("SparseSoftmaxCrossEntropyWithLogits")
+    .Input("features: T")
+    .Input("labels: int64")
+    .Output("loss: T")
+    .Output("backprop: T")
+    .Attr("T: {float, double}")
+    .Doc(R"doc(
+Computes softmax cross entropy cost and gradients to backpropagate.
+
+Unlike `SoftmaxCrossEntropyWithLogits`, this operation does not accept
+a matrix of label probabilities, but rather a single label per row
+of features.  This label is considered to have probability 1.0 for the
+given row.
+
+Inputs are the logits, not probabilities.
+
+features: batch_size x num_classes matrix
+labels: batch_size vector with values in [0, num_classes).
+  This is the label for the given minibatch entry.
 loss: Per example loss (batch_size vector).
 backprop: backpropagated gradients (batch_size x num_classes matrix).
 )doc");
