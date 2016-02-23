@@ -325,7 +325,8 @@ def bidirectional_rnn(cell_fw, cell_bw, inputs,
 
 
 def dynamic_rnn(cell, inputs, sequence_length, initial_state=None, dtype=None,
-                parallel_iterations=None, time_major=False, scope=None):
+                input_time_stride=1, parallel_iterations=None, time_major=False,
+                scope=None):
   """Creates a recurrent neural network specified by RNNCell "cell".
 
   This function is functionally identical to the function `rnn` above, but
@@ -419,7 +420,8 @@ def dynamic_rnn(cell, inputs, sequence_length, initial_state=None, dtype=None,
 
     (outputs, final_state) = _dynamic_rnn_loop(
         cell, inputs, state, sequence_length,
-        parallel_iterations=parallel_iterations)
+        parallel_iterations=parallel_iterations,
+        input_time_stride=input_time_stride)
 
     # Outputs of _dynamic_rnn_loop are always shaped [time, batch, depth].
     # If we are performing batch-major calculations, transpose output back
@@ -431,7 +433,7 @@ def dynamic_rnn(cell, inputs, sequence_length, initial_state=None, dtype=None,
 
 
 def _dynamic_rnn_loop(cell, inputs, initial_state, sequence_length,
-                      parallel_iterations):
+                      parallel_iterations, input_time_stride):
   """Internal implementation of Dynamic RNN.
 
   Args:
@@ -474,7 +476,7 @@ def _dynamic_rnn_loop(cell, inputs, initial_state, sequence_length,
   input_ta = input_ta.unpack(inputs)
 
   def _time_step(time, state, output_ta_t):
-    input_t = input_ta.read(time)
+    input_t = input_ta.read(time * input_time_stride)
 
     (output, new_state) = _rnn_step(
         time, sequence_length, min_sequence_length, max_sequence_length,
