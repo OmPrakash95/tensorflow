@@ -286,11 +286,13 @@ cc_library(
     deps = [
         ":array_ops_op_lib",
         ":attention_ops_op_lib",
+        ":attention_mask_ops_op_lib",
         ":candidate_sampling_ops_op_lib",
         ":control_flow_ops_op_lib",
         ":data_flow_ops_op_lib",
         ":function_ops_op_lib",
         ":functional_ops_op_lib",
+        ":gru_ops_op_lib",
         ":image_ops_op_lib",
         ":io_ops_op_lib",
         ":linalg_ops_op_lib",
