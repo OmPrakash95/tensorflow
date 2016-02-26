@@ -39,11 +39,13 @@ class SpeechModel(object):
     print("creating model...")
     self.global_step = tf.Variable(0, trainable=False)
 
-    self.create_input()
-    self.create_encoder()
-    self.create_decoder()
-    self.create_loss()
-    self.create_optimizer()
+    initializer = tf.random_uniform_initializer(-0.1, 0.1)
+    with tf.variable_scope("model", initializer=initializer):
+      self.create_input()
+      self.create_encoder()
+      self.create_decoder()
+      self.create_loss()
+      self.create_optimizer()
 
     print("initializing model...")
     sess.run(tf.initialize_all_variables())
@@ -98,16 +100,17 @@ class SpeechModel(object):
           encoder_state, [self.batch_size, attn_len, 1,
                           self.model_params.encoder_cell_size])
 
-      k = vs.get_variable(
-          "encoder_embedding", [
-              1, 1, self.model_params.encoder_cell_size,
-              self.model_params.attention_embedding_size])
-      # encoder_embedding shape is [batch_size, attn_len, 1, embedding_size]
-      encoder_embedding = nn_ops.conv2d(encoder_state, k, [1, 1, 1, 1], "SAME")
-      encoder_embedding.set_shape([
-          self.batch_size, attn_len, 1,
-          self.model_params.attention_embedding_size])
-      self.encoder_embedding = [encoder_embedding, self.encoder_states[-1][1]]
+    # We create this outside the "encoder" vs to support legacy ckpts.
+    k = vs.get_variable(
+        "encoder_embedding", [
+            1, 1, self.model_params.encoder_cell_size,
+            self.model_params.attention_embedding_size])
+    # encoder_embedding shape is [batch_size, attn_len, 1, embedding_size]
+    encoder_embedding = nn_ops.conv2d(encoder_state, k, [1, 1, 1, 1], "SAME")
+    encoder_embedding.set_shape([
+        self.batch_size, attn_len, 1,
+        self.model_params.attention_embedding_size])
+    self.encoder_embedding = [encoder_embedding, self.encoder_states[-1][1]]
 
 
   def create_monolithic_enocder(self):
@@ -117,7 +120,7 @@ class SpeechModel(object):
     # Create the encoder layers.
     assert self.model_params.encoder_layer
     for idx, s in enumerate(self.model_params.encoder_layer):
-      with vs.variable_scope("layer_%d" % idx) as scope:
+      with vs.variable_scope("layer_%d" % (idx + 1)) as scope:
         self.create_monolithic_encoder_layer(input_time_stride=int(s), scope=scope)
 
     # Concat the encoder states.
@@ -202,18 +205,22 @@ class SpeechModel(object):
   def create_decoder(self):
     print("creating decoder...")
     with vs.variable_scope("decoder"):
-      attn_length = self.encoder_embedding[0].get_shape()[1].value
-      attn_size = self.model_params.attention_embedding_size
-      batch_size = self.batch_size
-
       self.decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(
           self.model_params.decoder_cell_size)
+      self.decoder_cell = tf.nn.rnn_cell.GRUCell(
+          self.model_params.decoder_cell_size)
 
-      encoder_state = array_ops.reshape(
-          self.encoder_states[-1][0],
-          [self.batch_size, attn_length, 1, self.model_params.encoder_cell_size])
+      batch_size = self.batch_size
 
-      def attention(query):
+      if hasattr(self, "encoder_embedding"):
+        attn_length = self.encoder_embedding[0].get_shape()[1].value
+        attn_size = self.model_params.attention_embedding_size
+
+        encoder_state = array_ops.reshape(
+            self.encoder_states[-1][0],
+            [self.batch_size, attn_length, 1, self.model_params.encoder_cell_size])
+
+      def attention(query, alignment):
         with vs.variable_scope("attention"):
           v = vs.get_variable("v", [attn_size])
 
@@ -222,14 +229,25 @@ class SpeechModel(object):
           # Attention mask is a softmax of v^T * tanh(...).
           e = math_ops.reduce_sum(
               v * math_ops.tanh(self.encoder_embedding[0] + y), [2, 3])
+
+          # Mask it by sequence length.
+          if alignment and self.model_params.attention_params.type == "median":
+            window_l = self.model_params.attention_params.median_window_l
+            window_r = self.model_params.attention_params.median_window_r
+            e = attention_mask_ops.attention_mask_median(
+                self.encoder_states[-1][1], e, alignment, window_l=window_l,
+                window_r=window_r)
+          else:
+            e = attention_mask_ops.attention_mask(self.encoder_states[-1][1], e)
+
           a = nn_ops.softmax(e)
           # Now calculate the attention-weighted vector c.
           c = math_ops.reduce_sum(
               array_ops.reshape(a, [-1, attn_length, 1, 1]) * encoder_state,
               [1, 2])
-          return array_ops.reshape(c, [batch_size, self.model_params.encoder_cell_size])
+          return array_ops.reshape(c, [batch_size, self.model_params.encoder_cell_size]), a
 
-      def attention_rnn_cell(x, state, attn):
+      def attention_rnn_cell(x, state, attn, alignment, sequence_len):
         if attn:
           x = rnn_cell.linear(
               [x] + [attn], self.decoder_cell.input_size, True,
@@ -237,14 +255,15 @@ class SpeechModel(object):
         output, state = self.decoder_cell(x, state)
 
         if attn:
-          attn = attention(state)
+          attn, alignment = attention(state, alignment)
           output = rnn_cell.linear(
               [output] + [attn], self.decoder_cell.output_size, True,
               scope="output_projection")
-        return output, state, attn
+        return output, state, attn, alignment
 
       logits = []
       probs = []
+      alignment = None
       for decoder_time_idx in range(len(self.tokens) - 1):
         if decoder_time_idx > 0:
           vs.get_variable_scope().reuse_variables()
@@ -256,7 +275,7 @@ class SpeechModel(object):
         with tf.device("/cpu:0"):
           sqrt3 = np.sqrt(3)
           embedding_matrix = vs.get_variable(
-              "embedding_matrix",
+              "embedding",
               [self.model_params.vocab_size, self.model_params.embedding_size],
               initializer=tf.random_uniform_initializer(-sqrt3, sqrt3))
 
@@ -266,7 +285,8 @@ class SpeechModel(object):
         if decoder_time_idx == 0:
           state = array_ops.zeros([batch_size, self.decoder_cell.state_size])
           attn = array_ops.zeros([batch_size, self.model_params.encoder_cell_size])
-        output, state, attn = attention_rnn_cell(inp, state, attn)
+        output, state, attn, alignment = attention_rnn_cell(
+            inp, state, attn, alignment, self.tokens_len)
 
         # Logits / prob.
         logit = rnn_cell.linear([output], self.model_params.vocab_size, True)
@@ -299,7 +319,7 @@ class SpeechModel(object):
     # Warning, this doesn't take into account the weight!
     correct = []
     for idx, logit in enumerate(self.logits):
-      correct.append(tf.nn.in_top_k(logit, self.tokens[idx + 1], 1))
+      correct.append(tf.nn.in_top_k(logit, targets[idx], 1))
     self.correct = correct
 
 
@@ -325,6 +345,9 @@ class SpeechModel(object):
           learning_rate=self.optimization_params.adagrad.learning_rate,
           initial_accumulator_value=self.optimization_params.adagrad.initial_accumulator_value)
     elif self.optimization_params.type == "adadelta":
+      assert self.optimization_params.adadelta.learning_rate
+      assert self.optimization_params.adadelta.decay_rate
+      assert self.optimization_params.adadelta.epsilon
       opt = tf.train.AdadeltaOptimizer(
           learning_rate=self.optimization_params.adadelta.learning_rate,
           decay_rate=self.optimization_params.adadelta.decay_rate,
@@ -359,15 +382,26 @@ class SpeechModel(object):
       self.grads_norm = norm
 
 
-  def step(self, sess, update, results_proto):
+  def step_epoch(self, sess, update, results_proto, profile_proto):
+    for idx in range(self.dataset_params.size):
+      self.step(sess, update, results_proto, profile_proto)
+
+      if idx % 10 == 0:
+        percentage = float(idx) / float(self.dataset_params.size)
+        accuracy = float(results_proto.acc.pos) / float(results_proto.acc.count)
+        step_time = profile_proto.secs / profile_proto.steps
+        print "step: %.2f, step_time: %.2f, accuracy %.2f" % (percentage, accuracy, step_time)
+
+
+  def step(self, sess, update, results_proto, profile_proto):
     start_time = time.time()
 
     targets = {}
     targets["uttid"] = self.uttid
     targets["text"] = self.text
 
-    targets["tokens"] = self.tokens[1:]
-    targets["tokens_weights"] = self.tokens_weights[1:]
+    targets["tokens"] = self.tokens[:-1]
+    targets["tokens_weights"] = self.tokens_weights[:-1]
     targets["correct"] = self.correct
 
     if update:
@@ -377,7 +411,8 @@ class SpeechModel(object):
     self.compute_accuracy(fetches, results_proto.acc)
 
     step_time = time.time() - start_time
-    print("step_time: %f" % step_time)
+    profile_proto.secs = profile_proto.secs + step_time
+    profile_proto.steps = profile_proto.steps + 1
 
 
   def compute_accuracy(self, fetches, acc_proto):
@@ -423,6 +458,7 @@ def main(_):
     with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
       dataset_params = speech4_pb2.DatasetParamsProto()
       dataset_params.path = "speech4/data/train_si284.tfrecords"
+      dataset_params.size = 37416
 
       model_params = speech4_pb2.ModelParamsProto()
       model_params.features_width = 123
@@ -437,6 +473,7 @@ def main(_):
       model_params.attention_embedding_size = 128
 
       model_params.encoder_layer.append("1")
+      model_params.encoder_layer.append("1")
       model_params.encoder_layer.append("2")
       model_params.encoder_layer.append("2")
 
@@ -444,8 +481,10 @@ def main(_):
 
       optimization_params = speech4_pb2.OptimizationParamsProto()
       optimization_params.type = "adadelta"
+      optimization_params.adadelta.learning_rate = 1.0
       optimization_params.adadelta.decay_rate = 0.95
       optimization_params.adadelta.epsilon = 1e-8
+      optimization_params.max_gradient_norm = 1.0
 
       speech_model = SpeechModel(sess, dataset_params, model_params, optimization_params)
 
@@ -455,10 +494,10 @@ def main(_):
         threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
 
 
+      results_proto = speech4_pb2.ResultsProto()
+      profile_proto = speech4_pb2.ProfileProto()
       while True:
-        results_proto = speech4_pb2.ResultsProto()
-        speech_model.step(sess, True, results_proto)
-        print float(results_proto.acc.pos) / float(results_proto.acc.count)
+        speech_model.step_epoch(sess, True, results_proto, profile_proto)
 
       coord.request_stop()
       coord.join(threads, stop_grace_period_secs=10)
