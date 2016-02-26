@@ -20,6 +20,8 @@ limitations under the License.
 #include <limits.h>
 #include <vector>
 
+#include "tensorflow/core/kernels/tensor_array_ops.h"
+
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -933,4 +935,141 @@ REGISTER_KERNEL_BUILDER(
     Name("TensorArrayClose").Device(DEVICE_GPU).HostMemory("handle"),
     TensorArrayCloseOp);
 
+// Subsample
+// **********************************************************************
+
+template <typename Device, typename T>
+class TensorArraySubsampleOp : public OpKernel {
+ public:
+  explicit TensorArraySubsampleOp(OpKernelConstruction* context)
+      : OpKernel(context) {
+    OP_REQUIRES_OK(context, context->GetAttr("stride", &stride_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    const Tensor* input = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("input", &input));
+
+    TensorShape output_shape = input->shape();
+    output_shape.set_dim(0, output_shape.dim_size(0) / stride_);
+
+    Tensor* output = nullptr;
+    ctx->allocate_output("output", output_shape, &output);
+
+    functor::TensorArraySubsample<Device, T>()(
+        ctx->eigen_device<Device>(), stride_, input->tensor<T, 3>(),
+        output->tensor<T, 3>());
+  }
+
+  bool IsExpensive() override { return false; }
+
+ private:
+  int64 stride_;
+};
+
+#define REGISTER_KERNEL(T)                                                     \
+  REGISTER_KERNEL_BUILDER(                                                     \
+      Name("TensorArraySubsample").Device(DEVICE_CPU).TypeConstraint<T>("T"),  \
+      TensorArraySubsampleOp<CPUDevice, T>);
+
+REGISTER_KERNEL(float);
+#undef REGISTER_KERNEL
+
+#if GOOGLE_CUDA
+// Forward declarations of the functor specializations for GPU.
+namespace functor {
+#define DECLARE_GPU_SPEC(T)                                                    \
+  template <>                                                                  \
+  void TensorArraySubsample<GPUDevice, T>::operator()(                         \
+      const GPUDevice& d,                                                      \
+      int stride,                                                              \
+      typename TTypes<T, 3>::ConstTensor input,                                \
+      typename TTypes<T, 3>::Tensor output);                                   \
+  extern template struct TensorArraySubsample<GPUDevice, T>;
+
+DECLARE_GPU_SPEC(float);
+#undef DECLARE_GPU_SPEC
+}  // namespace functor
+
+// Registration of the GPU implementations.
+#define REGISTER_GPU_KERNEL(T)                                                 \
+  REGISTER_KERNEL_BUILDER(                                                     \
+      Name("TensorArraySubsample").Device(DEVICE_GPU).TypeConstraint<T>("T"),  \
+      TensorArraySubsampleOp<GPUDevice, T>);
+
+REGISTER_GPU_KERNEL(float);
+#undef REGISTER_GPU_KERNEL
+
+#endif  // GOOGLE_CUDA
+
+// SubsampleGrad
+// **********************************************************************
+
+template <typename Device, typename T>
+class TensorArraySubsampleGradOp : public OpKernel {
+ public:
+  explicit TensorArraySubsampleGradOp(OpKernelConstruction* context)
+      : OpKernel(context) {
+    OP_REQUIRES_OK(context, context->GetAttr("stride", &stride_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    const Tensor* input = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("input", &input));
+
+    TensorShape output_shape = input->shape();
+    output_shape.set_dim(0, output_shape.dim_size(0) * stride_);
+
+    Tensor* output = nullptr;
+    ctx->allocate_output("output", output_shape, &output);
+
+    functor::TensorArraySubsampleGrad<Device, T>()(
+        ctx->eigen_device<Device>(), stride_, input->tensor<T, 3>(),
+        output->tensor<T, 3>());
+  }
+
+  bool IsExpensive() override { return false; }
+
+ private:
+  int64 stride_;
+};
+
+#define REGISTER_KERNEL(T)                                                     \
+  REGISTER_KERNEL_BUILDER(                                                     \
+      Name("TensorArraySubsampleGrad")                                         \
+          .Device(DEVICE_CPU)                                                  \
+          .TypeConstraint<T>("T"),                                             \
+      TensorArraySubsampleGradOp<CPUDevice, T>);
+
+REGISTER_KERNEL(float);
+#undef REGISTER_KERNEL
+
+#if GOOGLE_CUDA
+// Forward declarations of the functor specializations for GPU.
+namespace functor {
+#define DECLARE_GPU_SPEC(T)                                                    \
+  template <>                                                                  \
+  void TensorArraySubsampleGrad<GPUDevice, T>::operator()(                     \
+      const GPUDevice& d,                                                      \
+      int stride,                                                              \
+      typename TTypes<T, 3>::ConstTensor input,                                \
+      typename TTypes<T, 3>::Tensor output);                                   \
+  extern template struct TensorArraySubsampleGrad<GPUDevice, T>;
+
+DECLARE_GPU_SPEC(float);
+#undef DECLARE_GPU_SPEC
+}  // namespace functor
+
+// Registration of the GPU implementations.
+#define REGISTER_GPU_KERNEL(T)                                                 \
+  REGISTER_KERNEL_BUILDER(                                                     \
+      Name("TensorArraySubsampleGrad")                                         \
+          .Device(DEVICE_GPU)                                                  \
+          .TypeConstraint<T>("T"),                                             \
+      TensorArraySubsampleGradOp<GPUDevice, T>);
+
+REGISTER_GPU_KERNEL(float);
+#undef REGISTER_GPU_KERNEL
+
+#endif  // GOOGLE_CUDA
 }  // namespace tensorflow
