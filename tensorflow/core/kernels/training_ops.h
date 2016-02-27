@@ -50,6 +50,7 @@ struct ApplyAdadelta {
                   typename TTypes<T>::ConstScalar decay_rate,
                   typename TTypes<T>::ConstScalar epsilon,
                   typename TTypes<T>::ConstFlat grad);
+};
 
 template <typename Device, typename T>
 struct ApplyFtrl {
