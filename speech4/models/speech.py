@@ -383,7 +383,7 @@ class SpeechModel(object):
 
 
   def step_epoch(self, sess, update, results_proto, profile_proto):
-    for idx in range(self.dataset_params.size):
+    for idx in range(self.dataset_params.size / self.batch_size):
       self.step(sess, update, results_proto, profile_proto)
 
       if idx % 10 == 0:
