@@ -6,9 +6,8 @@ package speech4;
 
 message DatasetParamsProto {
   string name = 1;
-  string train = 2;
-  string valid = 3;
-  string test = 4;
+  string path = 2;
+  int64 size = 3;
 };
 
 message ExperimentParamsProto {
@@ -35,6 +34,11 @@ message AttentionParamsProto {
 message VisualizationParamsProto {
   bool attention = 1;
   bool encoder_predictions = 2;
+};
+
+message LossParamsProto {
+  bool log_prob = 1;
+  bool edit_distance_loss = 2;
 };
 
 message ModelParamsProto {
@@ -71,6 +75,9 @@ message ModelParamsProto {
   int64 pinyin_vocab_size = 302;
 
   DatasetParamsProto dataset = 1000;
+  LossParamsProto loss = 2000;
+
+  string ckpt = 3000;
 };
 
 message AdagradParamsProto {
@@ -160,9 +167,12 @@ message UtteranceResultsProto {
   EditDistanceResultsProto wer = 5;
 };
 
-message ResultsProto {
-  int64 pos = 1;
-  int64 count = 2;
+message ProfileProto {
+  float secs = 1;
+  float steps = 2;
+};
 
-  AccuracyResultsProto acc = 3;
+message ResultsProto {
+  AccuracyResultsProto acc = 1;
+  EditDistanceResultsProto edit_distance = 2;
 };

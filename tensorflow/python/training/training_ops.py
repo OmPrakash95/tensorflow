@@ -67,7 +67,7 @@ def _ApplyAdadeltaShape(op):
   _AssertInputIsScalar(op, 4)  # lr
   _AssertInputIsScalar(op, 5)  # lr
   grad_shape = op.inputs[6].get_shape().merge_with(accum_update_shape)
-  return grad_shape
+  return [grad_shape]
 
 
 @ops.RegisterShape("ApplyFtrl")

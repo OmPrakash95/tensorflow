@@ -712,9 +712,11 @@ tf_kernel_library(
 tf_kernel_libraries(
     name = "nn",
     prefixes = [
+        "attention_mask_op",
         "batch_norm_op",
         "bias_op",
         "in_topk_op",
+        "gru_op",
         "l2loss_op",
         "lrn_op",
         "relu_op",
@@ -735,6 +737,8 @@ tf_kernel_libraries(
         "//tensorflow/core:lib_internal",
         "//tensorflow/core:nn_grad",
         "//tensorflow/core:nn_ops_op_lib",
+        "//tensorflow/core:attention_mask_ops_op_lib",
+        "//tensorflow/core:gru_ops_op_lib",
         "//third_party/eigen3",
     ],
 )
