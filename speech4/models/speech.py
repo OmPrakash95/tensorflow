@@ -391,7 +391,7 @@ class SpeechModel(object):
       self.step(sess, update, results_proto, profile_proto)
 
       if idx % 10 == 0:
-        percentage = float(idx) / float(self.dataset_params.size)
+        percentage = float(idx) / float(self.dataset_params.size) / float(self.batch_size)
         accuracy = float(results_proto.acc.pos) / float(results_proto.acc.count)
         edit_distance = float(results_proto.edit_distance.edit_distance) / float(results_proto.edit_distance.ref_length)
         step_time = profile_proto.secs / profile_proto.steps
@@ -518,7 +518,8 @@ def main(_):
 
       results_proto = speech4_pb2.ResultsProto()
       profile_proto = speech4_pb2.ProfileProto()
-      while True:
+      for epoch in range(20):
+        print("epoch: %d" % epoch)
         speech_model.step_epoch(sess, True, results_proto, profile_proto)
 
       coord.request_stop()
