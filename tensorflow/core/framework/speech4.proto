@@ -38,7 +38,7 @@ message VisualizationParamsProto {
 
 message LossParamsProto {
   bool log_prob = 1;
-  bool edit_distance_loss = 2;
+  bool edit_distance = 2;
 };
 
 message ModelParamsProto {

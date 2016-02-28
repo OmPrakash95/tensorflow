@@ -1322,6 +1322,13 @@ def edit_distance(hypothesis, truth, normalize=True, name="edit_distance"):
                                       name=name)
 
 
+@ops.RegisterShape("EditDistanceList")
+def _EditDistanceList(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  return [tensor_shape.TensorShape([batch_size]),
+          tensor_shape.TensorShape([batch_size])]
+
+
 @ops.RegisterShape("EditDistance")
 def _EditDistanceShape(op):
   """Shape function for the EditDistance op."""

@@ -9,6 +9,7 @@ from tensorflow.python.ops import attention_mask_ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import clip_ops
 from tensorflow.python.ops import embedding_ops
+from tensorflow.python.ops import gen_array_ops
 from tensorflow.python.ops import gen_data_flow_ops
 from tensorflow.python.ops import gradients
 from tensorflow.python.ops import gru_ops
@@ -303,7 +304,7 @@ class SpeechModel(object):
     self.losses = []
     if self.model_params.loss.log_prob:
       self.create_loss_log_prob()
-    elif self.model_params.loss.edit_distance:
+    if self.model_params.loss.edit_distance:
       self.create_loss_edit_distance()
 
 
@@ -324,7 +325,10 @@ class SpeechModel(object):
 
 
   def create_loss_edit_distance(self):
-    pass
+    ref = self.tokens[1:]
+    hyp = [tf.to_int32(math_ops.argmax(logit, 1)) for logit in self.logits]
+
+    self.edit_distance = gen_array_ops.edit_distance_list(ref, hyp)
 
 
   def create_optimizer(self):
@@ -389,8 +393,9 @@ class SpeechModel(object):
       if idx % 10 == 0:
         percentage = float(idx) / float(self.dataset_params.size)
         accuracy = float(results_proto.acc.pos) / float(results_proto.acc.count)
+        edit_distance = float(results_proto.edit_distance.edit_distance) / float(results_proto.edit_distance.ref_length)
         step_time = profile_proto.secs / profile_proto.steps
-        print "step: %.2f, step_time: %.2f, accuracy %.2f" % (percentage, accuracy, step_time)
+        print "step: %.2f, step_time: %.2f, accuracy %.2f, edit_distance %.2f" % (percentage, step_time, accuracy, edit_distance)
 
 
   def step(self, sess, update, results_proto, profile_proto):
@@ -402,14 +407,20 @@ class SpeechModel(object):
 
     targets["tokens"] = self.tokens[:-1]
     targets["tokens_weights"] = self.tokens_weights[:-1]
-    targets["correct"] = self.correct
+    if hasattr(self, "correct"):
+      targets["correct"] = self.correct
+    if hasattr(self, "edit_distance"):
+      targets["edit_distance"] = self.edit_distance
 
     if update:
       targets['updates'] = self.updates
 
     fetches = self.run_graph(sess, targets)
-    self.compute_accuracy(fetches, results_proto.acc)
-
+    if hasattr(self, "correct"):
+      self.compute_accuracy(fetches, results_proto.acc)
+    if hasattr(self, "edit_distance"):
+      self.compute_edit_distance(fetches, results_proto.edit_distance)
+   
     step_time = time.time() - start_time
     profile_proto.secs = profile_proto.secs + step_time
     profile_proto.steps = profile_proto.steps + 1
@@ -427,6 +438,16 @@ class SpeechModel(object):
 
       acc_proto.pos += weighted_correct
       acc_proto.count += count
+
+
+  def compute_edit_distance(self, fetches, edit_distance_proto):
+    assert "edit_distance" in fetches
+
+    edit_distance = fetches["edit_distance"][0].sum()
+    ref_length = fetches["edit_distance"][1].sum()
+
+    edit_distance_proto.edit_distance += edit_distance
+    edit_distance_proto.ref_length += ref_length
 
 
   def run_graph(self, sess, targets, feed_dict=None):
@@ -478,6 +499,7 @@ def main(_):
       model_params.encoder_layer.append("2")
 
       model_params.loss.log_prob = True
+      model_params.loss.edit_distance = True
 
       optimization_params = speech4_pb2.OptimizationParamsProto()
       optimization_params.type = "adadelta"

@@ -231,6 +231,16 @@ dims: 1-D. The dimensions to reverse.
 output: The same shape as `tensor`.
 )Doc");
 
+REGISTER_OP("EditDistanceList")
+    .Attr("eos_token: int = 1")
+    .Attr("sequence_len_max: int")
+    .Input("ref: sequence_len_max * int32")
+    .Input("hyp: sequence_len_max * int32")
+    .Output("edit_distance: int64")
+    .Output("ref_length: int64")
+    .Doc(R"doc(
+)doc");
+
 // --------------------------------------------------------------------------
 REGISTER_OP("EditDistance")
     .Input("hypothesis_indices: int64")

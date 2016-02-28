@@ -235,4 +235,71 @@ TF_CALL_ALL_TYPES(REGISTER_CPU_KERNEL);
 
 #undef REGISTER_CPU_KERNEL
 
+class EditDistanceListOp : public OpKernel {
+ public:
+  explicit EditDistanceListOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("eos_token", &eos_token_));
+  }
+
+  void ExtractSequence(
+      const OpInputList& list, std::vector<std::vector<int32>>* sequence) {
+    const int64 batch_size = list[0].dim_size(0);
+    sequence->resize(batch_size);
+
+    std::vector<bool> terminated(batch_size, false);
+    for (int64 t = 0; t < list.size(); ++t) {
+      for (int64 b = 0; b < batch_size; ++b) {
+        if (!terminated[b]) {
+          const int32 token = list[t].vec<int>()(b);
+          if (token == eos_token_) {
+            terminated[b] = true;
+          } else {
+            (*sequence)[b].emplace_back(token);
+          }
+        }
+      }
+    }
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    OpInputList ref_list;
+    OpInputList hyp_list;
+    OP_REQUIRES_OK(ctx, ctx->input_list("ref", &ref_list));
+    OP_REQUIRES_OK(ctx, ctx->input_list("hyp", &hyp_list));
+
+    std::vector<std::vector<int32>> ref;
+    std::vector<std::vector<int32>> hyp;
+
+    ExtractSequence(ref_list, &ref);
+    ExtractSequence(hyp_list, &hyp);
+
+    const int64 batch_size = ref_list[0].dim_size(0);
+
+    TensorShape output_shape({batch_size});
+
+    Tensor* tensor_edit_distance = nullptr;
+    ctx->allocate_output(
+        "edit_distance", output_shape, &tensor_edit_distance);
+    Tensor* tensor_ref_length = nullptr;
+    ctx->allocate_output(
+        "ref_length", output_shape, &tensor_ref_length);
+
+    auto cmp = std::equal_to<int32>();
+    for (int64 b = 0; b < batch_size; ++b) {
+      const int64 edit_distance =
+          gtl::LevenshteinDistance<int32>(ref[b], hyp[b], cmp);
+      const int64 ref_length = ref.size();
+
+      tensor_edit_distance->vec<int64>()(b) = edit_distance;
+      tensor_ref_length->vec<int64>()(b) = ref_length;
+    }
+  }
+
+ private:
+  int32 eos_token_;
+};
+
+REGISTER_KERNEL_BUILDER(                                                       \
+    Name("EditDistanceList").Device(DEVICE_CPU),                               \
+    EditDistanceListOp);
 }  // end namespace tensorflow
