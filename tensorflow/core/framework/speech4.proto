@@ -59,6 +59,8 @@ message ModelParamsProto {
 
   AttentionParamsProto attention_params = 12;
 
+  string mode = 13;
+
   int64 frame_stack = 20;
   int64 frame_skip = 21;
 
@@ -76,6 +78,7 @@ message ModelParamsProto {
 
   DatasetParamsProto dataset = 1000;
   LossParamsProto loss = 2000;
+  ResultsProto results = 2001;
 
   string ckpt = 3000;
 };

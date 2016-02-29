@@ -1,6 +1,11 @@
+#!/usr/bin/env python
+
+
 import math
 import numpy as np
 import os.path
+import random
+import string
 import time
 
 import tensorflow as tf
@@ -24,19 +29,54 @@ from tensorflow.python.ops.gen_user_ops import s4_parse_utterance
 from tensorflow.python.platform import gfile
 
 
+FLAGS = tf.app.flags.FLAGS
+
+tf.app.flags.DEFINE_integer("device", 0,
+                            """The GPU device to use.""")
+
+tf.app.flags.DEFINE_string("ckpt", "",
+                            """Checkpoint to recover from.""")
+
+tf.app.flags.DEFINE_string("dataset", "wsj",
+                            """Dataset.""")
+
+tf.app.flags.DEFINE_integer("random_seed", 1000,
+                            """Random seed.""")
+
+tf.app.flags.DEFINE_string("decoder_params", "", """decoder_params proto""")
+tf.app.flags.DEFINE_string("model_params", "", """model_params proto""")
+tf.app.flags.DEFINE_string("optimization_params", "", """model_params proto""")
+
+tf.app.flags.DEFINE_string("logdir", "",
+                           """Path to our outputs and logs.""")
+
+def try_load_proto(proto_path, proto):
+  if isinstance(proto_path, str) and os.path.isfile(proto_path):
+    with open(proto_path, "r") as proto_file:
+      google.protobuf.text_format.Merge(proto_file.read(), proto)
+  return proto
+
+
 class SpeechModel(object):
-  def __init__(self, sess, dataset_params, model_params, optimization_params):
+  def __init__(self, sess, mode, dataset_params, model_params, optimization_params, batch_size=16, seed=1):
+    dataset_params = try_load_proto(dataset_params, dataset_params)
+    model_params = try_load_proto(model_params, model_params)
+    optimization_params = try_load_proto(optimization_params, optimization_params)
+
     self.dataset_params = dataset_params
     self.model_params = model_params
     self.optimization_params = optimization_params
 
-    self.batch_size = 16
-    self.seed = 1
+    self.batch_size = batch_size
+    if mode == "test":
+      self.batch_size = 1
+    self.seed = seed
+    tf.set_random_seed(self.seed)
 
-    self.create_model(sess)
+    self.create_model(sess, mode)
 
 
-  def create_model(self, sess):
+  def create_model(self, sess, mode):
     print("creating model...")
     self.global_step = tf.Variable(0, trainable=False)
 
@@ -46,15 +86,13 @@ class SpeechModel(object):
       self.create_encoder()
       self.create_decoder()
       self.create_loss()
-      self.create_optimizer()
+      if mode == "train": self.create_optimizer()
 
     print("initializing model...")
     sess.run(tf.initialize_all_variables())
 
-    variables = tf.all_variables()
-    self.saver = tf.train.Saver(variables)
     if gfile.Exists(self.model_params.ckpt):
-      self.saver.restore(sess, self.model_params.ckpt)
+      self.restore(sess)
     self.saver = tf.train.Saver(tf.all_variables())
 
   def create_input(self):
@@ -391,11 +429,42 @@ class SpeechModel(object):
       self.step(sess, update, results_proto, profile_proto)
 
       if idx % 10 == 0:
-        percentage = float(idx) / float(self.dataset_params.size) / float(self.batch_size)
+        percentage = float(idx) / float(self.dataset_params.size) * float(self.batch_size)
         accuracy = float(results_proto.acc.pos) / float(results_proto.acc.count)
         edit_distance = float(results_proto.edit_distance.edit_distance) / float(results_proto.edit_distance.ref_length)
         step_time = profile_proto.secs / profile_proto.steps
         print "step: %.2f, step_time: %.2f, accuracy %.2f, edit_distance %.2f" % (percentage, step_time, accuracy, edit_distance)
+
+
+  def restore(self, sess):
+    assert os.path.isfile(model_params.ckpt)
+
+    trainable_only = False
+    if self.optimization_params.adagrad.reset:
+      trainable_only = True
+    elif self.optimization_params.adadelta.reset:
+      trainable_only = True
+    elif self.optimization_params.adam.reset:
+      trainable_only = True
+
+    if trainable_only:
+      self.saver = tf.train.Saver(tf.trainable_variables())
+    else:
+      self.saver = tf.train.Saver(tf.all_variables())
+    self.saver.restore(sess, ckpt)
+
+
+  def save(self, sess, prefix, results_proto=None):
+    model_params = speech4_pb2.ModelParamsProto()
+    model_params.CopyFrom(self.model_params)
+    model_params.ckpt = prefix + ".ckpt"
+
+    if results_proto:
+      model_params.results_proto = results_proto
+
+    with open(prefix + ".model_params", "w") as proto_file:
+      proto_file.write(str(model_params))
+    self.saver.restore(sess, prefix + ".ckpt")
 
 
   def step(self, sess, update, results_proto, profile_proto):
@@ -474,57 +543,116 @@ class SpeechModel(object):
     return f
 
 
-def main(_):
-  with tf.device("/gpu:0"):
+def load_dataset_params(mode):
+  wsj = {}
+  wsj["train"] = speech4_pb2.DatasetParamsProto()
+  wsj["train"].name = "train_si284"
+  wsj["train"].path = "speech4/data/train_si284.tfrecords"
+  wsj["train"].size = 37416
+  wsj["valid"] = speech4_pb2.DatasetParamsProto()
+  wsj["valid"].name = "test_dev93"
+  wsj["valid"].path = "speech4/data/test_dev93.tfrecords"
+  wsj["valid"].size = 503
+  wsj["test"] = speech4_pb2.DatasetParamsProto()
+  wsj["test"].name = "test_eval92"
+  wsj["test"].path = "speech4/data/test_eval92.tfrecords"
+  wsj["test"].size = 333
+
+  if FLAGS.dataset == "wsj":
+    assert mode in wsj
+    return wsj[mode]
+
+  raise Exception("Unknown dataset %s" % FLAGS.dataset)
+
+
+def load_model_params(mode):
+  model_params = speech4_pb2.ModelParamsProto()
+  model_params.features_width = 123
+  model_params.features_len_max = 2560
+  model_params.frame_skip = 1
+  model_params.frame_stack = 1
+  model_params.tokens_len_max = 256
+  model_params.vocab_size = 64
+  model_params.embedding_size = 32
+  model_params.encoder_cell_size = 384
+  model_params.decoder_cell_size = 256
+  model_params.attention_embedding_size = 128
+
+  model_params.loss.log_prob = True
+  model_params.loss.edit_distance = True
+
+  model_params = try_load_proto(FLAGS.model_params, model_params)
+
+  if len(model_params.encoder_layer) == 0:
+    model_params.encoder_layer.append("1")
+    model_params.encoder_layer.append("1")
+    model_params.encoder_layer.append("2")
+    model_params.encoder_layer.append("2")
+
+  return model_params
+
+
+def load_optimization_params(mode):
+  if mode == "train":
+    optimization_params = speech4_pb2.OptimizationParamsProto()
+    optimization_params.type = "adadelta"
+    optimization_params.adadelta.learning_rate = 1.0
+    optimization_params.adadelta.decay_rate = 0.95
+    optimization_params.adadelta.epsilon = 1e-8
+    optimization_params.adadelta.reset = True
+    optimization_params.max_gradient_norm = 1.0
+
+    optimization_params = try_load_proto(FLAGS.optimization_params, optimization_params)
+    return optimization_params
+  return None
+
+
+def load_params(mode):
+  dataset_params = load_dataset_params(mode)
+  model_params = load_model_params(mode)
+  optimization_params = load_optimization_params(mode)
+  return dataset_params, model_params, optimization_params
+
+
+def run(mode, epoch):
+  with tf.device("/gpu:%d" % FLAGS.device):
     with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
-      dataset_params = speech4_pb2.DatasetParamsProto()
-      dataset_params.path = "speech4/data/train_si284.tfrecords"
-      dataset_params.size = 37416
-
-      model_params = speech4_pb2.ModelParamsProto()
-      model_params.features_width = 123
-      model_params.features_len_max = 2560
-      model_params.frame_skip = 1
-      model_params.frame_stack = 1
-      model_params.tokens_len_max = 256
-      model_params.vocab_size = 64
-      model_params.embedding_size = 32
-      model_params.encoder_cell_size = 384
-      model_params.decoder_cell_size = 256
-      model_params.attention_embedding_size = 128
-
-      model_params.encoder_layer.append("1")
-      model_params.encoder_layer.append("1")
-      model_params.encoder_layer.append("2")
-      model_params.encoder_layer.append("2")
-
-      model_params.loss.log_prob = True
-      model_params.loss.edit_distance = True
-
-      optimization_params = speech4_pb2.OptimizationParamsProto()
-      optimization_params.type = "adadelta"
-      optimization_params.adadelta.learning_rate = 1.0
-      optimization_params.adadelta.decay_rate = 0.95
-      optimization_params.adadelta.epsilon = 1e-8
-      optimization_params.max_gradient_norm = 1.0
-
-      speech_model = SpeechModel(sess, dataset_params, model_params, optimization_params)
+      dataset_params, model_params, optimization_params = load_params(mode)
+      speech_model = SpeechModel(sess, mode, dataset_params, model_params, optimization_params, seed=epoch)
 
       coord = tf.train.Coordinator()
       threads = []
       for qr in tf.get_collection(tf.GraphKeys.QUEUE_RUNNERS):
         threads.extend(qr.create_threads(sess, coord=coord, daemon=True, start=True))
 
-
       results_proto = speech4_pb2.ResultsProto()
       profile_proto = speech4_pb2.ProfileProto()
-      for epoch in range(20):
-        print("epoch: %d" % epoch)
-        speech_model.step_epoch(sess, True, results_proto, profile_proto)
+      print("epoch: %d" % epoch)
+      speech_model.step_epoch(sess, mode == "train", results_proto, profile_proto)
+
+      if mode == "train":
+        prefix = os.path.join(FLAGS.logdir, "%d" % epoch)
+        speech_model.save(sess, prefix, results_proto)
 
       coord.request_stop()
       coord.join(threads, stop_grace_period_secs=10)
 
+
+def main(_):
+  if not FLAGS.logdir:
+    FLAGS.logdir = os.path.join(
+        "exp", "speech4_" + "".join(random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(8)))
+  FLAGS.logdir = os.path.abspath(FLAGS.logdir)
+  try:
+    os.makedirs(FLAGS.logdir)
+  except:
+    pass
+
+  print "logdir: %s" % FLAGS.logdir
+
+  for epoch in range(20):
+    #run("train", epoch)
+    run("test", epoch)
 
 if __name__ == '__main__':
   tf.app.run()
