@@ -657,7 +657,8 @@ def main(_):
   print "logdir: %s" % FLAGS.logdir
 
   for epoch in range(20):
-    #run("train", epoch)
+    run("train", epoch)
+    run("valid", epoch)
     run("test", epoch)
 
 if __name__ == '__main__':
