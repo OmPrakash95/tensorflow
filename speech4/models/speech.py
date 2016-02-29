@@ -84,7 +84,7 @@ class SpeechModel(object):
     with tf.variable_scope("model", initializer=initializer):
       self.create_input()
       self.create_encoder()
-      self.create_decoder()
+      self.create_decoder(mode)
       self.create_loss()
       if mode == "train": self.create_optimizer()
 
@@ -241,7 +241,7 @@ class SpeechModel(object):
     self.encoder_states.append([output, sequence_len])
 
 
-  def create_decoder(self):
+  def create_decoder(self, mode):
     print("creating decoder...")
     with vs.variable_scope("decoder"):
       self.decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(
@@ -308,7 +308,13 @@ class SpeechModel(object):
           vs.get_variable_scope().reuse_variables()
 
         # Get the input token.
-        inp = self.tokens[decoder_time_idx]
+        if mode == "test":
+          if decoder_time_idx == 0:
+            inp = self.tokens[decoder_time_idx]
+          else:
+            inp = math_ops.argmax(logits[-1], 1)
+        else:
+          inp = self.tokens[decoder_time_idx]
 
         # Embedding.
         with tf.device("/cpu:0"):
