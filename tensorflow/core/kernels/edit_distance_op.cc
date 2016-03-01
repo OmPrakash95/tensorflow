@@ -269,7 +269,6 @@ class EditDistanceListOp : public OpKernel {
 
     std::vector<std::vector<int32>> ref;
     std::vector<std::vector<int32>> hyp;
-
     ExtractSequence(ref_list, &ref);
     ExtractSequence(hyp_list, &hyp);
 
@@ -288,7 +287,7 @@ class EditDistanceListOp : public OpKernel {
     for (int64 b = 0; b < batch_size; ++b) {
       const int64 edit_distance =
           gtl::LevenshteinDistance<int32>(ref[b], hyp[b], cmp);
-      const int64 ref_length = ref.size();
+      const int64 ref_length = ref[b].size();
 
       tensor_edit_distance->vec<int64>()(b) = edit_distance;
       tensor_ref_length->vec<int64>()(b) = ref_length;
