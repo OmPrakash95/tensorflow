@@ -96,6 +96,8 @@ class SpeechModel(object):
     self.saver = tf.train.Saver(tf.all_variables())
 
   def create_input(self):
+    if not os.path.isfile(self.dataset_params.path):
+      raise Exception("Invalid dataset: " % str(self.dataset_params))
     assert os.path.isfile(self.dataset_params.path)
     filename_queue = tf.train.string_input_producer([self.dataset_params.path])
 
@@ -466,11 +468,11 @@ class SpeechModel(object):
     model_params.ckpt = prefix + ".ckpt"
 
     if results_proto:
-      model_params.results_proto = results_proto
+      model_params.results.CopyFrom(results_proto)
 
     with open(prefix + ".model_params", "w") as proto_file:
       proto_file.write(str(model_params))
-    self.saver.restore(sess, prefix + ".ckpt")
+    self.saver.save(sess, prefix + ".ckpt")
 
 
   def step(self, sess, update, results_proto, profile_proto):
@@ -624,7 +626,8 @@ def run(mode, epoch):
   with tf.device("/gpu:%d" % FLAGS.device):
     with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
       dataset_params, model_params, optimization_params = load_params(mode)
-      speech_model = SpeechModel(sess, mode, dataset_params, model_params, optimization_params, seed=epoch)
+      speech_model = SpeechModel(
+          sess, mode, dataset_params, model_params, optimization_params, seed=epoch)
 
       coord = tf.train.Coordinator()
       threads = []
@@ -637,7 +640,7 @@ def run(mode, epoch):
       speech_model.step_epoch(sess, mode == "train", results_proto, profile_proto)
 
       if mode == "train":
-        prefix = os.path.join(FLAGS.logdir, "%d" % epoch)
+        prefix = os.path.join(FLAGS.logdir, "%d" % (epoch + 1))
         speech_model.save(sess, prefix, results_proto)
 
       coord.request_stop()
@@ -658,7 +661,7 @@ def main(_):
 
   for epoch in range(20):
     run("train", epoch)
-    run("valid", epoch)
+    #run("valid", epoch)
     run("test", epoch)
 
 if __name__ == '__main__':
