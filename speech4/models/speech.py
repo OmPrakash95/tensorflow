@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 
+import google
 import math
 import numpy as np
 import os.path
@@ -78,10 +79,11 @@ class SpeechModel(object):
 
   def create_model(self, sess, mode):
     print("creating model...")
-    self.global_step = tf.Variable(0, trainable=False)
 
     initializer = tf.random_uniform_initializer(-0.1, 0.1)
     with tf.variable_scope("model", initializer=initializer):
+      self.global_step = tf.Variable(0, trainable=False)
+
       self.create_input()
       self.create_encoder()
       self.create_decoder(mode)
@@ -129,23 +131,24 @@ class SpeechModel(object):
 
 
   def create_encoder(self):
-    with vs.variable_scope("encoder"):
-      #self.create_dynamic_encoder()
-      self.create_monolithic_enocder()
+    # with vs.variable_scope("encoder"):
+    #self.create_dynamic_encoder()
+    self.create_monolithic_enocder()
 
-      # Create the encoder embedding.
-      encoder_state = self.encoder_states[-1][0]
-      attn_len = encoder_state.get_shape()[1].value
-      # encoder_state shape is [batch_size, attn_len, 1, attn_size]
-      encoder_state = array_ops.reshape(
-          encoder_state, [self.batch_size, attn_len, 1,
-                          self.model_params.encoder_cell_size])
+    # Create the encoder embedding.
+    encoder_state = self.encoder_states[-1][0]
+    attn_len = encoder_state.get_shape()[1].value
+    # encoder_state shape is [batch_size, attn_len, 1, attn_size]
+    encoder_state = array_ops.reshape(
+        encoder_state, [self.batch_size, attn_len, 1,
+                        self.model_params.encoder_cell_size])
 
     # We create this outside the "encoder" vs to support legacy ckpts.
-    k = vs.get_variable(
-        "encoder_embedding", [
-            1, 1, self.model_params.encoder_cell_size,
-            self.model_params.attention_embedding_size])
+    with vs.variable_scope(self.model_params.encoder_embedding):
+      k = vs.get_variable(
+          "W", [
+              1, 1, self.model_params.encoder_cell_size,
+              self.model_params.attention_embedding_size])
     # encoder_embedding shape is [batch_size, attn_len, 1, embedding_size]
     encoder_embedding = nn_ops.conv2d(encoder_state, k, [1, 1, 1, 1], "SAME")
     encoder_embedding.set_shape([
@@ -161,7 +164,7 @@ class SpeechModel(object):
     # Create the encoder layers.
     assert self.model_params.encoder_layer
     for idx, s in enumerate(self.model_params.encoder_layer):
-      with vs.variable_scope("layer_%d" % (idx + 1)) as scope:
+      with vs.variable_scope("encoder_%d" % (idx + 1)) as scope:
         self.create_monolithic_encoder_layer(input_time_stride=int(s), scope=scope)
 
     # Concat the encoder states.
@@ -204,7 +207,7 @@ class SpeechModel(object):
     # Create the encoder layers.
     assert self.model_params.encoder_layer
     for idx, s in enumerate(self.model_params.encoder_layer):
-      with vs.variable_scope("layer_%d" % idx) as scope:
+      with vs.variable_scope("encoder_%d" % idx) as scope:
         self.create_dynamic_encoder_layer(input_time_stride=int(s), scope=scope)
 
     # Transpose from time major to batch major.
@@ -244,6 +247,13 @@ class SpeechModel(object):
 
 
   def create_decoder(self, mode):
+    self.create_decoder_sequence_legacy(
+        attention_states=None,
+        encoder_states=self.encoder_states[-1][0],
+        encoder_embedding=self.encoder_embedding[0])
+
+
+  def create_decoder_new(self, mode):
     print("creating decoder...")
     with vs.variable_scope("decoder"):
       self.decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(
@@ -284,7 +294,7 @@ class SpeechModel(object):
           a = nn_ops.softmax(e)
           # Now calculate the attention-weighted vector c.
           c = math_ops.reduce_sum(
-              array_ops.reshape(a, [-1, attn_length, 1, 1]) * encoder_state,
+              array_ops.reshape(a, [batch_size, attn_length, 1, 1]) * encoder_state,
               [1, 2])
           return array_ops.reshape(c, [batch_size, self.model_params.encoder_cell_size]), a
 
@@ -343,6 +353,199 @@ class SpeechModel(object):
         probs.append(prob)
       self.logits = logits
       self.probs = probs
+
+
+  def create_decoder_sequence_legacy(
+      self, attention_states, encoder_states, encoder_embedding, scope=None):
+    attn_length = self.encoder_embedding[0].get_shape()[1].value
+    self.encoder_state_legacy = array_ops.reshape(
+        self.encoder_states[-1][0],
+        [self.batch_size, attn_length, 1, self.model_params.encoder_cell_size])
+
+    with vs.variable_scope(self.model_params.decoder_prefix or scope):
+      self.decoder_states = []
+      self.logits_pinyin = []
+      self.prob = []
+      self.logprob = []
+      states = []
+      attentions = []
+      alignments = None
+      prev_logit = None
+      for decoder_time_idx in range(len(self.tokens) - 1):
+        if decoder_time_idx > 0:
+          vs.get_variable_scope().reuse_variables()
+
+        # RNN-Attention Decoder.
+        (outputs, states, attentions, alignments) = self.create_decoder_cell_legacy(
+            decoder_time_idx, states, attentions, alignments, encoder_states,
+            encoder_embedding, prev_logit)
+ 
+        # Logit.
+        with vs.variable_scope("Logit"):
+          logit = nn_ops.xw_plus_b(
+              outputs[-1],
+              vs.get_variable("Matrix", [outputs[-1].get_shape()[1].value, self.model_params.vocab_size]),
+              vs.get_variable("Bias", [self.model_params.vocab_size]), name="Logit_%d" % decoder_time_idx)
+          prev_logit = logit
+          self.decoder_states.append(logit)
+          prob = tf.nn.softmax(logit, name="Softmax_%d" % decoder_time_idx)
+          self.prob.append(prob)
+          self.logprob.append(tf.log(prob, name="LogProb_%d" % decoder_time_idx))
+
+        # Pinyin Logits.
+        if self.model_params.pinyin_ext:
+          assert self.model_params.pinyin_dim == 7
+          with vs.variable_scope("LogitPinyin"):
+            pinyin_logit = nn_ops.xw_plus_b(
+                outputs[-1],
+                vs.get_variable("Matrix", [outputs[-1].get_shape()[1].value, self.model_params.pinyin_vocab_size * 7]),
+                vs.get_variable("Bias", [self.model_params.pinyin_vocab_size * 7]), name="Logit_%d" % decoder_time_idx)
+            pinyin_logit = array_ops.reshape(pinyin_logit, [self.batch_size * 7, self.model_params.pinyin_vocab_size])
+            self.logits_pinyin.append(pinyin_logit)
+
+      self.decoder_state_last = states[1:]
+      self.decoder_alignment_last = filter(None, alignments)
+      self.decoder_attention_last = filter(None, attentions)
+    self.logits = self.decoder_states
+
+  def create_decoder_cell_legacy(
+      self, decoder_time_idx, states, attentions, prev_alignments, encoder_states,
+      encoder_embedding, prev_logit, scope=None):
+    batch_size = self.batch_size
+    attention_embedding_size = self.model_params.attention_embedding_size
+    decoder_cell_size = self.model_params.decoder_cell_size
+
+    # Create the embedding layer.
+    with tf.device("/cpu:0"):
+      sqrt3 = np.sqrt(3)
+      embedding = vs.get_variable(
+          "embedding", [self.model_params.vocab_size, self.model_params.embedding_size],
+          initializer=tf.random_uniform_initializer(-sqrt3, sqrt3))
+
+      if decoder_time_idx == 0 or self.model_params.input_layer == 'placeholder':
+        emb = embedding_ops.embedding_lookup(
+            embedding, self.tokens[decoder_time_idx])
+      elif self.model_params.input_layer == "decoder" or self.optimization_params == None:
+        # We want the arg max of the previous token here.
+        assert prev_logit
+        prev_token = math_ops.argmax(prev_logit, 1)
+        emb = embedding_ops.embedding_lookup(embedding, prev_token)
+      else:
+        emb = embedding_ops.embedding_lookup(embedding, gru_ops.token_sample(
+            self.tokens[decoder_time_idx], self.prob[-1],
+            sample_prob=self.optimization_params.sample_prob,
+            seed=len(self.prob)))
+      emb.set_shape([batch_size, self.model_params.embedding_size])
+
+    def create_attention(decoder_state, prev_alignment):
+      with vs.variable_scope("attention"):
+        U = vs.get_variable("U", [decoder_cell_size, attention_embedding_size])
+        b = vs.get_variable("b", [attention_embedding_size])
+        v = vs.get_variable("v", [attention_embedding_size])
+
+        # Decoder embedding.
+        decoder_state.set_shape([batch_size, decoder_cell_size])
+        d = nn_ops.xw_plus_b(decoder_state, U, b)
+        d = array_ops.reshape(d, [batch_size, 1, 1, attention_embedding_size])
+
+        # Energies.
+        e = math_ops.reduce_sum(
+            v * math_ops.tanh(encoder_embedding + d), [2, 3])
+        if self.model_params.attention_params.type == "window":
+          e = attention_mask_ops.attention_mask_window(
+              self.encoder_states[-1][1], decoder_time_idx, e)
+        elif prev_alignment and self.model_params.attention_params.type == "median":
+          window_l = self.model_params.attention_params.median_window_l
+          window_r = self.model_params.attention_params.median_window_r
+          e = attention_mask_ops.attention_mask_median(
+              self.encoder_states[-1][1], e, prev_alignment, window_l=window_l,
+              window_r=window_r)
+        else:
+          e = attention_mask_ops.attention_mask(self.encoder_states[-1][1], e)
+
+        # Alignment.
+        a = nn_ops.softmax(e, name="alignment_%d" % (decoder_time_idx))
+
+        # Context.
+        attn_length = self.encoder_embedding[0].get_shape()[1].value
+        c = math_ops.reduce_sum(
+            array_ops.reshape(a, [batch_size, attn_length, 1, 1]) * self.encoder_state_legacy,
+            [1, 2])
+        c = array_ops.reshape(c, [batch_size, self.model_params.encoder_cell_size])
+        return a, c
+
+    new_states = [None]
+    new_attentions = [None]
+    new_alignments = [None]
+    new_outputs = [emb]
+    def create_gru_cell(attention):
+      stack_idx = len(new_states)
+
+      # If empty, create new state.
+      if len(states):
+        state = states[stack_idx]
+      elif self.model_params.input_layer == 'placeholder':
+        # During decoding, this is given to us.
+        state = tf.placeholder(
+            tf.float32, shape=(batch_size, decoder_cell_size))
+        self.decoder_states_initial.append(state)
+      else:
+        state = array_ops.zeros([batch_size, decoder_cell_size], tf.float32)
+
+      # The input to this layer is the output of the previous layer.
+      x = new_outputs[stack_idx - 1]
+      # If the previous timestep has an attention context, concat it.
+      if attention:
+        if self.model_params.input_layer == "placeholder":
+          attention_placeholder = tf.placeholder(
+              tf.float32, shape=[batch_size, self.model_params.encoder_cell_size],
+              name="attention_%d" % stack_idx)
+          self.decoder_attentions_initial.append(attention_placeholder)
+          x = array_ops.concat(1, [x, attention_placeholder])
+        elif len(attentions):
+          x = array_ops.concat(1, [x, attentions[stack_idx]])
+        else:
+          x = array_ops.concat(1, [x, array_ops.zeros([
+              batch_size, self.model_params.encoder_cell_size], tf.float32)])
+        x.set_shape([batch_size, new_outputs[stack_idx - 1].get_shape()[1].value + self.model_params.encoder_cell_size])
+
+      # Create our GRU cell.
+      _, _, _, _, h = gru_ops.gru_cell(
+          decoder_cell_size, self.tokens_len, state, x, time_idx=decoder_time_idx)
+      h.set_shape([batch_size, decoder_cell_size])
+
+      new_states.append(h)
+      if attention:
+        prev_alignment = None
+        if self.model_params.input_layer == "placeholder":
+          prev_alignment = tf.placeholder(
+              tf.float32, shape=[batch_size, len(self.encoder_states[-1][0])],
+              name="alignment_%d" % stack_idx)
+          self.decoder_alignments_initial.append(prev_alignment)
+        elif prev_alignments:
+          prev_alignment = prev_alignments[stack_idx]
+        a, c = create_attention(h, prev_alignment)
+        new_attentions.append(c)
+        new_alignments.append(a)
+        h = array_ops.concat(1, [h, c])
+        h.set_shape(
+            [batch_size, self.model_params.decoder_cell_size + self.model_params.encoder_cell_size])
+      else:
+        new_attentions.append(None)
+        new_alignments.append(None)
+      new_outputs.append(h)
+
+    if self.model_params.decoder_layer:
+      for idx, s in enumerate(self.model_params.decoder_layer):
+        with vs.variable_scope(str(idx + 1)):
+          create_gru_cell(attention=(s == "attention"))
+    else:
+      with vs.variable_scope("1"):
+        create_gru_cell(attention=True)
+      with vs.variable_scope("2"):
+        create_gru_cell(attention=False)
+
+    return new_outputs, new_states, new_attentions, new_alignments
 
 
   def create_loss(self):
@@ -433,10 +636,13 @@ class SpeechModel(object):
 
 
   def step_epoch(self, sess, update, results_proto, profile_proto):
+    steps_per_report = 100
+    if update == False:
+      steps_per_report = 1
     for idx in range(self.dataset_params.size / self.batch_size):
       self.step(sess, update, results_proto, profile_proto)
 
-      if idx % 10 == 0:
+      if (idx % steps_per_report) == 0:
         percentage = float(idx) / float(self.dataset_params.size) * float(self.batch_size)
         accuracy = float(results_proto.acc.pos) / float(results_proto.acc.count)
         edit_distance = float(results_proto.edit_distance.edit_distance) / float(results_proto.edit_distance.ref_length)
@@ -445,21 +651,27 @@ class SpeechModel(object):
 
 
   def restore(self, sess):
-    assert os.path.isfile(model_params.ckpt)
+    assert os.path.isfile(self.model_params.ckpt)
 
     trainable_only = False
-    if self.optimization_params.adagrad.reset:
-      trainable_only = True
-    elif self.optimization_params.adadelta.reset:
-      trainable_only = True
-    elif self.optimization_params.adam.reset:
-      trainable_only = True
+    if self.optimization_params is not None:
+      if self.optimization_params.adagrad.reset:
+        trainable_only = True
+      elif self.optimization_params.adadelta.reset:
+        trainable_only = True
+      elif self.optimization_params.adam.reset:
+        trainable_only = True
 
+    variables = []
     if trainable_only:
-      self.saver = tf.train.Saver(tf.trainable_variables())
+      variables = tf.trainable_variables()
     else:
-      self.saver = tf.train.Saver(tf.all_variables())
-    self.saver.restore(sess, ckpt)
+      variables = tf.all_variables()
+    for idx, variable in enumerate(variables):
+      print("%d: %s %s" % (idx, variable.name, str(variable.get_shape())))
+
+    self.saver = tf.train.Saver(variables)
+    self.saver.restore(sess, self.model_params.ckpt)
 
 
   def save(self, sess, prefix, results_proto=None):
@@ -472,7 +684,9 @@ class SpeechModel(object):
 
     with open(prefix + ".model_params", "w") as proto_file:
       proto_file.write(str(model_params))
+    ckpt_filepath = prefix + ".ckpt"
     self.saver.save(sess, prefix + ".ckpt")
+    return ckpt_filepath
 
 
   def step(self, sess, update, results_proto, profile_proto):
@@ -551,24 +765,27 @@ class SpeechModel(object):
     return f
 
 
-def load_dataset_params(mode):
-  wsj = {}
-  wsj["train"] = speech4_pb2.DatasetParamsProto()
-  wsj["train"].name = "train_si284"
-  wsj["train"].path = "speech4/data/train_si284.tfrecords"
-  wsj["train"].size = 37416
-  wsj["valid"] = speech4_pb2.DatasetParamsProto()
-  wsj["valid"].name = "test_dev93"
-  wsj["valid"].path = "speech4/data/test_dev93.tfrecords"
-  wsj["valid"].size = 503
-  wsj["test"] = speech4_pb2.DatasetParamsProto()
-  wsj["test"].name = "test_eval92"
-  wsj["test"].path = "speech4/data/test_eval92.tfrecords"
-  wsj["test"].size = 333
+def create_dataset_params(name, path, size):
+  params = speech4_pb2.DatasetParamsProto()
+  params.name = name
+  params.path = path
+  params.size = size
+  return params
 
+
+def load_dataset_params(mode):
   if FLAGS.dataset == "wsj":
-    assert mode in wsj
+    wsj = {}
+    wsj["train"] = create_dataset_params("train_si284", "speech4/data/train_si284.tfrecords", 37416)
+    wsj["valid"] = create_dataset_params("test_dev93", "speech4/data/test_dev93.tfrecords", 503)
+    wsj["test"] = create_dataset_params("test_eval92", "speech4/data/test_eval92.tfrecords", 333)
     return wsj[mode]
+  elif FLAGS.dataset == "gale_mandarin":
+    gale = {}
+    gale["train"] = create_dataset_params("train", "speech4/data/gale_mandarin_sp_train_space.tfrecords", 58058)
+    gale["valid"] = create_dataset_params("valid", "speech4/data/gale_mandarin_sp_dev_space.tfrecords", 5191)
+    gale["valid"] = create_dataset_params("test", "speech4/data/gale_mandarin_sp_dev_space.tfrecords", 5191)
+    return gale[mode]
 
   raise Exception("Unknown dataset %s" % FLAGS.dataset)
 
@@ -597,6 +814,13 @@ def load_model_params(mode):
     model_params.encoder_layer.append("2")
     model_params.encoder_layer.append("2")
 
+  if not model_params.encoder_prefix:
+    model_params.encoder_prefix = "encoder"
+  if not model_params.encoder_embedding:
+    model_params.encoder_embedding = "encoder_embedding"
+  if not model_params.decoder_prefix:
+    model_params.decoder_prefix = "decoder"
+
   return model_params
 
 
@@ -622,10 +846,15 @@ def load_params(mode):
   return dataset_params, model_params, optimization_params
 
 
-def run(mode, epoch):
+def run(mode, epoch, ckpt=None):
+  ckpt_filepath = None
   with tf.device("/gpu:%d" % FLAGS.device):
     with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
       dataset_params, model_params, optimization_params = load_params(mode)
+
+      if ckpt:
+        model_params.ckpt = ckpt
+
       speech_model = SpeechModel(
           sess, mode, dataset_params, model_params, optimization_params, seed=epoch)
 
@@ -641,10 +870,11 @@ def run(mode, epoch):
 
       if mode == "train":
         prefix = os.path.join(FLAGS.logdir, "%d" % (epoch + 1))
-        speech_model.save(sess, prefix, results_proto)
+        ckpt_filepath = speech_model.save(sess, prefix, results_proto)
 
       coord.request_stop()
       coord.join(threads, stop_grace_period_secs=10)
+  return ckpt_filepath
 
 
 def main(_):
@@ -659,10 +889,11 @@ def main(_):
 
   print "logdir: %s" % FLAGS.logdir
 
+  ckpt_filepath = FLAGS.ckpt
   for epoch in range(20):
-    run("train", epoch)
-    #run("valid", epoch)
-    run("test", epoch)
+    #run("train", epoch, ckpt_filepath)
+    run("valid", epoch, ckpt_filepath)
+    #run("test", epoch, ckpt_filepath)
 
 if __name__ == '__main__':
   tf.app.run()
