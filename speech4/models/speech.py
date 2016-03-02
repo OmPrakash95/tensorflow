@@ -686,7 +686,7 @@ class SpeechModel(object):
     with open(prefix + ".model_params", "w") as proto_file:
       proto_file.write(str(model_params))
     ckpt_filepath = prefix + ".ckpt"
-    self.saver.save(sess, prefix + ".ckpt")
+    self.saver.save(sess, ckpt_filepath)
     return ckpt_filepath
 
 
@@ -894,9 +894,9 @@ def main(_):
 
   ckpt_filepath = FLAGS.ckpt
   for epoch in range(20):
-    #run("train", epoch, ckpt_filepath)
+    ckpt_filepath = run("train", epoch, ckpt_filepath)
     run("valid", epoch, ckpt_filepath)
-    #run("test", epoch, ckpt_filepath)
+    run("test", epoch, ckpt_filepath)
 
 if __name__ == '__main__':
   tf.app.run()
