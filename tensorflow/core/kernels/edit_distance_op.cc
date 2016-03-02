@@ -239,6 +239,8 @@ class EditDistanceListOp : public OpKernel {
  public:
   explicit EditDistanceListOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("eos_token", &eos_token_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("eow_token", &eow_token_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("collapse_eow", &collapse_eow_));
   }
 
   void ExtractSequence(
@@ -254,7 +256,11 @@ class EditDistanceListOp : public OpKernel {
           if (token == eos_token_) {
             terminated[b] = true;
           } else {
-            (*sequence)[b].emplace_back(token);
+            if (collapse_eow_ && token == eow_token_) {
+              // noop.
+            } else {
+              (*sequence)[b].emplace_back(token);
+            }
           }
         }
       }
@@ -296,6 +302,8 @@ class EditDistanceListOp : public OpKernel {
 
  private:
   int32 eos_token_;
+  int32 eow_token_;
+  bool collapse_eow_;
 };
 
 REGISTER_KERNEL_BUILDER(                                                       \

@@ -233,6 +233,8 @@ output: The same shape as `tensor`.
 
 REGISTER_OP("EditDistanceList")
     .Attr("eos_token: int = 1")
+    .Attr("eow_token: int = 2")
+    .Attr("collapse_eow: bool = false")
     .Attr("sequence_len_max: int")
     .Input("ref: sequence_len_max * int32")
     .Input("hyp: sequence_len_max * int32")

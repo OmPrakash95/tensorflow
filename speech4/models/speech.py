@@ -577,7 +577,8 @@ class SpeechModel(object):
     ref = self.tokens[1:]
     hyp = [tf.to_int32(math_ops.argmax(logit, 1)) for logit in self.logits]
 
-    self.edit_distance = gen_array_ops.edit_distance_list(ref, hyp)
+    self.edit_distance = gen_array_ops.edit_distance_list(
+        ref, hyp, collapse_eow=self.dataset_params.collapse_eow)
 
 
   def create_optimizer(self):
@@ -647,7 +648,7 @@ class SpeechModel(object):
         accuracy = float(results_proto.acc.pos) / float(results_proto.acc.count)
         edit_distance = float(results_proto.edit_distance.edit_distance) / float(results_proto.edit_distance.ref_length)
         step_time = profile_proto.secs / profile_proto.steps
-        print "step: %.2f, step_time: %.2f, accuracy %.2f, edit_distance %.2f" % (percentage, step_time, accuracy, edit_distance)
+        print "step: %.2f, step_time: %.2f, accuracy %.4f, edit_distance %.4f" % (percentage, step_time, accuracy, edit_distance)
 
 
   def restore(self, sess):
@@ -784,7 +785,9 @@ def load_dataset_params(mode):
     gale = {}
     gale["train"] = create_dataset_params("train", "speech4/data/gale_mandarin_sp_train_space.tfrecords", 58058)
     gale["valid"] = create_dataset_params("valid", "speech4/data/gale_mandarin_sp_dev_space.tfrecords", 5191)
-    gale["valid"] = create_dataset_params("test", "speech4/data/gale_mandarin_sp_dev_space.tfrecords", 5191)
+    gale["test"] = create_dataset_params("test", "speech4/data/gale_mandarin_sp_dev_space.tfrecords", 5191)
+    for key in gale:
+      gale[key].collapse_eow = True
     return gale[mode]
 
   raise Exception("Unknown dataset %s" % FLAGS.dataset)

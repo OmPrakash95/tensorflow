@@ -8,6 +8,7 @@ message DatasetParamsProto {
   string name = 1;
   string path = 2;
   int64 size = 3;
+  bool collapse_eow = 4;
 };
 
 message ExperimentParamsProto {
