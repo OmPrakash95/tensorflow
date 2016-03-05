@@ -25,10 +25,13 @@ message TokenModelProto {
   int64 token_unk = 8;
   string token_string_unk = 9;
 
-  int64 unk_threshold = 10;
+  int64 token_blank = 10;
+  string token_string_blank = 11;
 
-  bool character_model = 11;
-  bool word_model = 12;
+  int64 unk_threshold = 12;
 
-  bool remove_eow = 13;
+  bool character_model = 13;
+  bool word_model = 14;
+
+  bool remove_eow = 15;
 };

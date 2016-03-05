@@ -107,7 +107,7 @@ class LASModel(object):
       #    filtered_variables.append(v)
       #variables = filtered_variables
     for v in variables:
-      print "loading: %s" % v.name
+      print "loading: %s %s" % (v.name, str(v.get_shape()))
     self.saver = tf.train.Saver(variables)
 
     if gfile.Exists(ckpt):
