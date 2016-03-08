@@ -13,6 +13,7 @@ import re
 import os
 import sys
 import tensorflow as tf
+import tensorflow.core.framework.token_model_pb2 as token_model_pb2
 
 
 def main():
@@ -29,19 +30,48 @@ def main():
       args['tf_records'])
 
 
-def load_phone_map(phones_txt):
+def load_phones(phones_txt):
   lines = [line.strip() for line in open(phones_txt, 'r')]
-  phone_map = {}
+  phones = []
   for line in lines:
     cols = line.split(" ")
     assert len(cols) == 2
 
     phone = cols[0]
-    label = int(cols[1]) - 1
-    assert label >= 0
-    assert label < 48
-    phone_map[phone] = label
-  return phone_map
+    phones.append(phone)
+  return phones
+
+
+def create_phone_token_model(phones_txt):
+  token_model_proto = token_model_pb2.TokenModelProto()
+  token_model_proto.token_sos = 0
+  token_model_proto.token_string_sos = "<S>"
+  token_model_proto.token_eos = 1
+  token_model_proto.token_string_eos = "</S>"
+  token_model_proto.token_eow = 2
+  token_model_proto.token_string_eow = " "
+  token_model_proto.token_unk = 3
+  token_model_proto.token_string_unk = "<UNK>"
+  token_model_proto.token_blank = 4
+  token_model_proto.token_string_blank = "<BLANK>"
+
+  token_id = 5
+  token_map = {}
+
+  phones = load_phones(phones_txt)
+  for phone in phones:
+    token = token_model_proto.tokens.add()
+    token.token_id = token_id
+    token.token_string = phone
+
+    token_map[token.token_string] = token.token_id
+
+    token_id = token_id + 1
+
+  with open("speech4/conf/timit/token_model.pbtxt", "w") as proto_file:
+    proto_file.write(str(token_model_proto))
+
+  return token_map
 
 
 def load_text_map(kaldi_txt, phone_map):
@@ -62,7 +92,7 @@ def extract_text_line(line):
 
 def convert(
     kaldi_scp, kaldi_txt, phones_txt, remap_txt, tf_records):
-  phone_map = load_phone_map(phones_txt)
+  phone_map = create_phone_token_model(phones_txt)
   text_map = load_text_map(kaldi_txt, phone_map)
 
   tf_record_writer = tf.python_io.TFRecordWriter(tf_records)
