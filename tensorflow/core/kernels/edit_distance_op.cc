@@ -279,9 +279,7 @@ class EditDistanceListOp : public OpKernel {
     ExtractSequence(hyp_list, &hyp);
 
     const int64 batch_size = ref_list[0].dim_size(0);
-
     TensorShape output_shape({batch_size});
-
     Tensor* tensor_edit_distance = nullptr;
     ctx->allocate_output(
         "edit_distance", output_shape, &tensor_edit_distance);

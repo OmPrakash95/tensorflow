@@ -185,4 +185,33 @@ REGISTER_OP("Sink")
 Sink NoOp
 )doc");
 
+REGISTER_OP("CCTCEditDistance")
+    .Attr("eos_token: int = 1")
+    .Attr("eow_token: int = 2")
+    .Attr("blank_token: int = 4")
+    .Attr("sequence_len_max: int")
+    .Input("hyp: sequence_len_max * int32")
+    .Input("ref: sequence_len_max * int32")
+    .Output("edit_distance: int64")
+    .Output("ref_length: int64")
+    .Doc(R"doc(
+)doc");
+
+REGISTER_OP("CCTCEditDistanceReinforceGrad")
+    .Attr("eos_token: int = 1")
+    .Attr("eow_token: int = 2")
+    .Attr("blank_token: int = 4")
+    .Attr("sequence_len_max: int")
+    .Attr("discount_factor: float = 1.0")
+    .Input("hyp_probs: sequence_len_max * float")
+    .Input("hyp_baseline: sequence_len_max * float")
+    .Input("hyp: sequence_len_max * int32")
+    .Input("ref: sequence_len_max * int32")
+    .Output("edit_distance: int64")
+    .Output("ref_length: int64")
+    .Output("hyp_logits_backprop: sequence_len_max * float")
+    .Output("hyp_baseline_backprop: sequence_len_max * float")
+    .Doc(R"doc(
+)doc");
+
 }  // end namespace tensorflow
