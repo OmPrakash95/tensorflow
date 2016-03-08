@@ -792,8 +792,11 @@ def load_dataset_params(mode):
   elif FLAGS.dataset == "timit":
     timit = {}
     timit["train"] = create_dataset_params("train", "/data-local/data/tfrecords/timit_train.tfrecords", 3696)
+    timit["train"].features_len_max = 777
     timit["valid"] = create_dataset_params("dev", "/data-local/data/tfrecords/timit_dev.tfrecords", 400)
+    timit["valid"].features_len_max = 742
     timit["test"] = create_dataset_params("test", "/data-local/data/tfrecords/timit_test.tfrecords", 192)
+    timit["test"].features_len_max = 619
     for key in timit:
       timit[key].feature_size = 69
     return timit[mode]

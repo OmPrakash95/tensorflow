@@ -19,21 +19,30 @@ typedef Eigen::ThreadPoolDevice CPUDevice;
 
 namespace {
 void ExtractSequence(
-    const OpInputList& list, int32 eos_token, std::vector<std::vector<int32>>* sequence) {
+    const OpInputList& list, const Tensor& len,
+    std::vector<std::vector<int32>>* sequence) {
   const int64 batch_size = list[0].dim_size(0);
   sequence->resize(batch_size);
 
-  std::vector<bool> terminated(batch_size, false);
   for (int64 t = 0; t < list.size(); ++t) {
     for (int64 b = 0; b < batch_size; ++b) {
-      if (!terminated[b]) {
+      if (t < len.flat<int64>()(b)) {
         const int32 token = list[t].vec<int32>()(b);
-        if (token == eos_token) {
-          terminated[b] = true;
-        } else {
-          (*sequence)[b].emplace_back(token);
-        }
+        (*sequence)[b].emplace_back(token);
       }
+    }
+  }
+}
+
+void ExtractSequence(
+    const OpInputList& list, std::vector<std::vector<int32>>* sequence) {
+  const int64 batch_size = list[0].dim_size(0);
+  sequence->resize(batch_size);
+
+  for (int64 t = 0; t < list.size(); ++t) {
+    for (int64 b = 0; b < batch_size; ++b) {
+      const int32 token = list[t].vec<int32>()(b);
+      (*sequence)[b].emplace_back(token);
     }
   }
 }
@@ -157,8 +166,6 @@ void ComputeEditDistance(
 class CCTCEditDistance : public OpKernel {
  public:
   explicit CCTCEditDistance(OpKernelConstruction* ctx) : OpKernel(ctx) {
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("eos_token", &eos_token_));
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("eow_token", &eow_token_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("blank_token", &blank_token_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("sequence_len_max", &sequence_len_max_));
   }
@@ -170,34 +177,29 @@ class CCTCEditDistance : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->input_list("ref", &ref_list));
     OP_REQUIRES_OK(ctx, ctx->input_list("hyp", &hyp_list));
 
+    const Tensor* ref_len = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("ref_len", &ref_len));
+
     std::vector<std::vector<int32>> ref;
+    ExtractSequence(ref_list, *ref_len, &ref);
     std::vector<std::vector<int32>> hyp;
-    ExtractSequence(ref_list, eos_token_, &ref);
-    ExtractSequence(hyp_list, eos_token_, &hyp);
+    ExtractSequence(hyp_list, &hyp);
 
     const int64 batch_size = ref_list[0].dim_size(0);
     Tensor* tensor_edit_distance = nullptr;
     ctx->allocate_output(
         "edit_distance", TensorShape({batch_size}), &tensor_edit_distance);
-    Tensor* tensor_ref_length = nullptr;
-    ctx->allocate_output(
-        "ref_length", TensorShape({batch_size}), &tensor_ref_length);
 
     for (int64 b = 0; b < batch_size; ++b) {
       EditDistance err;
       ComputeEditDistance(ref[b], hyp[b], blank_token_, &err);
 
       const int64 edit_distance = err.edit_distance();
-      const int64 ref_length = ref[b].size();
-
       tensor_edit_distance->vec<int64>()(b) = edit_distance;
-      tensor_ref_length->vec<int64>()(b) = ref_length;
     }
   }
 
  private:
-  int32 eos_token_;
-  int32 eow_token_;
   int32 blank_token_;
   int32 sequence_len_max_;
 };
@@ -205,21 +207,15 @@ class CCTCEditDistance : public OpKernel {
 class CCTCEditDistanceReinforceGrad : public OpKernel {
  public:
   explicit CCTCEditDistanceReinforceGrad(OpKernelConstruction* ctx) : OpKernel(ctx) {
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("eos_token", &eos_token_));
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("eow_token", &eow_token_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("blank_token", &blank_token_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("sequence_len_max", &sequence_len_max_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("discount_factor", &discount_factor_));
   }
 
   void ComputeRewards(
-      OpKernelContext* ctx,
-      const std::vector<int32>& ref,
-      const std::vector<int32>& hyp,
-      const EditDistance& err,
-      int32 blank_token,
-      float discount_factor,
-      std::vector<float>* rewards) {
+      OpKernelContext* ctx, const std::vector<int32>& ref,
+      const std::vector<int32>& hyp, const EditDistance& err, int32 blank_token,
+      float discount_factor, std::vector<float>* rewards) {
     int64 ref_idx = 0;
     int64 hyp_idx = 0;
     int64 err_idx = 0;
@@ -283,10 +279,13 @@ class CCTCEditDistanceReinforceGrad : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->input_list("ref", &ref_list));
     OP_REQUIRES_OK(ctx, ctx->input_list("hyp", &hyp_list));
 
+    const Tensor* ref_len = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("ref_len", &ref_len));
+
     std::vector<std::vector<int32>> ref;
+    ExtractSequence(ref_list, *ref_len, &ref);
     std::vector<std::vector<int32>> hyp;
-    ExtractSequence(ref_list, eos_token_, &ref);
-    ExtractSequence(hyp_list, eos_token_, &hyp);
+    ExtractSequence(hyp_list, &hyp);
 
     // Get our predicted probs.
     OpInputList hyp_probs_list;
@@ -350,11 +349,68 @@ class CCTCEditDistanceReinforceGrad : public OpKernel {
   }
 
  private:
-  int32 eos_token_;
-  int32 eow_token_;
   int32 blank_token_;
   int32 sequence_len_max_;
   float discount_factor_;
+};
+
+class CCTCBootstrapAlignment : public OpKernel {
+ public:
+  explicit CCTCBootstrapAlignment(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("blank_token", &blank_token_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("lpad", &lpad_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("rpad", &rpad_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("features_len_max", &features_len_max_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("tokens_len_max", &tokens_len_max_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    CPUDevice device = ctx->eigen_device<CPUDevice>();
+
+    OpInputList tokens_list;
+    OP_REQUIRES_OK(ctx, ctx->input_list("tokens", &tokens_list));
+
+    const Tensor* tokens_len = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("tokens_len", &tokens_len));
+
+    const Tensor* features_len = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("features_len", &features_len));
+
+    std::vector<std::vector<int32>> tokens;
+    ExtractSequence(tokens_list, *tokens_len, &tokens);
+
+    const int64 batch_size = tokens_len->dim_size(0);
+
+    OpOutputList tokens_aligned_list;
+    OP_REQUIRES_OK(ctx, ctx->output_list("tokens_aligned", &tokens_aligned_list));
+    for (int64 t = 0; t < features_len_max_; ++t) {
+      Tensor* tokens_aligned_tensor = nullptr;
+      tokens_aligned_list.allocate(t, TensorShape({batch_size}), &tokens_aligned_tensor);
+      tokens_aligned_tensor->flat<int32>().device(device) =
+          tokens_aligned_tensor->flat<int32>().constant(blank_token_);
+    }
+
+    for (int64 b = 0; b < batch_size; ++b) {
+      int64 tlen = tokens_len->flat<int64>()(b);
+      int64 flen = features_len->flat<int64>()(b);
+      float f_per_t = flen / (tlen - lpad_ - rpad_);
+
+      const std::vector<int32>& tokens_b = tokens[b];
+      CHECK_EQ(tokens_b.size(), tlen);
+      for (int t = 0; t < tlen; ++t) {
+        int32 token = tokens_b[t];
+
+        tokens_aligned_list[t * f_per_t + lpad_]->flat<int32>()(b) = token;
+      }
+    }
+  }
+
+ private:
+  int32 blank_token_;
+  int32 lpad_;
+  int32 rpad_;
+  int32 features_len_max_;
+  int32 tokens_len_max_;
 };
 }
 }  // namespace tensor

@@ -185,21 +185,31 @@ REGISTER_OP("Sink")
 Sink NoOp
 )doc");
 
+REGISTER_OP("CCTCBootstrapAlignment")
+    .Attr("blank_token: int = 4")
+    .Attr("lpad: int = 8")
+    .Attr("rpad: int = 4")
+    .Attr("features_len_max: int")
+    .Attr("tokens_len_max: int")
+    .Input("tokens: tokens_len_max * int32")
+    .Input("tokens_len: int64")
+    .Input("features_len: int64")
+    .Output("tokens_aligned: features_len_max * int32")
+    .Doc(R"doc(
+)doc");
+
 REGISTER_OP("CCTCEditDistance")
-    .Attr("eos_token: int = 1")
-    .Attr("eow_token: int = 2")
     .Attr("blank_token: int = 4")
     .Attr("sequence_len_max: int")
     .Input("hyp: sequence_len_max * int32")
     .Input("ref: sequence_len_max * int32")
+    .Input("ref_len: int64")
     .Output("edit_distance: int64")
     .Output("ref_length: int64")
     .Doc(R"doc(
 )doc");
 
 REGISTER_OP("CCTCEditDistanceReinforceGrad")
-    .Attr("eos_token: int = 1")
-    .Attr("eow_token: int = 2")
     .Attr("blank_token: int = 4")
     .Attr("sequence_len_max: int")
     .Attr("discount_factor: float = 1.0")
@@ -207,8 +217,8 @@ REGISTER_OP("CCTCEditDistanceReinforceGrad")
     .Input("hyp_baseline: sequence_len_max * float")
     .Input("hyp: sequence_len_max * int32")
     .Input("ref: sequence_len_max * int32")
+    .Input("ref_len: int64")
     .Output("edit_distance: int64")
-    .Output("ref_length: int64")
     .Output("hyp_logits_backprop: sequence_len_max * float")
     .Output("hyp_baseline_backprop: sequence_len_max * float")
     .Doc(R"doc(
