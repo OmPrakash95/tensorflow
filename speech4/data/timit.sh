@@ -20,6 +20,6 @@ for dataset in dev test train; do
       --kaldi_txt ${data}/text \
       --kaldi_alignment ark:"gunzip -c ${TIMIT_ROOT}/exp/sgmm2_4_ali/ali.*.gz |" \
       --phones speech4/conf/timit/phones.txt \
-      --remap speech3/conf/timit/remap.txt \
+      --remap speech4/conf/timit/remap.txt \
       --tf_records timit_${dataset}.tfrecords
 done
