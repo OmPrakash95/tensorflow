@@ -789,13 +789,23 @@ def load_dataset_params(mode):
     for key in gale:
       gale[key].collapse_eow = True
     return gale[mode]
+  elif FLAGS.dataset == "timit":
+    timit = {}
+    timit["train"] = create_dataset_params("train", "/data-local/data/tfrecords/timit_train.tfrecords", 3696)
+    timit["valid"] = create_dataset_params("dev", "/data-local/data/tfrecords/timit_dev.tfrecords", 400)
+    timit["test"] = create_dataset_params("test", "/data-local/data/tfrecords/timit_test.tfrecords", 192)
+    for key in timit:
+      timit[key].feature_size = 69
+    return timit[mode]
 
   raise Exception("Unknown dataset %s" % FLAGS.dataset)
 
 
-def load_model_params(mode):
+def load_model_params(mode, dataset_params):
   model_params = speech4_pb2.ModelParamsProto()
   model_params.features_width = 123
+  if dataset_params.features_width:
+    model_params.features_width = dataset_params.features_width
   model_params.features_len_max = 2560
   model_params.frame_skip = 1
   model_params.frame_stack = 1
@@ -844,7 +854,7 @@ def load_optimization_params(mode):
 
 def load_params(mode):
   dataset_params = load_dataset_params(mode)
-  model_params = load_model_params(mode)
+  model_params = load_model_params(mode, dataset_params)
   optimization_params = load_optimization_params(mode)
   return dataset_params, model_params, optimization_params
 
