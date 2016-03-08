@@ -42,36 +42,60 @@ def load_phones(phones_txt):
   return phones
 
 
+def token_model_add_token(token_model_proto, token_id, token_string):
+  token = token_model_proto.tokens.add()
+  token.token_id = int(token_id)
+  token.token_string = str(token_string)
+
+
 def create_phone_token_model(phones_txt):
   token_model_proto = token_model_pb2.TokenModelProto()
+  
   token_model_proto.token_sos = 0
   token_model_proto.token_string_sos = "<S>"
+  token_model_add_token(
+      token_model_proto, token_model_proto.token_sos,
+      token_model_proto.token_string_sos)
+
   token_model_proto.token_eos = 1
   token_model_proto.token_string_eos = "</S>"
+  token_model_add_token(
+      token_model_proto, token_model_proto.token_eos,
+      token_model_proto.token_string_eos)
+
   token_model_proto.token_eow = 2
   token_model_proto.token_string_eow = " "
+  token_model_add_token(
+      token_model_proto, token_model_proto.token_eow,
+      token_model_proto.token_string_eow)
+
+
   token_model_proto.token_unk = 3
   token_model_proto.token_string_unk = "<UNK>"
+  token_model_add_token(
+      token_model_proto, token_model_proto.token_unk,
+      token_model_proto.token_string_unk)
+
   token_model_proto.token_blank = 4
   token_model_proto.token_string_blank = "<BLANK>"
+  token_model_add_token(
+      token_model_proto, token_model_proto.token_blank,
+      token_model_proto.token_string_blank)
 
   token_id = 5
   token_map = {}
 
   phones = load_phones(phones_txt)
   for phone in phones:
-    token = token_model_proto.tokens.add()
-    token.token_id = token_id
-    token.token_string = phone
-
-    token_map[token.token_string] = token.token_id
+    token_model_add_token(token_model_proto, token_id, phone)
+    token_map[phone] = token_id
 
     token_id = token_id + 1
 
   with open("speech4/conf/timit/token_model.pbtxt", "w") as proto_file:
     proto_file.write(str(token_model_proto))
 
-  return token_map
+  return token_model_proto, token_map
 
 
 def load_text_map(kaldi_txt, phone_map):
@@ -92,7 +116,7 @@ def extract_text_line(line):
 
 def convert(
     kaldi_scp, kaldi_txt, phones_txt, remap_txt, tf_records):
-  phone_map = create_phone_token_model(phones_txt)
+  token_model_proto, phone_map = create_phone_token_model(phones_txt)
   text_map = load_text_map(kaldi_txt, phone_map)
 
   tf_record_writer = tf.python_io.TFRecordWriter(tf_records)
@@ -101,6 +125,9 @@ def convert(
   for uttid, feats in kaldi_feat_reader:
     text = text_map[uttid]
     tokens = [phone_map[phone] for phone in text.split(" ")]
+    tokens = [token_model_proto.token_sos] * 2 + tokens + [token_model_proto.token_eos]
+    tokens = [int(token) for token in tokens]
+    print tokens
 
     example = tf.train.Example(features=tf.train.Features(feature={
         'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats.shape[0]])),

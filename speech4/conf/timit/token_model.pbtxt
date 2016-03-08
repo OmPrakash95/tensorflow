@@ -1,4 +1,23 @@
 tokens {
+  token_string: "<S>"
+}
+tokens {
+  token_id: 1
+  token_string: "</S>"
+}
+tokens {
+  token_id: 2
+  token_string: " "
+}
+tokens {
+  token_id: 3
+  token_string: "<UNK>"
+}
+tokens {
+  token_id: 4
+  token_string: "<BLANK>"
+}
+tokens {
   token_id: 5
   token_string: "sil"
 }
