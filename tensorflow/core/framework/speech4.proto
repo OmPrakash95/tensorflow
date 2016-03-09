@@ -8,7 +8,10 @@ message DatasetParamsProto {
   string name = 1;
   string path = 2;
   int64 size = 3;
-  bool collapse_eow = 4;
+  int64 features_size = 4;
+  int64 features_len_max = 5;
+  int64 tokens_len_max = 6;
+  bool collapse_eow = 7;
 };
 
 message ExperimentParamsProto {
@@ -61,6 +64,7 @@ message ModelParamsProto {
   AttentionParamsProto attention_params = 12;
 
   string mode = 13;
+  string type = 14;
 
   int64 frame_stack = 20;
   int64 frame_skip = 21;

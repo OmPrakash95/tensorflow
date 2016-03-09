@@ -74,11 +74,14 @@ class SpeechModel(object):
     self.seed = seed
     tf.set_random_seed(self.seed)
 
-    self.create_model(sess, mode)
+    if self.model_params.type == "cctc":
+      self.create_model_cctc(sess, mode)
+    else:
+      self.create_model_attention(sess, mode)
 
 
-  def create_model(self, sess, mode):
-    print("creating model...")
+  def create_model_attention(self, sess, mode):
+    print("creating attention model...")
 
     initializer = tf.random_uniform_initializer(-0.1, 0.1)
     with tf.variable_scope("model", initializer=initializer):
@@ -96,6 +99,25 @@ class SpeechModel(object):
     if gfile.Exists(self.model_params.ckpt):
       self.restore(sess)
     self.saver = tf.train.Saver(tf.all_variables())
+
+
+  def create_model_cctc(self, sess, mode):
+    print("creating cctc model...")
+    initializer = tf.random_uniform_initializer(-0.1, 0.1)
+    with tf.variable_scope("model", initializer=initializer):
+      self.global_step = tf.Variable(0, trainable=False)
+
+      self.create_input()
+      self.create_encoder_cctc()
+      if mode == "train": self.create_optimizer()
+
+    print("initializing model...")
+    sess.run(tf.initialize_all_variables())
+
+    if gfile.Exists(self.model_params.ckpt):
+      self.restore(sess)
+    self.saver = tf.train.Saver(tf.all_variables())
+
 
   def create_input(self):
     if not os.path.isfile(self.dataset_params.path):
@@ -133,7 +155,7 @@ class SpeechModel(object):
   def create_encoder(self):
     # with vs.variable_scope("encoder"):
     #self.create_dynamic_encoder()
-    self.create_monolithic_enocder()
+    self.create_monolithic_encoder()
 
     # Create the encoder embedding.
     encoder_state = self.encoder_states[-1][0]
@@ -157,7 +179,11 @@ class SpeechModel(object):
     self.encoder_embedding = [encoder_embedding, self.encoder_states[-1][1]]
 
 
-  def create_monolithic_enocder(self):
+  def create_encoder_cctc(self):
+    self.create_monolithic_encoder()
+
+
+  def create_monolithic_encoder(self):
     print("creating monolithic encoder...")
     self.encoder_states = [[self.features, self.features_len]]
 
@@ -793,12 +819,15 @@ def load_dataset_params(mode):
     timit = {}
     timit["train"] = create_dataset_params("train", "/data-local/data/tfrecords/timit_train.tfrecords", 3696)
     timit["train"].features_len_max = 777
+    timit["train"].tokens_len_max = 74
     timit["valid"] = create_dataset_params("dev", "/data-local/data/tfrecords/timit_dev.tfrecords", 400)
     timit["valid"].features_len_max = 742
+    timit["valid"].tokens_len_max = 67
     timit["test"] = create_dataset_params("test", "/data-local/data/tfrecords/timit_test.tfrecords", 192)
     timit["test"].features_len_max = 619
+    timit["test"].tokens_len_max = 68
     for key in timit:
-      timit[key].feature_size = 69
+      timit[key].features_size = 69
     return timit[mode]
 
   raise Exception("Unknown dataset %s" % FLAGS.dataset)
@@ -807,12 +836,16 @@ def load_dataset_params(mode):
 def load_model_params(mode, dataset_params):
   model_params = speech4_pb2.ModelParamsProto()
   model_params.features_width = 123
-  if dataset_params.features_width:
-    model_params.features_width = dataset_params.features_width
+  if dataset_params.features_size:
+    model_params.features_width = dataset_params.features_size
   model_params.features_len_max = 2560
+  if dataset_params.features_len_max:
+    model_params.features_len_max = dataset_params.features_len_max
   model_params.frame_skip = 1
   model_params.frame_stack = 1
   model_params.tokens_len_max = 256
+  if dataset_params.tokens_len_max:
+    model_params.tokens_len_max = dataset_params.tokens_len_max
   model_params.vocab_size = 64
   model_params.embedding_size = 32
   model_params.encoder_cell_size = 384
@@ -837,6 +870,7 @@ def load_model_params(mode, dataset_params):
   if not model_params.decoder_prefix:
     model_params.decoder_prefix = "decoder"
 
+  print str(model_params)
   return model_params
 
 
