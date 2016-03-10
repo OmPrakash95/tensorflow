@@ -284,3 +284,15 @@ def _GruFusedGradShape(op):
   return [tensor_shape.TensorShape([input_size, cell_size]),
           tensor_shape.TensorShape([cell_size, cell_size])] * 3 + [
           tensor_shape.TensorShape([batch_size, input_size])] * ((len(op.inputs) - 7) / 6)
+
+
+@ops.RegisterShape("CCTCBootstrapAlignment")
+def _CCTCBootstrapAlignmentShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  return [tensor_shape.TensorShape([batch_size])] * op.get_attr("features_len_max") * 2
+
+
+@ops.RegisterShape("CCTCEditDistance")
+def _CCTCEditDistanceShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  return [tensor_shape.TensorShape([batch_size])]

@@ -57,6 +57,9 @@ tf.app.flags.DEFINE_string("optimization_params", "", """model_params proto""")
 tf.app.flags.DEFINE_integer("epochs", "",
                             """Epochs to run.""")
 
+tf.app.flags.DEFINE_integer("epochs", "",
+                            """Epochs to run.""")
+
 
 tf.app.flags.DEFINE_string("logdir", "",
                            """Path to our outputs and logs.""")
@@ -677,6 +680,8 @@ class SpeechModel(object):
     self.hyp = [tf.cast(math_ops.argmax(logit, 1), dtype=tf.int32) for logit in self.logits]
     self.edit_distance = gen_gru_ops.cctc_edit_distance(
         self.hyp, self.tokens, self.tokens_len)
+    if not self.model_params.cctc.xent:
+      self.losses.append(self.edit_distance)
     self.edit_distance = [self.edit_distance, self.tokens_len]
 
 
@@ -978,7 +983,7 @@ def load_model_params(mode, epoch, dataset_params):
   model_params.loss.log_prob = True
   model_params.loss.edit_distance = True
 
-  if epoch == 0:
+  if model_params.type == "cctc" and epoch == 0:
     model_params.cctc.xent = True
 
   model_params = try_load_proto(FLAGS.model_params, model_params)
@@ -1067,7 +1072,7 @@ def main(_):
 
   ckpt_filepath = FLAGS.ckpt
   for epoch in range(FLAGS.epochs):
-    ckpt_filepath = run("train", epoch, ckpt_filepath)
+    #ckpt_filepath = run("train", epoch, ckpt_filepath)
     run("valid", epoch, ckpt_filepath)
     run("test", epoch, ckpt_filepath)
 
