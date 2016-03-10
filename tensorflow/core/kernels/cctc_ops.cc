@@ -163,11 +163,12 @@ void ComputeEditDistance(
   *err = v1[hyp.size()];
 }
 
-class CCTCEditDistance : public OpKernel {
+class CCTCEditDistanceOp : public OpKernel {
  public:
-  explicit CCTCEditDistance(OpKernelConstruction* ctx) : OpKernel(ctx) {
+  explicit CCTCEditDistanceOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("blank_token", &blank_token_));
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("sequence_len_max", &sequence_len_max_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("features_len_max", &features_len_max_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("tokens_len_max", &tokens_len_max_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -201,8 +202,12 @@ class CCTCEditDistance : public OpKernel {
 
  private:
   int32 blank_token_;
-  int32 sequence_len_max_;
+  int32 features_len_max_;
+  int32 tokens_len_max_;
 };
+REGISTER_KERNEL_BUILDER(Name("CCTCEditDistance")
+                            .Device(DEVICE_CPU),
+                        CCTCEditDistanceOp);
 
 class CCTCEditDistanceReinforceGrad : public OpKernel {
  public:
@@ -354,9 +359,9 @@ class CCTCEditDistanceReinforceGrad : public OpKernel {
   float discount_factor_;
 };
 
-class CCTCBootstrapAlignment : public OpKernel {
+class CCTCBootstrapAlignmentOp : public OpKernel {
  public:
-  explicit CCTCBootstrapAlignment(OpKernelConstruction* ctx) : OpKernel(ctx) {
+  explicit CCTCBootstrapAlignmentOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("blank_token", &blank_token_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("lpad", &lpad_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("rpad", &rpad_));
@@ -382,25 +387,36 @@ class CCTCBootstrapAlignment : public OpKernel {
     const int64 batch_size = tokens_len->dim_size(0);
 
     OpOutputList tokens_aligned_list;
+    OpOutputList tokens_aligned_weight_list;
     OP_REQUIRES_OK(ctx, ctx->output_list("tokens_aligned", &tokens_aligned_list));
+    OP_REQUIRES_OK(ctx, ctx->output_list("tokens_aligned_weight", &tokens_aligned_weight_list));
     for (int64 t = 0; t < features_len_max_; ++t) {
       Tensor* tokens_aligned_tensor = nullptr;
       tokens_aligned_list.allocate(t, TensorShape({batch_size}), &tokens_aligned_tensor);
       tokens_aligned_tensor->flat<int32>().device(device) =
           tokens_aligned_tensor->flat<int32>().constant(blank_token_);
+
+      Tensor* tokens_aligned_weight_tensor = nullptr;
+      tokens_aligned_weight_list.allocate(t, TensorShape({batch_size}), &tokens_aligned_weight_tensor);
+      tokens_aligned_weight_tensor->flat<float>().device(device) =
+          tokens_aligned_weight_tensor->flat<float>().constant(0.0f);
     }
 
     for (int64 b = 0; b < batch_size; ++b) {
       int64 tlen = tokens_len->flat<int64>()(b);
       int64 flen = features_len->flat<int64>()(b);
-      float f_per_t = flen / (tlen - lpad_ - rpad_);
+      const float f_per_t = flen / (tlen + lpad_ + rpad_);
+      CHECK_GE(f_per_t, 1);
 
       const std::vector<int32>& tokens_b = tokens[b];
-      CHECK_EQ(tokens_b.size(), tlen);
+      CHECK_LT(tlen, features_len_max_ - lpad_ - rpad_);
       for (int t = 0; t < tlen; ++t) {
         int32 token = tokens_b[t];
 
         tokens_aligned_list[t * f_per_t + lpad_]->flat<int32>()(b) = token;
+      }
+      for (int t = 0; t < flen; ++t) {
+        tokens_aligned_weight_list[t]->flat<float>()(b) = 1.0f;
       }
     }
   }
@@ -412,5 +428,9 @@ class CCTCBootstrapAlignment : public OpKernel {
   int32 features_len_max_;
   int32 tokens_len_max_;
 };
+
+REGISTER_KERNEL_BUILDER(Name("CCTCBootstrapAlignment")
+                            .Device(DEVICE_CPU),
+                        CCTCBootstrapAlignmentOp);
 }
 }  // namespace tensor

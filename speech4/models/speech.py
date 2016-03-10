@@ -6,6 +6,7 @@ import math
 import numpy as np
 import os.path
 import random
+import sys
 import string
 import time
 
@@ -17,6 +18,7 @@ from tensorflow.python.ops import clip_ops
 from tensorflow.python.ops import embedding_ops
 from tensorflow.python.ops import gen_array_ops
 from tensorflow.python.ops import gen_data_flow_ops
+from tensorflow.python.ops import gen_gru_ops
 from tensorflow.python.ops import gradients
 from tensorflow.python.ops import gru_ops
 from tensorflow.python.ops import math_ops
@@ -28,6 +30,10 @@ from tensorflow.python.ops import sparse_ops
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops.gen_user_ops import s4_parse_utterance
 from tensorflow.python.platform import gfile
+
+SPEECH4_ROOT = os.path.join(os.path.dirname(os.path.realpath(__file__)), '../../')
+sys.path.append(os.path.join(SPEECH4_ROOT))
+from speech4.models import las_utils
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -47,6 +53,10 @@ tf.app.flags.DEFINE_integer("random_seed", 1000,
 tf.app.flags.DEFINE_string("decoder_params", "", """decoder_params proto""")
 tf.app.flags.DEFINE_string("model_params", "", """model_params proto""")
 tf.app.flags.DEFINE_string("optimization_params", "", """model_params proto""")
+
+tf.app.flags.DEFINE_integer("epochs", "",
+                            """Epochs to run.""")
+
 
 tf.app.flags.DEFINE_string("logdir", "",
                            """Path to our outputs and logs.""")
@@ -109,6 +119,8 @@ class SpeechModel(object):
 
       self.create_input()
       self.create_encoder_cctc()
+      self.create_decoder_cctc(mode)
+      self.create_loss_cctc()
       if mode == "train": self.create_optimizer()
 
     print("initializing model...")
@@ -180,7 +192,73 @@ class SpeechModel(object):
 
 
   def create_encoder_cctc(self):
-    self.create_monolithic_encoder()
+    print("creating encoder...")
+    self.encoder_states = [[self.features, self.features_len]]
+
+    # Create the encoder layers.
+    assert self.model_params.encoder_layer
+    for idx, s in enumerate(self.model_params.encoder_layer):
+      with vs.variable_scope("encoder_%d" % (idx + 1)) as scope:
+        self.create_monolithic_encoder_layer(input_time_stride=int(s), scope=scope)
+
+
+  def create_decoder_cctc(self, mode):
+    print("creating decoder...")
+    with vs.variable_scope("decoder"):
+      self.decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(
+          self.model_params.decoder_cell_size)
+      self.decoder_cell = tf.nn.rnn_cell.GRUCell(
+          self.model_params.decoder_cell_size)
+
+      if self.model_params.cctc.xent:
+        self.labels, self.labels_weight = gen_gru_ops.cctc_bootstrap_alignment(
+            self.tokens, self.tokens_len, self.encoder_states[-1][1],
+            len(self.encoder_states[-1][0]))
+
+      state = None
+      logits = []
+      probs = []
+      for decoder_time_idx in range(len(self.encoder_states[-1][0])):
+        if decoder_time_idx > 0:
+          vs.get_variable_scope().reuse_variables()
+
+        # What do we condition on?
+        if decoder_time_idx == 0:
+          blank_token = 4
+          inp = tf.constant(
+              blank_token, shape=[self.batch_size], dtype=tf.int32)
+        elif mode != "train":
+          assert mode == "valid" or mode == "test"
+          inp = math_ops.argmax(logits[-1], 1)
+        elif self.model_params.cctc.xent:
+          inp = self.labels[decoder_time_idx - 1]
+        else:
+          # Maybe change this to sampling (i.e., Expectation rather than Max).
+          inp = math_ops.argmax(logits[-1], 1)
+
+        # Embedding.
+        with tf.device("/cpu:0"):
+          sqrt3 = np.sqrt(3)
+          embedding_matrix = vs.get_variable(
+              "embedding",
+              [self.model_params.vocab_size, self.model_params.embedding_size],
+              initializer=tf.random_uniform_initializer(-sqrt3, sqrt3))
+
+          inp = embedding_ops.embedding_lookup(embedding_matrix, inp)
+
+        inp = rnn_cell.linear(
+            [inp] + [self.encoder_states[-1][0][decoder_time_idx]],
+            self.decoder_cell.input_size, True, scope="Input")
+        if decoder_time_idx == 0:
+          state = array_ops.zeros([self.batch_size, self.decoder_cell.state_size])
+        output, state = self.decoder_cell(inp, state)
+        logit = rnn_cell.linear([output], self.model_params.vocab_size, True, scope="Logit")
+        prob = nn_ops.softmax(logit)
+
+        logits.append(logit)
+        probs.append(prob)
+      self.logits = logits
+      self.probs = probs
 
 
   def create_monolithic_encoder(self):
@@ -583,12 +661,34 @@ class SpeechModel(object):
       self.create_loss_edit_distance()
 
 
-  def create_loss_log_prob(self):
-    targets = self.tokens[1:]
-    weights = self.tokens_weights[1:]
+  def create_loss_cctc(self):
+    print("creating loss...")
+    self.losses = []
+    if self.model_params.cctc.xent:
+      self.create_loss_cctc_xent()
+    self.create_loss_cctc_edit_distance()
 
-    log_perplexity = seq2seq.sequence_loss(
-        self.logits, targets, weights, self.model_params.vocab_size)
+
+  def create_loss_cctc_xent(self):
+    self.create_loss_log_prob()
+
+
+  def create_loss_cctc_edit_distance(self):
+    self.hyp = [tf.cast(math_ops.argmax(logit, 1), dtype=tf.int32) for logit in self.logits]
+    self.edit_distance = gen_gru_ops.cctc_edit_distance(
+        self.hyp, self.tokens, self.tokens_len)
+    self.edit_distance = [self.edit_distance, self.tokens_len]
+
+
+  def create_loss_log_prob(self):
+    if self.model_params.type == "cctc":
+      targets = self.labels
+      weights = self.labels_weight
+    else:
+      targets = self.tokens[1:]
+      weights = self.tokens_weights[1:]
+
+    log_perplexity = seq2seq.sequence_loss(self.logits, targets, weights)
     self.log_perplexity = log_perplexity
     self.losses.append(log_perplexity)
 
@@ -670,9 +770,9 @@ class SpeechModel(object):
       self.step(sess, update, results_proto, profile_proto)
 
       if (idx % steps_per_report) == 0:
-        percentage = float(idx) / float(self.dataset_params.size) * float(self.batch_size)
-        accuracy = float(results_proto.acc.pos) / float(results_proto.acc.count)
-        edit_distance = float(results_proto.edit_distance.edit_distance) / float(results_proto.edit_distance.ref_length)
+        percentage = np.float64(idx) / np.float64(self.dataset_params.size) * np.float64(self.batch_size)
+        accuracy = np.float64(results_proto.acc.pos) / np.float64(results_proto.acc.count)
+        edit_distance = np.float64(results_proto.edit_distance.edit_distance) / np.float64(results_proto.edit_distance.ref_length)
         step_time = profile_proto.secs / profile_proto.steps
         print "step: %.2f, step_time: %.2f, accuracy %.4f, edit_distance %.4f" % (percentage, step_time, accuracy, edit_distance)
 
@@ -724,20 +824,30 @@ class SpeechModel(object):
     targets["text"] = self.text
 
     targets["tokens"] = self.tokens[:-1]
-    targets["tokens_weights"] = self.tokens_weights[:-1]
+    if self.model_params.type == "cctc":
+      targets["tokens_weights"] = self.labels_weight
+    else:
+      targets["tokens_weights"] = self.tokens_weights[:-1]
     if hasattr(self, "correct"):
       targets["correct"] = self.correct
     if hasattr(self, "edit_distance"):
       targets["edit_distance"] = self.edit_distance
 
     if update:
-      targets['updates'] = self.updates
+      targets["updates"] = self.updates
+
+    if self.model_params.type == "cctc":
+      targets["hyp"] = self.hyp
 
     fetches = self.run_graph(sess, targets)
     if hasattr(self, "correct"):
       self.compute_accuracy(fetches, results_proto.acc)
     if hasattr(self, "edit_distance"):
-      self.compute_edit_distance(fetches, results_proto.edit_distance)
+      if self.model_params.type == "cctc":
+        # self.compute_edit_distance(fetches, results_proto.edit_distance)
+        self.compute_edit_distance_ctcc(fetches, results_proto.edit_distance)
+      else:
+        self.compute_edit_distance(fetches, results_proto.edit_distance)
    
     step_time = time.time() - start_time
     profile_proto.secs = profile_proto.secs + step_time
@@ -749,7 +859,6 @@ class SpeechModel(object):
     assert "correct" in fetches
 
     assert len(fetches["tokens_weights"]) == len(fetches["correct"])
-
     for token_weight, correct in zip(fetches["tokens_weights"], fetches["correct"]):
       count = token_weight.astype(int).sum()
       weighted_correct = np.multiply(token_weight.astype(int), correct).sum()
@@ -766,6 +875,20 @@ class SpeechModel(object):
 
     edit_distance_proto.edit_distance += edit_distance
     edit_distance_proto.ref_length += ref_length
+
+
+  def compute_edit_distance_ctcc(self, fetches, edit_distance_proto):
+    assert "edit_distance" in fetches
+
+    refs = np.stack(fetches["tokens"])
+    hyps = np.stack(fetches["hyp"])
+    for b in range(self.batch_size):
+      ref = filter(lambda a: a != 0, [x[b] for x in refs])
+      hyp = filter(lambda a: a != 4, [x[b] for x in hyps])
+      edit_distance = las_utils.LevensteinDistance(ref, hyp)
+
+      edit_distance_proto.edit_distance += edit_distance
+      edit_distance_proto.ref_length += len(ref)
 
 
   def run_graph(self, sess, targets, feed_dict=None):
@@ -833,7 +956,7 @@ def load_dataset_params(mode):
   raise Exception("Unknown dataset %s" % FLAGS.dataset)
 
 
-def load_model_params(mode, dataset_params):
+def load_model_params(mode, epoch, dataset_params):
   model_params = speech4_pb2.ModelParamsProto()
   model_params.features_width = 123
   if dataset_params.features_size:
@@ -854,6 +977,9 @@ def load_model_params(mode, dataset_params):
 
   model_params.loss.log_prob = True
   model_params.loss.edit_distance = True
+
+  if epoch == 0:
+    model_params.cctc.xent = True
 
   model_params = try_load_proto(FLAGS.model_params, model_params)
 
@@ -889,9 +1015,9 @@ def load_optimization_params(mode):
   return None
 
 
-def load_params(mode):
+def load_params(mode, epoch):
   dataset_params = load_dataset_params(mode)
-  model_params = load_model_params(mode, dataset_params)
+  model_params = load_model_params(mode, epoch, dataset_params)
   optimization_params = load_optimization_params(mode)
   return dataset_params, model_params, optimization_params
 
@@ -900,7 +1026,7 @@ def run(mode, epoch, ckpt=None):
   ckpt_filepath = None
   with tf.device("/gpu:%d" % FLAGS.device):
     with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
-      dataset_params, model_params, optimization_params = load_params(mode)
+      dataset_params, model_params, optimization_params = load_params(mode, epoch)
 
       if ckpt:
         model_params.ckpt = ckpt
@@ -940,7 +1066,7 @@ def main(_):
   print "logdir: %s" % FLAGS.logdir
 
   ckpt_filepath = FLAGS.ckpt
-  for epoch in range(20):
+  for epoch in range(FLAGS.epochs):
     ckpt_filepath = run("train", epoch, ckpt_filepath)
     run("valid", epoch, ckpt_filepath)
     run("test", epoch, ckpt_filepath)

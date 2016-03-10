@@ -45,6 +45,11 @@ message LossParamsProto {
   bool edit_distance = 2;
 };
 
+message CCTCParamsProto {
+  // Use xent w/ fake alignment (i.e., for first epoch).
+  bool xent = 1;
+};
+
 message ModelParamsProto {
   int64 features_width = 1;
   int64 features_len_max = 2;
@@ -80,6 +85,8 @@ message ModelParamsProto {
   bool pinyin_ext = 300;
   int64 pinyin_dim = 301;
   int64 pinyin_vocab_size = 302;
+
+  CCTCParamsProto cctc = 500;
 
   DatasetParamsProto dataset = 1000;
   LossParamsProto loss = 2000;

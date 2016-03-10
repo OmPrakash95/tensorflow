@@ -715,6 +715,7 @@ tf_kernel_libraries(
         "attention_mask_op",
         "batch_norm_op",
         "bias_op",
+        "cctc_op",
         "in_topk_op",
         "gru_op",
         "l2loss_op",

@@ -195,17 +195,18 @@ REGISTER_OP("CCTCBootstrapAlignment")
     .Input("tokens_len: int64")
     .Input("features_len: int64")
     .Output("tokens_aligned: features_len_max * int32")
+    .Output("tokens_aligned_weight: features_len_max * float")
     .Doc(R"doc(
 )doc");
 
 REGISTER_OP("CCTCEditDistance")
     .Attr("blank_token: int = 4")
-    .Attr("sequence_len_max: int")
-    .Input("hyp: sequence_len_max * int32")
-    .Input("ref: sequence_len_max * int32")
+    .Attr("features_len_max: int")
+    .Attr("tokens_len_max: int")
+    .Input("hyp: features_len_max * int32")
+    .Input("ref: tokens_len_max * int32")
     .Input("ref_len: int64")
     .Output("edit_distance: int64")
-    .Output("ref_length: int64")
     .Doc(R"doc(
 )doc");
 
