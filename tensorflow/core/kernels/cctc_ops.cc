@@ -337,7 +337,7 @@ class CCTCEditDistanceReinforceGradOp : public OpKernel {
         }
       }
     }
-    CHECK_EQ(err_aligned.size(), ref.size());
+    CHECK_EQ(err_aligned.size(), hyp.size());
 
     rewards->clear();
     for (int64 t = 0; t < static_cast<int64>(hyp.size()); ++t) {
@@ -376,26 +376,21 @@ class CCTCEditDistanceReinforceGradOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->input_list("hyp_baseline", &hyp_baseline_list));
 
     const int64 batch_size = ref_list[0].dim_size(0);
-    TensorShape output_shape({batch_size});
-    Tensor* tensor_edit_distance = nullptr;
-    ctx->allocate_output(
-        "edit_distance", output_shape, &tensor_edit_distance);
-    Tensor* tensor_ref_length = nullptr;
-    ctx->allocate_output(
-        "ref_length", output_shape, &tensor_ref_length);
+    const int64 vocab_size = hyp_probs_list[0].dim_size(1);
 
     OpOutputList hyp_logits_backprop_list;
     OpOutputList hyp_baseline_backprop_list;
     OP_REQUIRES_OK(ctx, ctx->output_list("hyp_logits_backprop", &hyp_logits_backprop_list));
     OP_REQUIRES_OK(ctx, ctx->output_list("hyp_baseline_backprop", &hyp_baseline_backprop_list));
+    LOG(INFO) << "features_len_max_: " << features_len_max_;
     for (int64 t = 0; t < features_len_max_; ++t) {
       Tensor* hyp_logits_backprop_tensor = nullptr;
-      hyp_logits_backprop_list.allocate(t, hyp_list[t].shape(), &hyp_logits_backprop_tensor);
+      hyp_logits_backprop_list.allocate(t, TensorShape({batch_size, vocab_size}), &hyp_logits_backprop_tensor);
       hyp_logits_backprop_tensor->flat<float>().device(device) =
           hyp_logits_backprop_tensor->flat<float>().constant(0.0f);
 
       Tensor* hyp_baseline_backprop_tensor = nullptr;
-      hyp_baseline_backprop_list.allocate(t, TensorShape({batch_size}), &hyp_baseline_backprop_tensor);
+      hyp_baseline_backprop_list.allocate(t, TensorShape({batch_size, 1}), &hyp_baseline_backprop_tensor);
       hyp_baseline_backprop_tensor->flat<float>().device(device) =
           hyp_baseline_backprop_tensor->flat<float>().constant(0.0f);
     }
@@ -404,25 +399,20 @@ class CCTCEditDistanceReinforceGradOp : public OpKernel {
       EditDistance err;
       ComputeEditDistance(ref[b], hyp[b], blank_token_, &err);
 
-      const int64 edit_distance = err.edit_distance();
-      const int64 ref_length = ref[b].size();
-
-      tensor_edit_distance->vec<int64>()(b) = edit_distance;
-      tensor_ref_length->vec<int64>()(b) = ref_length;
-
       std::vector<float> rewards;
       ComputeRewards(
           ctx, ref[b], hyp[b], err, blank_token_, discount_factor_, &rewards);
 
       for (int64 t = 0; t < static_cast<int64>(rewards.size()); ++t) {
         // de/dx for the baseline prediction is simply (hyp_baseline - rewards).
-        const float delta_baseline = rewards[t] - hyp_baseline_list[t].vec<float>()(b);
-        hyp_baseline_backprop_list[t]->vec<float>()(b) = -delta_baseline;
+        const float delta_baseline = rewards[t] - hyp_baseline_list[t].flat<float>()(b);
+        hyp_baseline_backprop_list[t]->flat<float>()(b) = -delta_baseline;
 
         const int32 label = ref[b][t];
-        for (int64 l = 0; l < hyp_logits_backprop_list[t]->NumElements(); ++l) {
+        for (int64 l = 0; l < vocab_size; ++l) {
+          const float prob = hyp_probs_list[t].matrix<float>()(b, l);
           hyp_logits_backprop_list[t]->matrix<float>()(b, l) =
-              (hyp_probs_list[t].matrix<float>()(b, l) - (l == label)) * delta_baseline;
+              (prob - (l == label)) * delta_baseline;
         }
       }
     }
