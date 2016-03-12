@@ -54,10 +54,9 @@ tf.app.flags.DEFINE_string("decoder_params", "", """decoder_params proto""")
 tf.app.flags.DEFINE_string("model_params", "", """model_params proto""")
 tf.app.flags.DEFINE_string("optimization_params", "", """model_params proto""")
 
-tf.app.flags.DEFINE_integer("epochs", "",
+tf.app.flags.DEFINE_integer("epochs_start", 0,
                             """Epochs to run.""")
-
-tf.app.flags.DEFINE_integer("epochs", "",
+tf.app.flags.DEFINE_integer("epochs", 20,
                             """Epochs to run.""")
 
 
@@ -221,6 +220,7 @@ class SpeechModel(object):
       state = None
       logits = []
       probs = []
+      baselines = []
       for decoder_time_idx in range(len(self.encoder_states[-1][0])):
         if decoder_time_idx > 0:
           vs.get_variable_scope().reuse_variables()
@@ -257,11 +257,15 @@ class SpeechModel(object):
         output, state = self.decoder_cell(inp, state)
         logit = rnn_cell.linear([output], self.model_params.vocab_size, True, scope="Logit")
         prob = nn_ops.softmax(logit)
+        baseline = rnn_cell.linear([output], 1, True, scope="Baseline")
 
         logits.append(logit)
         probs.append(prob)
+        baselines.append(baseline)
       self.logits = logits
       self.probs = probs
+      self.hyp_probs = self.probs
+      self.hyp_baseline = baselines
 
 
   def create_monolithic_encoder(self):
@@ -679,7 +683,7 @@ class SpeechModel(object):
   def create_loss_cctc_edit_distance(self):
     self.hyp = [tf.cast(math_ops.argmax(logit, 1), dtype=tf.int32) for logit in self.logits]
     self.edit_distance = gen_gru_ops.cctc_edit_distance(
-        self.hyp, self.tokens, self.tokens_len)
+        self.hyp, self.logits, self.hyp_probs, self.hyp_baseline, self.tokens, self.tokens_len)
     if not self.model_params.cctc.xent:
       self.losses.append(self.edit_distance)
     self.edit_distance = [self.edit_distance, self.tokens_len]
@@ -829,7 +833,7 @@ class SpeechModel(object):
     targets["text"] = self.text
 
     targets["tokens"] = self.tokens[:-1]
-    if self.model_params.type == "cctc":
+    if self.model_params.type == "cctc" and self.model_params.cctc.xent:
       targets["tokens_weights"] = self.labels_weight
     else:
       targets["tokens_weights"] = self.tokens_weights[:-1]
@@ -1071,8 +1075,8 @@ def main(_):
   print "logdir: %s" % FLAGS.logdir
 
   ckpt_filepath = FLAGS.ckpt
-  for epoch in range(FLAGS.epochs):
-    #ckpt_filepath = run("train", epoch, ckpt_filepath)
+  for epoch in range(FLAGS.epochs_start, FLAGS.epochs_start + FLAGS.epochs):
+    ckpt_filepath = run("train", epoch, ckpt_filepath)
     run("valid", epoch, ckpt_filepath)
     run("test", epoch, ckpt_filepath)
 

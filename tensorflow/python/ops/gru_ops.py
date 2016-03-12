@@ -296,3 +296,24 @@ def _CCTCBootstrapAlignmentShape(op):
 def _CCTCEditDistanceShape(op):
   batch_size = op.inputs[0].get_shape()[0].value
   return [tensor_shape.TensorShape([batch_size])]
+
+@ops.RegisterShape("CCTCEditDistanceReinforceGrad")
+def _CCTCEditDistanceReinforceGradShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  features_len_max = op.get_attr("features_len_max")
+  vocab_size = op.inputs[features_len_max].get_shape()[1].value
+  return [tensor_shape.TensorShape([batch_size, vocab_size])] * features_len_max + [
+          tensor_shape.TensorShape([batch_size])] * features_len_max
+
+@ops.RegisterGradient("CCTCEditDistance")
+def _CCTCEditDistanceGrad(op, *grad):
+  features_len_max = op.get_attr("features_len_max")
+  tokens_len_max = op.get_attr("tokens_len_max")
+  grads = gen_gru_ops.cctc_edit_distance_reinforce_grad(
+      op.inputs[features_len_max * 0:features_len_max * 1],
+      op.inputs[features_len_max * 2:features_len_max * 3],
+      op.inputs[features_len_max * 3:features_len_max * 4],
+      op.inputs[features_len_max * 4:features_len_max * 4 + tokens_len_max],
+      op.inputs[-1])
+
+  return [None] * features_len_max + grads[0] + [None] * features_len_max + grads[1] + [None] * tokens_len_max + [None]
