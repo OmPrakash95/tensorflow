@@ -9,9 +9,11 @@
 #include "tensorflow/core/framework/register_types.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/lib/core/status.h"
-#include "tensorflow/core/lib/gtl/edit_distance.h"
+// #include "tensorflow/core/lib/gtl/edit_distance.h"
+#include "tensorflow/core/lib/random/random_distributions.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/macros.h"
+#include "tensorflow/core/util/guarded_philox_random.h"
 #include "tensorflow/core/util/sparse/sparse_tensor.h"
 
 namespace tensorflow {
@@ -162,6 +164,99 @@ void ComputeEditDistance(
   
   *err = v1[hyp.size()];
 }
+
+class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
+ public:
+  explicit CCTCWeaklySupervisedAlignmentLabelOp(OpKernelConstruction* ctx)
+    : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, generator_.Init(ctx));
+
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("blank_token", &blank_token_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("lpad", &lpad_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("rpad", &rpad_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("flen_max", &flen_max_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("tlen", &tlen_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("hlen_max", &hlen_max_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    OpInputList ref_list;
+    OP_REQUIRES_OK(ctx, ctx->input_list("ref", &ref_list));
+
+    OpInputList hyp_list;
+    OP_REQUIRES_OK(ctx, ctx->input_list("ali", &hyp_list));
+
+    const Tensor* ref_len = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("ref_len", &ref_len));
+
+    const Tensor* hyp_len = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("hyp_len", &hyp_len));
+
+    std::vector<std::vector<int32>> refs;
+    ExtractSequence(ref_list, *ref_len, &refs);
+
+    std::vector<std::vector<int32>> hyps;
+    ExtractSequence(hyp_list, &hyps);
+
+    const int64 batch_size = ref_len->dim_size(0);
+
+    Tensor* label = nullptr;
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_output("label", TensorShape({batch_size}), &label));
+
+    // Random number generator setup.
+    typedef random::UniformDistribution<random::PhiloxRandom, float>
+        Distribution;
+    Distribution dist;
+
+    // Sample our random numbers.
+    const int kGroupSize = Distribution::kResultElementCount;
+    auto local_generator = generator_.ReserveSamples32(batch_size);
+    std::vector<float> sample_prob(batch_size);
+    for (int64 i = 0; i < batch_size; i += kGroupSize) {
+      auto samples = dist(&local_generator);
+      std::copy(&samples[0], &samples[0] + kGroupSize, &sample_prob[i]);
+    }
+
+    for (int64 b = 0; b < batch_size; ++b) {
+      const std::vector<int32>& ref = refs[b];
+      const std::vector<int32>& hyp = hyps[b];
+
+      CHECK(std::equal(hyp.begin(), hyp.end(), ref.begin()));
+
+      // Number of tokens (including blank) we still have to emit.
+      const int32 c_t = hyp_len->flat<int32>()(b) - tlen_;
+
+      // Number of tokens (excluding blank) we still have to emit.
+      const int32 d_t = ref_len->flat<int32>()(b) - hyp.size();
+
+      // Number of blanks we still have to emit.
+      const int32 b_t = c_t - d_t;
+      CHECK_GE(b_t, 0);
+
+      const float blank_prob =
+          static_cast<float>(b_t) / static_cast<float>(c_t);
+      int32 l_t = blank_token_;
+      if (sample_prob[b] > blank_prob) {
+        // Get the next correct token in the sequence.
+        CHECK_GT(ref.size(), hyp.size());
+        l_t = ref[hyp.size()];
+      }
+
+      label->flat<int32>()(b) = l_t;
+    }
+  }
+
+ private:
+  int32 blank_token_;
+  int32 lpad_;
+  int32 rpad_;
+  int32 flen_max_;
+  int32 tlen_;
+  int32 hlen_max_;
+
+  GuardedPhiloxRandom generator_;
+};
 
 class CCTCBootstrapAlignmentOp : public OpKernel {
  public:

@@ -185,6 +185,22 @@ REGISTER_OP("Sink")
 Sink NoOp
 )doc");
 
+REGISTER_OP("CCTCWeaklySupervisedAlignmentLabel")
+    .Attr("blank_token: int = 4")
+    .Attr("lpad: int = 10")
+    .Attr("rpad: int = 2")
+    .Attr("flen_max: int")
+    .Attr("tlen: int")
+    .Attr("hlen_max: int = 400")
+    .Input("ref: flen_max * int32")
+    .Input("ref_len: int64")
+    .Input("ali: tlen * int32")
+    .Input("ali_len: int64")
+    .Output("label: int32")
+    .Doc(R"doc(
+)");
+
+
 REGISTER_OP("CCTCBootstrapAlignment")
     .Attr("blank_token: int = 4")
     .Attr("lpad: int = 10")
