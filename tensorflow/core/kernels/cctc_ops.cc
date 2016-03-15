@@ -1,8 +1,11 @@
 #define EIGEN_USE_THREADS
 
+#include <algorithm>
+#include <iterator>
 #include <limits>
-
+#include <sstream>
 #include <vector>
+
 #include "tensorflow/core/common_runtime/device.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -47,6 +50,29 @@ void ExtractSequence(
       (*sequence)[b].emplace_back(token);
     }
   }
+}
+
+void CollapseSequence(
+    int32 blank_token, std::vector<std::vector<int32>>* sequences) {
+  for (int64 b = 0; b < static_cast<int64>(sequences->size()); ++b) {
+    std::vector<int32> filtered;
+    std::copy_if(
+        (*sequences)[b].begin(), (*sequences)[b].end(),
+        std::back_inserter(filtered), [blank_token](const int32 x)->bool {
+            return x != blank_token;
+        });
+    (*sequences)[b].swap(filtered);
+  }
+}
+
+template <typename T>
+std::string VectorToString(const std::vector<T>& vec) {
+  std::stringstream ss;
+  for (int64 i = 0; i < vec.size(); ++i) {
+    if (i > 0) ss << ", ";
+    ss << vec[i];
+  }
+  return ss.str();
 }
 
 class EditDistance {
@@ -184,7 +210,7 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->input_list("ref", &ref_list));
 
     OpInputList hyp_list;
-    OP_REQUIRES_OK(ctx, ctx->input_list("ali", &hyp_list));
+    OP_REQUIRES_OK(ctx, ctx->input_list("hyp", &hyp_list));
 
     const Tensor* ref_len = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("ref_len", &ref_len));
@@ -197,12 +223,17 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
 
     std::vector<std::vector<int32>> hyps;
     ExtractSequence(hyp_list, &hyps);
+    CollapseSequence(blank_token_, &hyps);
 
     const int64 batch_size = ref_len->dim_size(0);
 
     Tensor* label = nullptr;
     OP_REQUIRES_OK(
         ctx, ctx->allocate_output("label", TensorShape({batch_size}), &label));
+
+   Tensor* label_weight = nullptr;
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_output("label_weight", TensorShape({batch_size}), &label_weight));
 
     // Random number generator setup.
     typedef random::UniformDistribution<random::PhiloxRandom, float>
@@ -219,31 +250,46 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
     }
 
     for (int64 b = 0; b < batch_size; ++b) {
+      float w_t = 1.0f;
+      int32 l_t = blank_token_;
+
       const std::vector<int32>& ref = refs[b];
       const std::vector<int32>& hyp = hyps[b];
-
       CHECK(std::equal(hyp.begin(), hyp.end(), ref.begin()));
 
-      // Number of tokens (including blank) we still have to emit.
-      const int32 c_t = hyp_len->flat<int32>()(b) - tlen_;
+      if (tlen_ > lpad_) {
+        // Number of tokens (including blank) we still have to emit.
+        // ali_len: the length of the total alignment including blanks.
+        // tlen: the number of tokens including blank.
+        const int32 ali_len = hyp_len->flat<int64>()(b);
 
-      // Number of tokens (excluding blank) we still have to emit.
-      const int32 d_t = ref_len->flat<int32>()(b) - hyp.size();
+        if (tlen_ + rpad_ >= ali_len) {
+          CHECK_EQ(hyp.size(), ref.size());
+          w_t = 0.0f;
+        } else {
+          const int32 c_t = ali_len - tlen_ - rpad_;
+          CHECK_GE(c_t, 0);
 
-      // Number of blanks we still have to emit.
-      const int32 b_t = c_t - d_t;
-      CHECK_GE(b_t, 0);
+          // Number of tokens (excluding blank) we still have to emit.
+          const int32 d_t = ref_len->flat<int64>()(b) - hyp.size();
+          CHECK_GE(d_t, 0);
 
-      const float blank_prob =
-          static_cast<float>(b_t) / static_cast<float>(c_t);
-      int32 l_t = blank_token_;
-      if (sample_prob[b] > blank_prob) {
-        // Get the next correct token in the sequence.
-        CHECK_GT(ref.size(), hyp.size());
-        l_t = ref[hyp.size()];
+          // Number of blanks we still have to emit.
+          const int32 b_t = c_t - d_t;
+          CHECK_GE(b_t, 0);
+
+          const float blank_prob =
+              static_cast<float>(b_t) / static_cast<float>(c_t);
+          if (sample_prob[b] > blank_prob) {
+            // Get the next correct token in the sequence.
+            CHECK_GT(ref.size(), hyp.size());
+            l_t = ref[hyp.size()];
+          }
+        }
       }
 
       label->flat<int32>()(b) = l_t;
+      label_weight->flat<float>()(b) = w_t;
     }
   }
 
@@ -257,6 +303,10 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
 
   GuardedPhiloxRandom generator_;
 };
+REGISTER_KERNEL_BUILDER(Name("CCTCWeaklySupervisedAlignmentLabel")
+                            .Device(DEVICE_CPU),
+                        CCTCWeaklySupervisedAlignmentLabelOp);
+
 
 class CCTCBootstrapAlignmentOp : public OpKernel {
  public:
@@ -477,7 +527,6 @@ class CCTCEditDistanceReinforceGradOp : public OpKernel {
     OpOutputList hyp_baseline_backprop_list;
     OP_REQUIRES_OK(ctx, ctx->output_list("hyp_logits_backprop", &hyp_logits_backprop_list));
     OP_REQUIRES_OK(ctx, ctx->output_list("hyp_baseline_backprop", &hyp_baseline_backprop_list));
-    LOG(INFO) << "features_len_max_: " << features_len_max_;
     for (int64 t = 0; t < features_len_max_; ++t) {
       Tensor* hyp_logits_backprop_tensor = nullptr;
       hyp_logits_backprop_list.allocate(t, TensorShape({batch_size, vocab_size}), &hyp_logits_backprop_tensor);

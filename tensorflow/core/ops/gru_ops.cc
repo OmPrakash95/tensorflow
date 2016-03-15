@@ -186,6 +186,8 @@ Sink NoOp
 )doc");
 
 REGISTER_OP("CCTCWeaklySupervisedAlignmentLabel")
+    .Attr("seed: int = 0")
+    .Attr("seed2: int = 0")
     .Attr("blank_token: int = 4")
     .Attr("lpad: int = 10")
     .Attr("rpad: int = 2")
@@ -194,9 +196,10 @@ REGISTER_OP("CCTCWeaklySupervisedAlignmentLabel")
     .Attr("hlen_max: int = 400")
     .Input("ref: flen_max * int32")
     .Input("ref_len: int64")
-    .Input("ali: tlen * int32")
-    .Input("ali_len: int64")
+    .Input("hyp: tlen * int32")
+    .Input("hyp_len: int64")
     .Output("label: int32")
+    .Output("label_weight: float")
     .Doc(R"doc(
 )");
 

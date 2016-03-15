@@ -216,10 +216,15 @@ class SpeechModel(object):
         self.labels, self.labels_weight = gen_gru_ops.cctc_bootstrap_alignment(
             self.tokens, self.tokens_len, self.encoder_states[-1][1],
             len(self.encoder_states[-1][0]))
+      elif self.model_params.cctc.weakly_supervised:
+        self.labels = []
+        self.labels_weight = []
 
       state = None
       logits = []
       probs = []
+      conditioned_path = []
+      greedy_path = []
       baselines = []
       for decoder_time_idx in range(len(self.encoder_states[-1][0])):
         if decoder_time_idx > 0:
@@ -235,9 +240,12 @@ class SpeechModel(object):
           inp = math_ops.argmax(logits[-1], 1)
         elif self.model_params.cctc.xent:
           inp = self.labels[decoder_time_idx - 1]
+        elif self.model_params.cctc.weakly_supervised:
+          inp = self.labels[-1]
         else:
           # Maybe change this to sampling (i.e., Expectation rather than Max).
           inp = math_ops.argmax(logits[-1], 1)
+        conditioned_path.append(inp)
 
         # Embedding.
         with tf.device("/cpu:0"):
@@ -257,14 +265,25 @@ class SpeechModel(object):
         output, state = self.decoder_cell(inp, state)
         logit = rnn_cell.linear([output], self.model_params.vocab_size, True, scope="Logit")
         prob = nn_ops.softmax(logit)
+        greedy = tf.to_int32(math_ops.argmax(logit, 1))
         baseline = rnn_cell.linear([output], 1, True, scope="Baseline")
 
         logits.append(logit)
         probs.append(prob)
+        greedy_path.append(greedy)
         baselines.append(baseline)
+
+        if self.model_params.cctc.weakly_supervised:
+          label, label_weight = gen_gru_ops.cctc_weakly_supervised_alignment_label(
+              self.tokens, self.tokens_len, conditioned_path, self.encoder_states[-1][1],
+              seed=decoder_time_idx + 2016, seed2=decoder_time_idx + 43110,
+              lpad=10, rpad=4, hlen_max=len(self.encoder_states[-1][0]))
+          self.labels.append(label)
+          self.labels_weight.append(label_weight)
       self.logits = logits
       self.probs = probs
       self.hyp_probs = self.probs
+      self.hyp_greedy_path = greedy_path
       self.hyp_baseline = baselines
 
 
@@ -673,12 +692,18 @@ class SpeechModel(object):
     self.losses = []
     if self.model_params.cctc.xent:
       self.create_loss_cctc_xent()
+    if self.model_params.cctc.weakly_supervised:
+      self.create_loss_cctc_weakly_supervised_label()
     self.create_loss_cctc_edit_distance()
 
 
   def create_loss_cctc_xent(self):
     self.create_loss_log_prob()
 
+
+  def create_loss_cctc_weakly_supervised_label(self):
+    self.create_loss_log_prob()
+    
 
   def create_loss_cctc_edit_distance(self):
     self.hyp = [tf.cast(math_ops.argmax(logit, 1), dtype=tf.int32) for logit in self.logits]
@@ -834,6 +859,8 @@ class SpeechModel(object):
 
     targets["tokens"] = self.tokens[:-1]
     if self.model_params.type == "cctc" and self.model_params.cctc.xent:
+      targets["tokens_weights"] = self.labels_weight
+    elif self.model_params.type == "cctc" and self.model_params.cctc.weakly_supervised:
       targets["tokens_weights"] = self.labels_weight
     else:
       targets["tokens_weights"] = self.tokens_weights[:-1]

@@ -285,6 +285,12 @@ def _GruFusedGradShape(op):
           tensor_shape.TensorShape([cell_size, cell_size])] * 3 + [
           tensor_shape.TensorShape([batch_size, input_size])] * ((len(op.inputs) - 7) / 6)
 
+ops.NoGradient("CCTCWeaklySupervisedAlignmentLabel")
+@ops.RegisterShape("CCTCWeaklySupervisedAlignmentLabel")
+def _CCTCWeaklySupervisedAlignmentLabelShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  return [tensor_shape.TensorShape([batch_size])] * 2
+
 
 @ops.RegisterShape("CCTCBootstrapAlignment")
 def _CCTCBootstrapAlignmentShape(op):
