@@ -2,6 +2,7 @@
 
 
 import google
+import itertools
 import math
 import numpy as np
 import os.path
@@ -51,6 +52,9 @@ tf.app.flags.DEFINE_string("dataset", "wsj",
 tf.app.flags.DEFINE_integer("random_seed", 1000,
                             """Random seed.""")
 
+tf.app.flags.DEFINE_integer("batch_size", 16,
+                            """Batch size.""")
+
 tf.app.flags.DEFINE_string("decoder_params", "", """decoder_params proto""")
 tf.app.flags.DEFINE_string("model_params", "", """model_params proto""")
 tf.app.flags.DEFINE_string("optimization_params", "", """model_params proto""")
@@ -83,8 +87,6 @@ class Timit(object):
     for token in self.token_model_proto.tokens:
       self.id2str_map[token.token_id] = token.token_string
       self.str2id_map[token.token_string] = token.token_id
-    print self.id2str_map
-    print self.str2id_map
 
     for k, v in self.remap_map.iteritems():
       assert k in self.str2id_map
@@ -119,7 +121,12 @@ class Timit(object):
     for token_id in token_ids:
       if token_id in self.id2str_map:
         token_strings.append(self.id2str_map[token_id])
-    return [self.str2id_map[token_string] for token_string in token_strings]
+    token_ids_remapped = [self.str2id_map[token_string] for token_string in token_strings]
+    return token_ids_remapped
+
+
+  def to_string(self, token_ids):
+    return [self.id2str_map[x] for x in token_ids]
 
 
 class SpeechModel(object):
@@ -828,8 +835,13 @@ class SpeechModel(object):
           beta2=self.optimization_params.adam.beta2,
           epsilon=self.optimization_params.adam.epsilon)
     elif self.optimization_params.type == "gd":
-      opt = tf.train.GradientDescentOptimizer(
-          learning_rate=self.optimization_params.gd.learning_rate)
+      if self.optimization_params.gd.momentum == 0:
+        opt = tf.train.GradientDescentOptimizer(
+            learning_rate=self.optimization_params.gd.learning_rate)
+      else:
+        opt = tf.train.MomentumOptimizer(
+            learning_rate=self.optimization_params.gd.learning_rate,
+            momentum=self.optimization_params.gd.momentum)
     else:
       raise ValueError(
           "Unknown optimization type: %s" % str(self.optimization_params))
@@ -980,7 +992,9 @@ class SpeechModel(object):
     hyps = np.stack(fetches["hyp"])
     for b in range(self.batch_size):
       ref = filter(lambda a: a != 0, [x[b] for x in refs])
+      ref = [x[0] for x in itertools.groupby(ref)]
       hyp = filter(lambda a: a != 4, [x[b] for x in hyps])
+      hyp = [x[0] for x in itertools.groupby(hyp)]
 
       if FLAGS.dataset == "timit":
         # Remap our phones before distance comparison.
@@ -998,10 +1012,7 @@ class SpeechModel(object):
     encoder_len = fetches["encoder_len"]
     for b in range(self.batch_size):
       labels_b = [x[b] for x in labels]
-      while labels_b and labels_b[-1] == 4:
-        labels_b.pop()
-      assert len(labels_b) <= encoder_len[b]
-      #print labels_b
+      labels_b = labels_b[:encoder_len[b]]
 
 
   def run_graph(self, sess, targets, feed_dict=None):
@@ -1124,6 +1135,8 @@ def load_optimization_params(mode):
     optimization_params.max_gradient_norm = 1.0
 
     optimization_params = try_load_proto(FLAGS.optimization_params, optimization_params)
+
+    print str(optimization_params)
     return optimization_params
   return None
 
@@ -1145,7 +1158,8 @@ def run(mode, epoch, ckpt=None):
         model_params.ckpt = ckpt
 
       speech_model = SpeechModel(
-          sess, mode, dataset_params, model_params, optimization_params, seed=epoch)
+          sess, mode, dataset_params, model_params, optimization_params,
+          batch_size=FLAGS.batch_size, seed=epoch)
 
       coord = tf.train.Coordinator()
       threads = []

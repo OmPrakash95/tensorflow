@@ -356,20 +356,20 @@ class CCTCBootstrapAlignmentOp : public OpKernel {
     }
 
     for (int64 b = 0; b < batch_size; ++b) {
-      const int64 tlen = tokens_len->flat<int64>()(b);
+      const std::vector<int32>& tokens_b = tokens[b];
+
       const int64 flen = features_len->flat<int64>()(b);
+      const int64 tlen = tokens_b.size();
 
       const int32 lpad = std::min(lpad_, static_cast<int32>(flen - tlen));
       const int32 rpad = std::min(rpad_, static_cast<int32>(flen - tlen) - lpad);
 
-      const float f_per_t = static_cast<float>(flen) / static_cast<float>(tlen + lpad + rpad);
+      const float f_per_t = static_cast<float>(flen - lpad - rpad) / static_cast<float>(tlen);
       CHECK_GE(f_per_t, 1);
 
-      const std::vector<int32>& tokens_b = tokens[b];
       for (int t = 0; t < tlen; ++t) {
         int32 token = tokens_b[t];
-
-        tokens_aligned_list[t * f_per_t + lpad]->flat<int32>()(b) = token;
+        tokens_aligned_list[lpad + t * f_per_t]->flat<int32>()(b) = token;
       }
       for (int t = 0; t < flen; ++t) {
         tokens_aligned_weight_list[t]->flat<float>()(b) = 1.0f;

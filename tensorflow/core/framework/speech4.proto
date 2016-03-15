@@ -122,6 +122,7 @@ message AdamParamsProto {
 
 message GradientDescentParamsProto {
   float learning_rate = 1;
+  float momentum = 2;
 };
 
 message OptimizationParamsProto {
