@@ -1172,6 +1172,8 @@ def run(mode, epoch, ckpt=None):
       speech_model.step_epoch(sess, mode == "train", results_proto, profile_proto)
 
       if mode == "train":
+        if not os.path.isdir(FLAGS.logdir):
+          os.makedirs(FLAGS.logdir)
         prefix = os.path.join(FLAGS.logdir, "%d" % (epoch + 1))
         ckpt_filepath = speech_model.save(sess, prefix, results_proto)
 
@@ -1183,12 +1185,8 @@ def run(mode, epoch, ckpt=None):
 def main(_):
   if not FLAGS.logdir:
     FLAGS.logdir = os.path.join(
-        "exp", "speech4_" + "".join(random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(8)))
+        "exp", "speech4_" + FLAGS.dataset + "_" + "".join(random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(8)))
   FLAGS.logdir = os.path.abspath(FLAGS.logdir)
-  try:
-    os.makedirs(FLAGS.logdir)
-  except:
-    pass
 
   print "logdir: %s" % FLAGS.logdir
 
