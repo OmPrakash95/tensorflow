@@ -257,21 +257,25 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
       const std::vector<int32>& hyp = hyps[b];
       CHECK(std::equal(hyp.begin(), hyp.end(), ref.begin()));
 
-      if (tlen_ > lpad_) {
-        // Number of tokens (including blank) we still have to emit.
-        // ali_len: the length of the total alignment including blanks.
-        // tlen: the number of tokens including blank.
-        const int32 ali_len = hyp_len->flat<int64>()(b);
+      // ali_len: the length of the total alignment including blanks.
+      const int32 ali_len = hyp_len->flat<int64>()(b);
 
-        if (tlen_ + rpad_ >= ali_len) {
+      // Compute the minimum lpad.
+      const int32 ref_size = ref.size();
+      const int32 lpad = std::min(lpad_, ali_len - ref_size - 1);
+      const int32 rpad = std::min(rpad_, ali_len - ref_size - lpad - 1);
+
+      if (tlen_ > lpad) {
+        if (hyp.size() >= ref.size()) {
           CHECK_EQ(hyp.size(), ref.size());
           w_t = 0.0f;
         } else {
-          const int32 c_t = ali_len - tlen_ - rpad_;
+          // Number of tokens (including blank) we still have to emit.
+          const int32 c_t = ali_len - tlen_ - rpad;
           CHECK_GE(c_t, 0);
 
           // Number of tokens (excluding blank) we still have to emit.
-          const int32 d_t = ref_len->flat<int64>()(b) - hyp.size();
+          const int32 d_t = ref.size() - hyp.size();
           CHECK_GE(d_t, 0);
 
           // Number of blanks we still have to emit.
@@ -352,17 +356,20 @@ class CCTCBootstrapAlignmentOp : public OpKernel {
     }
 
     for (int64 b = 0; b < batch_size; ++b) {
-      int64 tlen = tokens_len->flat<int64>()(b);
-      int64 flen = features_len->flat<int64>()(b);
-      const float f_per_t = flen / (tlen + lpad_ + rpad_);
+      const int64 tlen = tokens_len->flat<int64>()(b);
+      const int64 flen = features_len->flat<int64>()(b);
+
+      const int32 lpad = std::min(lpad_, static_cast<int32>(flen - tlen));
+      const int32 rpad = std::min(rpad_, static_cast<int32>(flen - tlen) - lpad);
+
+      const float f_per_t = static_cast<float>(flen) / static_cast<float>(tlen + lpad + rpad);
       CHECK_GE(f_per_t, 1);
 
       const std::vector<int32>& tokens_b = tokens[b];
-      CHECK_LT(tlen, features_len_max_ - lpad_ - rpad_);
       for (int t = 0; t < tlen; ++t) {
         int32 token = tokens_b[t];
 
-        tokens_aligned_list[t * f_per_t + lpad_]->flat<int32>()(b) = token;
+        tokens_aligned_list[t * f_per_t + lpad]->flat<int32>()(b) = token;
       }
       for (int t = 0; t < flen; ++t) {
         tokens_aligned_weight_list[t]->flat<float>()(b) = 1.0f;

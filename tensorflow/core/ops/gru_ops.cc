@@ -201,7 +201,7 @@ REGISTER_OP("CCTCWeaklySupervisedAlignmentLabel")
     .Output("label: int32")
     .Output("label_weight: float")
     .Doc(R"doc(
-)");
+)doc");
 
 
 REGISTER_OP("CCTCBootstrapAlignment")

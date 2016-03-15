@@ -12,6 +12,7 @@ import time
 
 import tensorflow as tf
 from tensorflow.core.framework import speech4_pb2
+from tensorflow.core.framework import token_model_pb2
 from tensorflow.python.ops import attention_mask_ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import clip_ops
@@ -70,6 +71,57 @@ def try_load_proto(proto_path, proto):
   return proto
 
 
+class Timit(object):
+  def __init__(self):
+    self.phones = self.load_phones("speech4/conf/timit/phones.txt")
+    self.remap_map = self.load_remap("speech4/conf/timit/remap.txt")
+    self.token_model_proto = try_load_proto("speech4/conf/timit/token_model.pbtxt", token_model_pb2.TokenModelProto())
+
+    # We need a map from token_string <-> token_id
+    self.id2str_map = {}
+    self.str2id_map = {}
+    for token in self.token_model_proto.tokens:
+      self.id2str_map[token.token_id] = token.token_string
+      self.str2id_map[token.token_string] = token.token_id
+    print self.id2str_map
+    print self.str2id_map
+
+    for k, v in self.remap_map.iteritems():
+      assert k in self.str2id_map
+      assert v in self.str2id_map
+      self.str2id_map[k] = self.str2id_map[v]
+
+
+  def load_phones(self, phones_filepath):
+    lines = [line.strip() for line in open(phones_filepath, "r")]
+    phones = []
+    for line in lines:
+      cols = line.split(" ")
+      assert len(cols) == 2
+
+      phone = cols[0]
+      phones.append(phone)
+    return phones
+
+
+  def load_remap(self, remap_filepath):
+    lines = [line.strip() for line in open(remap_filepath, "r")]
+    remap_map = {}
+    for line in lines:
+      cols = line.split(" ")
+      for phone in cols[1:]:
+        remap_map[phone] = cols[0]
+    return remap_map
+
+
+  def remap(self, token_ids):
+    token_strings = []
+    for token_id in token_ids:
+      if token_id in self.id2str_map:
+        token_strings.append(self.id2str_map[token_id])
+    return [self.str2id_map[token_string] for token_string in token_strings]
+
+
 class SpeechModel(object):
   def __init__(self, sess, mode, dataset_params, model_params, optimization_params, batch_size=16, seed=1):
     dataset_params = try_load_proto(dataset_params, dataset_params)
@@ -79,6 +131,9 @@ class SpeechModel(object):
     self.dataset_params = dataset_params
     self.model_params = model_params
     self.optimization_params = optimization_params
+
+    if FLAGS.dataset == "timit":
+      self.timit = Timit()
 
     self.batch_size = batch_size
     if mode == "test":
@@ -215,7 +270,7 @@ class SpeechModel(object):
       if self.model_params.cctc.xent:
         self.labels, self.labels_weight = gen_gru_ops.cctc_bootstrap_alignment(
             self.tokens, self.tokens_len, self.encoder_states[-1][1],
-            len(self.encoder_states[-1][0]))
+            len(self.encoder_states[-1][0]), lpad=10, rpad=2)
       elif self.model_params.cctc.weakly_supervised:
         self.labels = []
         self.labels_weight = []
@@ -245,7 +300,7 @@ class SpeechModel(object):
         else:
           # Maybe change this to sampling (i.e., Expectation rather than Max).
           inp = math_ops.argmax(logits[-1], 1)
-        conditioned_path.append(inp)
+        conditioned_path.append(tf.to_int32(inp))
 
         # Embedding.
         with tf.device("/cpu:0"):
@@ -277,7 +332,7 @@ class SpeechModel(object):
           label, label_weight = gen_gru_ops.cctc_weakly_supervised_alignment_label(
               self.tokens, self.tokens_len, conditioned_path, self.encoder_states[-1][1],
               seed=decoder_time_idx + 2016, seed2=decoder_time_idx + 43110,
-              lpad=10, rpad=4, hlen_max=len(self.encoder_states[-1][0]))
+              lpad=10, rpad=2, hlen_max=len(self.encoder_states[-1][0]))
           self.labels.append(label)
           self.labels_weight.append(label_weight)
       self.logits = logits
@@ -858,6 +913,7 @@ class SpeechModel(object):
     targets["text"] = self.text
 
     targets["tokens"] = self.tokens[:-1]
+    targets["encoder_len"] = self.encoder_states[-1][1]
     if self.model_params.type == "cctc" and self.model_params.cctc.xent:
       targets["tokens_weights"] = self.labels_weight
     elif self.model_params.type == "cctc" and self.model_params.cctc.weakly_supervised:
@@ -868,6 +924,8 @@ class SpeechModel(object):
       targets["correct"] = self.correct
     if hasattr(self, "edit_distance"):
       targets["edit_distance"] = self.edit_distance
+    if hasattr(self, "labels"):
+      targets["labels"] = self.labels
 
     if update:
       targets["updates"] = self.updates
@@ -884,6 +942,8 @@ class SpeechModel(object):
         self.compute_edit_distance_ctcc(fetches, results_proto.edit_distance)
       else:
         self.compute_edit_distance(fetches, results_proto.edit_distance)
+    if hasattr(self, "labels"):
+      self.print_labels_ctcc(fetches)
    
     step_time = time.time() - start_time
     profile_proto.secs = profile_proto.secs + step_time
@@ -921,10 +981,27 @@ class SpeechModel(object):
     for b in range(self.batch_size):
       ref = filter(lambda a: a != 0, [x[b] for x in refs])
       hyp = filter(lambda a: a != 4, [x[b] for x in hyps])
+
+      if FLAGS.dataset == "timit":
+        # Remap our phones before distance comparison.
+        hyp = self.timit.remap(hyp)
+        ref = self.timit.remap(ref)
+
       edit_distance = las_utils.LevensteinDistance(ref, hyp)
 
       edit_distance_proto.edit_distance += edit_distance
       edit_distance_proto.ref_length += len(ref)
+
+
+  def print_labels_ctcc(self, fetches):
+    labels = np.stack(fetches["labels"])
+    encoder_len = fetches["encoder_len"]
+    for b in range(self.batch_size):
+      labels_b = [x[b] for x in labels]
+      while labels_b and labels_b[-1] == 4:
+        labels_b.pop()
+      assert len(labels_b) <= encoder_len[b]
+      #print labels_b
 
 
   def run_graph(self, sess, targets, feed_dict=None):
