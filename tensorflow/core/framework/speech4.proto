@@ -51,6 +51,7 @@ message CCTCParamsProto {
   bool weakly_supervised = 2;
   bool reinforce = 3;
   bool sample = 4;
+  bool discount_factor = 5;
 };
 
 message ModelParamsProto {

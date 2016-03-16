@@ -130,7 +130,7 @@ class Timit(object):
 
 
 class SpeechModel(object):
-  def __init__(self, sess, mode, dataset_params, model_params, optimization_params, batch_size=16, seed=1):
+  def __init__(self, sess, mode, dataset_params, model_params, optimization_params, batch_size=16, epoch=0, seed=1):
     dataset_params = try_load_proto(dataset_params, dataset_params)
     model_params = try_load_proto(model_params, model_params)
     optimization_params = try_load_proto(optimization_params, optimization_params)
@@ -145,6 +145,8 @@ class SpeechModel(object):
     self.batch_size = batch_size
     if mode == "test":
       self.batch_size = 1
+    self.mode = mode
+    self.epoch = epoch
     self.seed = seed
     tf.set_random_seed(self.seed)
 
@@ -331,7 +333,8 @@ class SpeechModel(object):
         logit = rnn_cell.linear([output], self.model_params.vocab_size, True, scope="Logit")
         prob = nn_ops.softmax(logit)
         greedy = tf.to_int32(math_ops.argmax(logit, 1))
-        baseline = rnn_cell.linear([output], 1, True, scope="Baseline")
+        # We don't bprop the baseline gradient.
+        baseline = rnn_cell.linear([array_ops.stop_gradient(output)], 1, True, scope="Baseline")
 
         logits.append(logit)
         probs.append(prob)
@@ -339,12 +342,17 @@ class SpeechModel(object):
         baselines.append(baseline)
 
         if self.model_params.cctc.weakly_supervised:
-          label, label_weight = gen_gru_ops.cctc_weakly_supervised_alignment_label(
-              self.tokens, self.tokens_len, conditioned_path, self.encoder_states[-1][1],
-              seed=decoder_time_idx + 2016, seed2=decoder_time_idx + 43110,
-              lpad=10, rpad=2, hlen_max=len(self.encoder_states[-1][0]))
-          self.labels.append(label)
-          self.labels_weight.append(label_weight)
+          if mode == "train":
+            label, label_weight = gen_gru_ops.cctc_weakly_supervised_alignment_label(
+                self.tokens, self.tokens_len, conditioned_path,
+                self.encoder_states[-1][1], prob,
+                seed=decoder_time_idx + 2016, seed2=decoder_time_idx + 43110,
+                lpad=10, rpad=2, hlen_max=len(self.encoder_states[-1][0]))
+            self.labels.append(label)
+            self.labels_weight.append(label_weight)
+          else:
+            self.labels.append(tf.constant(blank_token, shape=[self.batch_size], dtype=tf.int32))
+            self.labels_weight.append(tf.constant(1.0, shape=[self.batch_size], dtype=tf.float32))
       self.logits = logits
       self.probs = probs
       self.hyp_probs = self.probs
@@ -377,7 +385,10 @@ class SpeechModel(object):
         input_time_stride, shape=[self.batch_size], dtype=tf.int64)
     sequence_len = tf.div(self.encoder_states[-1][1], input_time_stride_t)
 
-    xs = self.encoder_states[-1][0][0::input_time_stride]
+    # xs = self.encoder_states[-1][0][0::input_time_stride]
+    xs = []
+    for idx in range(input_time_stride - 1, len(self.encoder_states[-1][0]), input_time_stride):
+      xs.append(self.encoder_states[-1][0][idx])
     self.encoder_states.append([gru_ops.gru(
         cell_size=self.model_params.encoder_cell_size,
         sequence_len=sequence_len, xs=xs)[-1], sequence_len])
@@ -991,23 +1002,32 @@ class SpeechModel(object):
   def compute_edit_distance_ctcc(self, fetches, edit_distance_proto):
     assert "edit_distance" in fetches
 
-    refs = np.stack(fetches["tokens"])
-    hyps = np.stack(fetches["hyp"])
-    for b in range(self.batch_size):
-      ref = filter(lambda a: a != 0, [x[b] for x in refs])
-      ref = [x[0] for x in itertools.groupby(ref)]
-      hyp = filter(lambda a: a != 4, [x[b] for x in hyps])
-      hyp = [x[0] for x in itertools.groupby(hyp)]
+    decode_results_filepath = os.path.join(FLAGS.logdir, "decode_results_%s_%d.txt" % (self.mode, self.epoch))
+    with open(decode_results_filepath, "a") as decode_results_file:
+      refs = np.stack(fetches["tokens"])
+      hyps = np.stack(fetches["hyp"])
+      for b in range(self.batch_size):
+        ref = filter(lambda a: a != 0, [x[b] for x in refs])
+        hyp = filter(lambda a: a != 4, [x[b] for x in hyps])
+        hyp_b = [x[b] for x in hyps]
+        while hyp_b and hyp_b[-1] == 4:
+          hyp_b.pop()
 
-      if FLAGS.dataset == "timit":
-        # Remap our phones before distance comparison.
-        hyp = self.timit.remap(hyp)
-        ref = self.timit.remap(ref)
+        if FLAGS.dataset == "timit":
+          # Remap our phones before distance comparison.
+          ref = self.timit.remap(ref)
+          ref = [x[0] for x in itertools.groupby(ref)]
+          hyp = self.timit.remap(hyp)
+          hyp = [x[0] for x in itertools.groupby(hyp)]
 
-      edit_distance = las_utils.LevensteinDistance(ref, hyp)
+          decode_results_file.write("ref:   %s\n" % self.timit.to_string(ref))
+          decode_results_file.write("hyp:   %s\n" % self.timit.to_string(hyp))
+          decode_results_file.write("hyp_b: %s\n" % self.timit.to_string(hyp_b))
 
-      edit_distance_proto.edit_distance += edit_distance
-      edit_distance_proto.ref_length += len(ref)
+        edit_distance = las_utils.LevensteinDistance(ref, hyp)
+
+        edit_distance_proto.edit_distance += edit_distance
+        edit_distance_proto.ref_length += len(ref)
 
 
   def print_labels_ctcc(self, fetches):
@@ -1152,6 +1172,10 @@ def load_params(mode, epoch):
 
 
 def run(mode, epoch, ckpt=None):
+  if mode == "train":
+    if not os.path.isdir(FLAGS.logdir):
+      os.makedirs(FLAGS.logdir)
+
   ckpt_filepath = None
   with tf.device("/gpu:%d" % FLAGS.device):
     with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
@@ -1162,7 +1186,7 @@ def run(mode, epoch, ckpt=None):
 
       speech_model = SpeechModel(
           sess, mode, dataset_params, model_params, optimization_params,
-          batch_size=FLAGS.batch_size, seed=epoch)
+          batch_size=FLAGS.batch_size, epoch=epoch, seed=epoch)
 
       coord = tf.train.Coordinator()
       threads = []
@@ -1175,8 +1199,6 @@ def run(mode, epoch, ckpt=None):
       speech_model.step_epoch(sess, mode == "train", results_proto, profile_proto)
 
       if mode == "train":
-        if not os.path.isdir(FLAGS.logdir):
-          os.makedirs(FLAGS.logdir)
         prefix = os.path.join(FLAGS.logdir, "%d" % (epoch + 1))
         ckpt_filepath = speech_model.save(sess, prefix, results_proto)
 

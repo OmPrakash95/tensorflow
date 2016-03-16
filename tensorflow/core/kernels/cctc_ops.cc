@@ -217,6 +217,9 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
     const Tensor* hyp_len = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("hyp_len", &hyp_len));
 
+    const Tensor* hyp_prob = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("hyp_prob", &hyp_prob));
+
     std::vector<std::vector<int32>> refs;
     ExtractSequence(ref_list, *ref_len, &refs);
 
@@ -281,12 +284,18 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
           const int32 b_t = c_t - d_t;
           CHECK_GE(b_t, 0);
 
-          const float blank_prob =
-              static_cast<float>(b_t) / static_cast<float>(c_t);
-          if (sample_prob[b] > blank_prob) {
-            // Get the next correct token in the sequence.
-            CHECK_GT(ref.size(), hyp.size());
-            l_t = ref[hyp.size()];
+          const int32 token_next = ref[hyp.size()];
+          const float token_next_prob = hyp_prob->matrix<float>()(b, token_next) + 1e-6;
+          const float blank_prob = hyp_prob->matrix<float>()(b, blank_token_) + 1e-6;
+          const float normalization_constant = token_next_prob + blank_prob;
+
+          const float blank_prob_normalized = blank_prob / normalization_constant;
+
+          if (token_next_prob > blank_prob ||
+              sample_prob[b] > blank_prob_normalized ||
+              hyp_list[hyp_list.size() - 1].vec<int32>()(b) == blank_token_ ||
+              b_t <= 0) {
+            l_t = token_next;
           }
         }
       }
@@ -498,7 +507,7 @@ class CCTCEditDistanceReinforceGradOp : public OpKernel {
     for (int64 t = 0; t < static_cast<int64>(hyp.size()); ++t) {
       float r = 0.0f;
       for (int64 u = err_aligned.size() - 1; u >= t; --u) {
-        r += err_aligned[u] + discount_factor * r;
+        r = err_aligned[u] + discount_factor * r;
       }
       rewards->emplace_back(r);
     }
@@ -561,15 +570,18 @@ class CCTCEditDistanceReinforceGradOp : public OpKernel {
 
       for (int64 t = 0; t < static_cast<int64>(rewards.size()); ++t) {
         // de/dx for the baseline prediction is simply (hyp_baseline - rewards).
-        const float delta_baseline = rewards[t] - hyp_baseline_list[t].flat<float>()(b);
-        hyp_baseline_backprop_list[t]->flat<float>()(b) = -delta_baseline;
+        const float baseline = hyp_baseline_list[t].flat<float>()(b);
+        const float delta_baseline = rewards[t] - baseline;
+        hyp_baseline_backprop_list[t]->flat<float>()(b) = delta_baseline;
+        LOG(INFO) << t << " " << rewards[t] << " " << baseline;
 
+        const float grad_factor = 0.0f;
         const int32 label = ref[b][t];
         for (int64 l = 0; l < vocab_size; ++l) {
           // TODO(williamchan): I think I need to flip the sign of the gradient... because we want to minimize the reward rather than maximize (since our reward is EditDistance).
           const float prob = hyp_probs_list[t].matrix<float>()(b, l);
           hyp_logits_backprop_list[t]->matrix<float>()(b, l) =
-              (prob - (l == label)) * delta_baseline;
+              -(prob - (l == label)) * grad_factor;
         }
       }
     }
