@@ -4,6 +4,14 @@
 
 namespace tensorflow {
 
+REGISTER_OP("UniformDistributionSampler")
+    .Attr("seed: int = 0")
+    .Attr("seed2: int = 0")
+    .Input("distribution: float")
+    .Output("index: int32")
+    .Doc(R"doc(
+)doc");
+
 REGISTER_OP("TokenSample")
     .Attr("sample_prob: float")
     .Attr("seed: int = 0")

@@ -25,6 +25,15 @@ def _TokenSampleShape(op):
 
 ops.NoGradient("TokenSample")
 
+
+@ops.RegisterShape("UniformDistributionSampler")
+def _UniformDistributionSamplerShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  return [tensor_shape.TensorShape([batch_size])]
+
+ops.NoGradient("UniformDistributionSampler")
+
+
 def gru_cell(cell_size, sequence_len, h_prev, x, name=None, scope=None, time_idx=None):
   r"""GRU Cell
 

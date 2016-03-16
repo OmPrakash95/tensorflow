@@ -132,11 +132,10 @@ class EditDistance {
   int64 edit_distance_ = 0;
 };
 
+// Computes the EditDistance and returns an alignment of the errors.
 void ComputeEditDistance(
-    const std::vector<int32>& ref,
-    const std::vector<int32>& hyp_original,
-    int32 blank_token,
-    EditDistance* err) {
+    const std::vector<int32>& ref, const std::vector<int32>& hyp_original,
+    const int32 blank_token, EditDistance* err) {
   std::vector<int32> hyp;
   for (int32 token : hyp_original) {
     if (token != blank_token) {
@@ -444,6 +443,7 @@ class CCTCEditDistanceReinforceGradOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("discount_factor", &discount_factor_));
   }
 
+  // This function computes the aligned errors for the edit distance.
   void ComputeRewards(
       OpKernelContext* ctx, const std::vector<int32>& ref,
       const std::vector<int32>& hyp, const EditDistance& err, int32 blank_token,
@@ -453,9 +453,12 @@ class CCTCEditDistanceReinforceGradOp : public OpKernel {
     int64 err_idx = 0;
 
     int64 insertions = 0;
+
+    // This is the error aligned to the hyp.
     std::vector<int32> err_aligned;
     while (hyp_idx < static_cast<int64>(hyp.size())) {
       if (hyp[hyp_idx] == blank_token) {
+        // Blank token, we advance the hyp by one and there is no error here?
         ++hyp_idx;
         err_aligned.emplace_back(0);
       } else {
@@ -536,12 +539,14 @@ class CCTCEditDistanceReinforceGradOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->output_list("hyp_baseline_backprop", &hyp_baseline_backprop_list));
     for (int64 t = 0; t < features_len_max_; ++t) {
       Tensor* hyp_logits_backprop_tensor = nullptr;
-      hyp_logits_backprop_list.allocate(t, TensorShape({batch_size, vocab_size}), &hyp_logits_backprop_tensor);
+      hyp_logits_backprop_list.allocate(
+          t, TensorShape({batch_size, vocab_size}), &hyp_logits_backprop_tensor);
       hyp_logits_backprop_tensor->flat<float>().device(device) =
           hyp_logits_backprop_tensor->flat<float>().constant(0.0f);
 
       Tensor* hyp_baseline_backprop_tensor = nullptr;
-      hyp_baseline_backprop_list.allocate(t, TensorShape({batch_size, 1}), &hyp_baseline_backprop_tensor);
+      hyp_baseline_backprop_list.allocate(
+          t, TensorShape({batch_size, 1}), &hyp_baseline_backprop_tensor);
       hyp_baseline_backprop_tensor->flat<float>().device(device) =
           hyp_baseline_backprop_tensor->flat<float>().constant(0.0f);
     }
@@ -561,6 +566,7 @@ class CCTCEditDistanceReinforceGradOp : public OpKernel {
 
         const int32 label = ref[b][t];
         for (int64 l = 0; l < vocab_size; ++l) {
+          // TODO(williamchan): I think I need to flip the sign of the gradient... because we want to minimize the reward rather than maximize (since our reward is EditDistance).
           const float prob = hyp_probs_list[t].matrix<float>()(b, l);
           hyp_logits_backprop_list[t]->matrix<float>()(b, l) =
               (prob - (l == label)) * delta_baseline;

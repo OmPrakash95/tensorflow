@@ -49,6 +49,8 @@ message CCTCParamsProto {
   // Use xent w/ fake alignment (i.e., for first epoch).
   bool xent = 1;
   bool weakly_supervised = 2;
+  bool reinforce = 3;
+  bool sample = 4;
 };
 
 message ModelParamsProto {

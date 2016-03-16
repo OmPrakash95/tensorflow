@@ -304,6 +304,9 @@ class SpeechModel(object):
           inp = self.labels[decoder_time_idx - 1]
         elif self.model_params.cctc.weakly_supervised:
           inp = self.labels[-1]
+        elif self.model_params.cctc.reinforce and self.model_params.cctc.sample:
+          inp = gen_gru_ops.uniform_distribution_sampler(
+              self.probs[-1], seed=decoder_time_idx + 111, seed2=decoder_time_idx + 222)
         else:
           # Maybe change this to sampling (i.e., Expectation rather than Max).
           inp = math_ops.argmax(logits[-1], 1)
@@ -771,7 +774,7 @@ class SpeechModel(object):
     self.hyp = [tf.cast(math_ops.argmax(logit, 1), dtype=tf.int32) for logit in self.logits]
     self.edit_distance = gen_gru_ops.cctc_edit_distance(
         self.hyp, self.logits, self.hyp_probs, self.hyp_baseline, self.tokens, self.tokens_len)
-    if not self.model_params.cctc.xent:
+    if self.model_params.cctc.reinforce:
       self.losses.append(self.edit_distance)
     self.edit_distance = [self.edit_distance, self.tokens_len]
 
