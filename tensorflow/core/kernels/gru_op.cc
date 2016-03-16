@@ -567,6 +567,9 @@ class UniformDistributionSamplerOp : public OpKernel {
   GuardedPhiloxRandom generator_;
 };
 
+REGISTER_KERNEL_BUILDER(Name("UniformDistributionSampler")
+                             .Device(DEVICE_CPU),
+                        UniformDistributionSamplerOp);
 
 template <typename Device>
 class GruCellOp : public OpKernel {

@@ -306,7 +306,7 @@ class SpeechModel(object):
           inp = self.labels[-1]
         elif self.model_params.cctc.reinforce and self.model_params.cctc.sample:
           inp = gen_gru_ops.uniform_distribution_sampler(
-              self.probs[-1], seed=decoder_time_idx + 111, seed2=decoder_time_idx + 222)
+              probs[-1], seed=decoder_time_idx + 111, seed2=decoder_time_idx + 222)
         else:
           # Maybe change this to sampling (i.e., Expectation rather than Max).
           inp = math_ops.argmax(logits[-1], 1)
