@@ -122,12 +122,23 @@ def convert(
   tf_record_writer = tf.python_io.TFRecordWriter(tf_records)
   kaldi_feat_reader = kaldi_io.SequentialBaseFloatMatrixReader(kaldi_scp)
 
+  features_len = 0
+  features_len_max = 0
+  tokens_len = 0
+  tokens_len_max = 0
+  feature_token_ratio_min = 10
+  pad_min = 1e8
   for uttid, feats in kaldi_feat_reader:
     text = text_map[uttid]
     tokens = [phone_map[phone] for phone in text.split(" ")]
-    tokens = [token_model_proto.token_sos] * 2 + tokens + [token_model_proto.token_eos]
+    # tokens = [token_model_proto.token_sos] * 2 + tokens + [token_model_proto.token_eos]
     tokens = [int(token) for token in tokens]
-    print tokens
+    features_len_max = max(features_len_max, feats.shape[0])
+    features_len += feats.shape[0]
+    tokens_len_max = max(tokens_len_max, len(tokens))
+    tokens_len += len(tokens)
+    feature_token_ratio_min = min(feature_token_ratio_min, feats.shape[0] / len(tokens))
+    pad_min = min(pad_min, features_len / 4 - tokens_len)
 
     example = tf.train.Example(features=tf.train.Features(feature={
         'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats.shape[0]])),
@@ -136,6 +147,12 @@ def convert(
         'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(uttid)])),
         'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
     tf_record_writer.write(example.SerializeToString())
+  print("features_len_max: %d" % features_len_max)
+  print("tokens_len_max: %d" % tokens_len_max)
+  print("feature_token_ratio_min: %f" % feature_token_ratio_min)
+  print("features_len: %d" % features_len)
+  print("tokens_len: %d" % tokens_len)
+  print("pad_min: %d" % pad_min)
 
 if __name__ == '__main__':
   main()
