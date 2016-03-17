@@ -8,7 +8,10 @@ message DatasetParamsProto {
   string name = 1;
   string path = 2;
   int64 size = 3;
-  bool collapse_eow = 4;
+  int64 features_size = 4;
+  int64 features_len_max = 5;
+  int64 tokens_len_max = 6;
+  bool collapse_eow = 7;
 };
 
 message ExperimentParamsProto {
@@ -42,6 +45,15 @@ message LossParamsProto {
   bool edit_distance = 2;
 };
 
+message CCTCParamsProto {
+  // Use xent w/ fake alignment (i.e., for first epoch).
+  bool xent = 1;
+  bool weakly_supervised = 2;
+  bool reinforce = 3;
+  bool sample = 4;
+  bool discount_factor = 5;
+};
+
 message ModelParamsProto {
   int64 features_width = 1;
   int64 features_len_max = 2;
@@ -61,6 +73,7 @@ message ModelParamsProto {
   AttentionParamsProto attention_params = 12;
 
   string mode = 13;
+  string type = 14;
 
   int64 frame_stack = 20;
   int64 frame_skip = 21;
@@ -76,6 +89,8 @@ message ModelParamsProto {
   bool pinyin_ext = 300;
   int64 pinyin_dim = 301;
   int64 pinyin_vocab_size = 302;
+
+  CCTCParamsProto cctc = 500;
 
   DatasetParamsProto dataset = 1000;
   LossParamsProto loss = 2000;
@@ -110,6 +125,7 @@ message AdamParamsProto {
 
 message GradientDescentParamsProto {
   float learning_rate = 1;
+  float momentum = 2;
 };
 
 message OptimizationParamsProto {

@@ -519,6 +519,58 @@ class TokenSampleOp : public OpKernel {
   GuardedPhiloxRandom generator_;
 };
 
+
+class UniformDistributionSamplerOp : public OpKernel {
+ public:
+  explicit UniformDistributionSamplerOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, generator_.Init(ctx));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    const Tensor* distribution_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("distribution", &distribution_tensor));
+
+    const int64 batch_size = distribution_tensor->dim_size(0);
+    const int64 vocab_size = distribution_tensor->dim_size(1);
+
+    Tensor* index_tensor = nullptr;
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_output("index", TensorShape({batch_size}), &index_tensor));
+
+    typedef random::UniformDistribution<random::PhiloxRandom, float>
+        Distribution;
+    Distribution dist;
+
+    // First determine whether we want to sample or not sample from our distribution.
+    std::vector<float> sample_prob(batch_size);
+    const int kGroupSize = Distribution::kResultElementCount;
+    auto local_generator = generator_.ReserveSamples32(batch_size);
+    for (int64 i = 0; i < batch_size; i += kGroupSize) {
+      auto samples = dist(&local_generator);
+      std::copy(&samples[0], &samples[0] + kGroupSize, &sample_prob[i]);
+    }
+
+    for (int64 b = 0; b < batch_size; ++b) {
+      float prob = 0.0;
+      int32 v = 0;
+      for (; v < vocab_size; ++v) {
+        prob += distribution_tensor->matrix<float>()(b, v);
+        if (prob >= sample_prob[b]) break;
+      }
+      if (v >= vocab_size) v = vocab_size - 1;
+
+      index_tensor->vec<int32>()(b) = v;
+    }
+  }
+
+ private:
+  GuardedPhiloxRandom generator_;
+};
+
+REGISTER_KERNEL_BUILDER(Name("UniformDistributionSampler")
+                             .Device(DEVICE_CPU),
+                        UniformDistributionSamplerOp);
+
 template <typename Device>
 class GruCellOp : public OpKernel {
  public:

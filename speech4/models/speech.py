@@ -2,21 +2,25 @@
 
 
 import google
+import itertools
 import math
 import numpy as np
 import os.path
 import random
+import sys
 import string
 import time
 
 import tensorflow as tf
 from tensorflow.core.framework import speech4_pb2
+from tensorflow.core.framework import token_model_pb2
 from tensorflow.python.ops import attention_mask_ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import clip_ops
 from tensorflow.python.ops import embedding_ops
 from tensorflow.python.ops import gen_array_ops
 from tensorflow.python.ops import gen_data_flow_ops
+from tensorflow.python.ops import gen_gru_ops
 from tensorflow.python.ops import gradients
 from tensorflow.python.ops import gru_ops
 from tensorflow.python.ops import math_ops
@@ -28,6 +32,10 @@ from tensorflow.python.ops import sparse_ops
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops.gen_user_ops import s4_parse_utterance
 from tensorflow.python.platform import gfile
+
+SPEECH4_ROOT = os.path.join(os.path.dirname(os.path.realpath(__file__)), '../../')
+sys.path.append(os.path.join(SPEECH4_ROOT))
+from speech4.models import las_utils
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -44,9 +52,18 @@ tf.app.flags.DEFINE_string("dataset", "wsj",
 tf.app.flags.DEFINE_integer("random_seed", 1000,
                             """Random seed.""")
 
+tf.app.flags.DEFINE_integer("batch_size", 16,
+                            """Batch size.""")
+
 tf.app.flags.DEFINE_string("decoder_params", "", """decoder_params proto""")
 tf.app.flags.DEFINE_string("model_params", "", """model_params proto""")
 tf.app.flags.DEFINE_string("optimization_params", "", """model_params proto""")
+
+tf.app.flags.DEFINE_integer("epochs_start", 0,
+                            """Epochs to run.""")
+tf.app.flags.DEFINE_integer("epochs", 20,
+                            """Epochs to run.""")
+
 
 tf.app.flags.DEFINE_string("logdir", "",
                            """Path to our outputs and logs.""")
@@ -58,8 +75,62 @@ def try_load_proto(proto_path, proto):
   return proto
 
 
+class Timit(object):
+  def __init__(self):
+    self.phones = self.load_phones("speech4/conf/timit/phones.txt")
+    self.remap_map = self.load_remap("speech4/conf/timit/remap.txt")
+    self.token_model_proto = try_load_proto("speech4/conf/timit/token_model.pbtxt", token_model_pb2.TokenModelProto())
+
+    # We need a map from token_string <-> token_id
+    self.id2str_map = {}
+    self.str2id_map = {}
+    for token in self.token_model_proto.tokens:
+      self.id2str_map[token.token_id] = token.token_string
+      self.str2id_map[token.token_string] = token.token_id
+
+    for k, v in self.remap_map.iteritems():
+      assert k in self.str2id_map
+      assert v in self.str2id_map
+      self.str2id_map[k] = self.str2id_map[v]
+
+
+  def load_phones(self, phones_filepath):
+    lines = [line.strip() for line in open(phones_filepath, "r")]
+    phones = []
+    for line in lines:
+      cols = line.split(" ")
+      assert len(cols) == 2
+
+      phone = cols[0]
+      phones.append(phone)
+    return phones
+
+
+  def load_remap(self, remap_filepath):
+    lines = [line.strip() for line in open(remap_filepath, "r")]
+    remap_map = {}
+    for line in lines:
+      cols = line.split(" ")
+      for phone in cols[1:]:
+        remap_map[phone] = cols[0]
+    return remap_map
+
+
+  def remap(self, token_ids):
+    token_strings = []
+    for token_id in token_ids:
+      if token_id in self.id2str_map:
+        token_strings.append(self.id2str_map[token_id])
+    token_ids_remapped = [self.str2id_map[token_string] for token_string in token_strings]
+    return token_ids_remapped
+
+
+  def to_string(self, token_ids):
+    return [self.id2str_map[x] for x in token_ids]
+
+
 class SpeechModel(object):
-  def __init__(self, sess, mode, dataset_params, model_params, optimization_params, batch_size=16, seed=1):
+  def __init__(self, sess, mode, dataset_params, model_params, optimization_params, batch_size=16, epoch=0, seed=1):
     dataset_params = try_load_proto(dataset_params, dataset_params)
     model_params = try_load_proto(model_params, model_params)
     optimization_params = try_load_proto(optimization_params, optimization_params)
@@ -68,17 +139,25 @@ class SpeechModel(object):
     self.model_params = model_params
     self.optimization_params = optimization_params
 
+    if FLAGS.dataset == "timit":
+      self.timit = Timit()
+
     self.batch_size = batch_size
     if mode == "test":
       self.batch_size = 1
+    self.mode = mode
+    self.epoch = epoch
     self.seed = seed
     tf.set_random_seed(self.seed)
 
-    self.create_model(sess, mode)
+    if self.model_params.type == "cctc":
+      self.create_model_cctc(sess, mode)
+    else:
+      self.create_model_attention(sess, mode)
 
 
-  def create_model(self, sess, mode):
-    print("creating model...")
+  def create_model_attention(self, sess, mode):
+    print("creating attention model...")
 
     initializer = tf.random_uniform_initializer(-0.1, 0.1)
     with tf.variable_scope("model", initializer=initializer):
@@ -96,6 +175,27 @@ class SpeechModel(object):
     if gfile.Exists(self.model_params.ckpt):
       self.restore(sess)
     self.saver = tf.train.Saver(tf.all_variables())
+
+
+  def create_model_cctc(self, sess, mode):
+    print("creating cctc model...")
+    initializer = tf.random_uniform_initializer(-0.1, 0.1)
+    with tf.variable_scope("model", initializer=initializer):
+      self.global_step = tf.Variable(0, trainable=False)
+
+      self.create_input()
+      self.create_encoder_cctc()
+      self.create_decoder_cctc(mode)
+      self.create_loss_cctc()
+      if mode == "train": self.create_optimizer()
+
+    print("initializing model...")
+    sess.run(tf.initialize_all_variables())
+
+    if gfile.Exists(self.model_params.ckpt):
+      self.restore(sess)
+    self.saver = tf.train.Saver(tf.all_variables())
+
 
   def create_input(self):
     if not os.path.isfile(self.dataset_params.path):
@@ -133,7 +233,7 @@ class SpeechModel(object):
   def create_encoder(self):
     # with vs.variable_scope("encoder"):
     #self.create_dynamic_encoder()
-    self.create_monolithic_enocder()
+    self.create_monolithic_encoder()
 
     # Create the encoder embedding.
     encoder_state = self.encoder_states[-1][0]
@@ -157,7 +257,110 @@ class SpeechModel(object):
     self.encoder_embedding = [encoder_embedding, self.encoder_states[-1][1]]
 
 
-  def create_monolithic_enocder(self):
+  def create_encoder_cctc(self):
+    print("creating encoder...")
+    self.encoder_states = [[self.features, self.features_len]]
+
+    # Create the encoder layers.
+    assert self.model_params.encoder_layer
+    for idx, s in enumerate(self.model_params.encoder_layer):
+      with vs.variable_scope("encoder_%d" % (idx + 1)) as scope:
+        self.create_monolithic_encoder_layer(input_time_stride=int(s), scope=scope)
+
+
+  def create_decoder_cctc(self, mode):
+    print("creating decoder...")
+    with vs.variable_scope("decoder"):
+      self.decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(
+          self.model_params.decoder_cell_size)
+      self.decoder_cell = tf.nn.rnn_cell.GRUCell(
+          self.model_params.decoder_cell_size)
+
+      if self.model_params.cctc.xent:
+        self.labels, self.labels_weight = gen_gru_ops.cctc_bootstrap_alignment(
+            self.tokens, self.tokens_len, self.encoder_states[-1][1],
+            len(self.encoder_states[-1][0]), lpad=10, rpad=2)
+      elif self.model_params.cctc.weakly_supervised:
+        self.labels = []
+        self.labels_weight = []
+
+      state = None
+      logits = []
+      probs = []
+      conditioned_path = []
+      greedy_path = []
+      baselines = []
+      for decoder_time_idx in range(len(self.encoder_states[-1][0])):
+        if decoder_time_idx > 0:
+          vs.get_variable_scope().reuse_variables()
+
+        # What do we condition on?
+        if decoder_time_idx == 0:
+          blank_token = 4
+          inp = tf.constant(
+              blank_token, shape=[self.batch_size], dtype=tf.int32)
+        elif mode != "train":
+          assert mode == "valid" or mode == "test"
+          inp = math_ops.argmax(logits[-1], 1)
+        elif self.model_params.cctc.xent:
+          inp = self.labels[decoder_time_idx - 1]
+        elif self.model_params.cctc.weakly_supervised:
+          inp = self.labels[-1]
+        elif self.model_params.cctc.reinforce and self.model_params.cctc.sample:
+          inp = gen_gru_ops.uniform_distribution_sampler(
+              probs[-1], seed=decoder_time_idx + 111, seed2=decoder_time_idx + 222)
+        else:
+          # Maybe change this to sampling (i.e., Expectation rather than Max).
+          inp = math_ops.argmax(logits[-1], 1)
+        conditioned_path.append(tf.to_int32(inp))
+
+        # Embedding.
+        with tf.device("/cpu:0"):
+          sqrt3 = np.sqrt(3)
+          embedding_matrix = vs.get_variable(
+              "embedding",
+              [self.model_params.vocab_size, self.model_params.embedding_size],
+              initializer=tf.random_uniform_initializer(-sqrt3, sqrt3))
+
+          inp = embedding_ops.embedding_lookup(embedding_matrix, inp)
+
+        inp = rnn_cell.linear(
+            [inp] + [self.encoder_states[-1][0][decoder_time_idx]],
+            self.decoder_cell.input_size, True, scope="Input")
+        if decoder_time_idx == 0:
+          state = array_ops.zeros([self.batch_size, self.decoder_cell.state_size])
+        output, state = self.decoder_cell(inp, state)
+        logit = rnn_cell.linear([output], self.model_params.vocab_size, True, scope="Logit")
+        prob = nn_ops.softmax(logit)
+        greedy = tf.to_int32(math_ops.argmax(logit, 1))
+        # We don't bprop the baseline gradient.
+        baseline = rnn_cell.linear([array_ops.stop_gradient(output)], 1, True, scope="Baseline")
+
+        logits.append(logit)
+        probs.append(prob)
+        greedy_path.append(greedy)
+        baselines.append(baseline)
+
+        if self.model_params.cctc.weakly_supervised:
+          if mode == "train":
+            label, label_weight = gen_gru_ops.cctc_weakly_supervised_alignment_label(
+                self.tokens, self.tokens_len, conditioned_path,
+                self.encoder_states[-1][1], prob,
+                seed=decoder_time_idx + 2016, seed2=decoder_time_idx + 43110,
+                lpad=10, rpad=2, hlen_max=len(self.encoder_states[-1][0]))
+            self.labels.append(label)
+            self.labels_weight.append(label_weight)
+          else:
+            self.labels.append(tf.constant(blank_token, shape=[self.batch_size], dtype=tf.int32))
+            self.labels_weight.append(tf.constant(1.0, shape=[self.batch_size], dtype=tf.float32))
+      self.logits = logits
+      self.probs = probs
+      self.hyp_probs = self.probs
+      self.hyp_greedy_path = greedy_path
+      self.hyp_baseline = baselines
+
+
+  def create_monolithic_encoder(self):
     print("creating monolithic encoder...")
     self.encoder_states = [[self.features, self.features_len]]
 
@@ -182,7 +385,10 @@ class SpeechModel(object):
         input_time_stride, shape=[self.batch_size], dtype=tf.int64)
     sequence_len = tf.div(self.encoder_states[-1][1], input_time_stride_t)
 
-    xs = self.encoder_states[-1][0][0::input_time_stride]
+    # xs = self.encoder_states[-1][0][0::input_time_stride]
+    xs = []
+    for idx in range(input_time_stride - 1, len(self.encoder_states[-1][0]), input_time_stride):
+      xs.append(self.encoder_states[-1][0][idx])
     self.encoder_states.append([gru_ops.gru(
         cell_size=self.model_params.encoder_cell_size,
         sequence_len=sequence_len, xs=xs)[-1], sequence_len])
@@ -557,12 +763,42 @@ class SpeechModel(object):
       self.create_loss_edit_distance()
 
 
-  def create_loss_log_prob(self):
-    targets = self.tokens[1:]
-    weights = self.tokens_weights[1:]
+  def create_loss_cctc(self):
+    print("creating loss...")
+    self.losses = []
+    if self.model_params.cctc.xent:
+      self.create_loss_cctc_xent()
+    if self.model_params.cctc.weakly_supervised:
+      self.create_loss_cctc_weakly_supervised_label()
+    self.create_loss_cctc_edit_distance()
 
-    log_perplexity = seq2seq.sequence_loss(
-        self.logits, targets, weights, self.model_params.vocab_size)
+
+  def create_loss_cctc_xent(self):
+    self.create_loss_log_prob()
+
+
+  def create_loss_cctc_weakly_supervised_label(self):
+    self.create_loss_log_prob()
+    
+
+  def create_loss_cctc_edit_distance(self):
+    self.hyp = [tf.cast(math_ops.argmax(logit, 1), dtype=tf.int32) for logit in self.logits]
+    self.edit_distance = gen_gru_ops.cctc_edit_distance(
+        self.hyp, self.logits, self.hyp_probs, self.hyp_baseline, self.tokens, self.tokens_len)
+    if self.model_params.cctc.reinforce:
+      self.losses.append(self.edit_distance)
+    self.edit_distance = [self.edit_distance, self.tokens_len]
+
+
+  def create_loss_log_prob(self):
+    if self.model_params.type == "cctc":
+      targets = self.labels
+      weights = self.labels_weight
+    else:
+      targets = self.tokens[1:]
+      weights = self.tokens_weights[1:]
+
+    log_perplexity = seq2seq.sequence_loss(self.logits, targets, weights)
     self.log_perplexity = log_perplexity
     self.losses.append(log_perplexity)
 
@@ -613,8 +849,13 @@ class SpeechModel(object):
           beta2=self.optimization_params.adam.beta2,
           epsilon=self.optimization_params.adam.epsilon)
     elif self.optimization_params.type == "gd":
-      opt = tf.train.GradientDescentOptimizer(
-          learning_rate=self.optimization_params.gd.learning_rate)
+      if self.optimization_params.gd.momentum == 0:
+        opt = tf.train.GradientDescentOptimizer(
+            learning_rate=self.optimization_params.gd.learning_rate)
+      else:
+        opt = tf.train.MomentumOptimizer(
+            learning_rate=self.optimization_params.gd.learning_rate,
+            momentum=self.optimization_params.gd.momentum)
     else:
       raise ValueError(
           "Unknown optimization type: %s" % str(self.optimization_params))
@@ -644,9 +885,9 @@ class SpeechModel(object):
       self.step(sess, update, results_proto, profile_proto)
 
       if (idx % steps_per_report) == 0:
-        percentage = float(idx) / float(self.dataset_params.size) * float(self.batch_size)
-        accuracy = float(results_proto.acc.pos) / float(results_proto.acc.count)
-        edit_distance = float(results_proto.edit_distance.edit_distance) / float(results_proto.edit_distance.ref_length)
+        percentage = np.float64(idx) / np.float64(self.dataset_params.size) * np.float64(self.batch_size)
+        accuracy = np.float64(results_proto.acc.pos) / np.float64(results_proto.acc.count)
+        edit_distance = np.float64(results_proto.edit_distance.edit_distance) / np.float64(results_proto.edit_distance.ref_length)
         step_time = profile_proto.secs / profile_proto.steps
         print "step: %.2f, step_time: %.2f, accuracy %.4f, edit_distance %.4f" % (percentage, step_time, accuracy, edit_distance)
 
@@ -698,20 +939,37 @@ class SpeechModel(object):
     targets["text"] = self.text
 
     targets["tokens"] = self.tokens[:-1]
-    targets["tokens_weights"] = self.tokens_weights[:-1]
+    targets["encoder_len"] = self.encoder_states[-1][1]
+    if self.model_params.type == "cctc" and self.model_params.cctc.xent:
+      targets["tokens_weights"] = self.labels_weight
+    elif self.model_params.type == "cctc" and self.model_params.cctc.weakly_supervised:
+      targets["tokens_weights"] = self.labels_weight
+    else:
+      targets["tokens_weights"] = self.tokens_weights[:-1]
     if hasattr(self, "correct"):
       targets["correct"] = self.correct
     if hasattr(self, "edit_distance"):
       targets["edit_distance"] = self.edit_distance
+    if hasattr(self, "labels"):
+      targets["labels"] = self.labels
 
     if update:
-      targets['updates'] = self.updates
+      targets["updates"] = self.updates
+
+    if self.model_params.type == "cctc":
+      targets["hyp"] = self.hyp
 
     fetches = self.run_graph(sess, targets)
     if hasattr(self, "correct"):
       self.compute_accuracy(fetches, results_proto.acc)
     if hasattr(self, "edit_distance"):
-      self.compute_edit_distance(fetches, results_proto.edit_distance)
+      if self.model_params.type == "cctc":
+        # self.compute_edit_distance(fetches, results_proto.edit_distance)
+        self.compute_edit_distance_ctcc(fetches, results_proto.edit_distance)
+      else:
+        self.compute_edit_distance(fetches, results_proto.edit_distance)
+    if hasattr(self, "labels"):
+      self.print_labels_ctcc(fetches)
    
     step_time = time.time() - start_time
     profile_proto.secs = profile_proto.secs + step_time
@@ -723,7 +981,6 @@ class SpeechModel(object):
     assert "correct" in fetches
 
     assert len(fetches["tokens_weights"]) == len(fetches["correct"])
-
     for token_weight, correct in zip(fetches["tokens_weights"], fetches["correct"]):
       count = token_weight.astype(int).sum()
       weighted_correct = np.multiply(token_weight.astype(int), correct).sum()
@@ -740,6 +997,45 @@ class SpeechModel(object):
 
     edit_distance_proto.edit_distance += edit_distance
     edit_distance_proto.ref_length += ref_length
+
+
+  def compute_edit_distance_ctcc(self, fetches, edit_distance_proto):
+    assert "edit_distance" in fetches
+
+    decode_results_filepath = os.path.join(FLAGS.logdir, "decode_results_%s_%d.txt" % (self.mode, self.epoch))
+    with open(decode_results_filepath, "a") as decode_results_file:
+      refs = np.stack(fetches["tokens"])
+      hyps = np.stack(fetches["hyp"])
+      for b in range(self.batch_size):
+        ref = filter(lambda a: a != 0, [x[b] for x in refs])
+        hyp = filter(lambda a: a != 4, [x[b] for x in hyps])
+        hyp_b = [x[b] for x in hyps]
+        while hyp_b and hyp_b[-1] == 4:
+          hyp_b.pop()
+
+        if FLAGS.dataset == "timit":
+          # Remap our phones before distance comparison.
+          ref = self.timit.remap(ref)
+          ref = [x[0] for x in itertools.groupby(ref)]
+          hyp = self.timit.remap(hyp)
+          hyp = [x[0] for x in itertools.groupby(hyp)]
+
+          decode_results_file.write("ref:   %s\n" % self.timit.to_string(ref))
+          decode_results_file.write("hyp:   %s\n" % self.timit.to_string(hyp))
+          decode_results_file.write("hyp_b: %s\n" % self.timit.to_string(hyp_b))
+
+        edit_distance = las_utils.LevensteinDistance(ref, hyp)
+
+        edit_distance_proto.edit_distance += edit_distance
+        edit_distance_proto.ref_length += len(ref)
+
+
+  def print_labels_ctcc(self, fetches):
+    labels = np.stack(fetches["labels"])
+    encoder_len = fetches["encoder_len"]
+    for b in range(self.batch_size):
+      labels_b = [x[b] for x in labels]
+      labels_b = labels_b[:encoder_len[b]]
 
 
   def run_graph(self, sess, targets, feed_dict=None):
@@ -789,17 +1085,37 @@ def load_dataset_params(mode):
     for key in gale:
       gale[key].collapse_eow = True
     return gale[mode]
+  elif FLAGS.dataset == "timit":
+    timit = {}
+    timit["train"] = create_dataset_params("train", "/data-local/data/tfrecords/timit_train.tfrecords", 3696)
+    timit["train"].features_len_max = 777
+    timit["train"].tokens_len_max = 74
+    timit["valid"] = create_dataset_params("dev", "/data-local/data/tfrecords/timit_dev.tfrecords", 400)
+    timit["valid"].features_len_max = 742
+    timit["valid"].tokens_len_max = 67
+    timit["test"] = create_dataset_params("test", "/data-local/data/tfrecords/timit_test.tfrecords", 192)
+    timit["test"].features_len_max = 619
+    timit["test"].tokens_len_max = 68
+    for key in timit:
+      timit[key].features_size = 69
+    return timit[mode]
 
   raise Exception("Unknown dataset %s" % FLAGS.dataset)
 
 
-def load_model_params(mode):
+def load_model_params(mode, epoch, dataset_params):
   model_params = speech4_pb2.ModelParamsProto()
   model_params.features_width = 123
+  if dataset_params.features_size:
+    model_params.features_width = dataset_params.features_size
   model_params.features_len_max = 2560
+  if dataset_params.features_len_max:
+    model_params.features_len_max = dataset_params.features_len_max
   model_params.frame_skip = 1
   model_params.frame_stack = 1
   model_params.tokens_len_max = 256
+  if dataset_params.tokens_len_max:
+    model_params.tokens_len_max = dataset_params.tokens_len_max
   model_params.vocab_size = 64
   model_params.embedding_size = 32
   model_params.encoder_cell_size = 384
@@ -808,6 +1124,9 @@ def load_model_params(mode):
 
   model_params.loss.log_prob = True
   model_params.loss.edit_distance = True
+
+  if model_params.type == "cctc" and epoch == 0:
+    model_params.cctc.xent = True
 
   model_params = try_load_proto(FLAGS.model_params, model_params)
 
@@ -824,6 +1143,7 @@ def load_model_params(mode):
   if not model_params.decoder_prefix:
     model_params.decoder_prefix = "decoder"
 
+  print str(model_params)
   return model_params
 
 
@@ -838,28 +1158,35 @@ def load_optimization_params(mode):
     optimization_params.max_gradient_norm = 1.0
 
     optimization_params = try_load_proto(FLAGS.optimization_params, optimization_params)
+
+    print str(optimization_params)
     return optimization_params
   return None
 
 
-def load_params(mode):
+def load_params(mode, epoch):
   dataset_params = load_dataset_params(mode)
-  model_params = load_model_params(mode)
+  model_params = load_model_params(mode, epoch, dataset_params)
   optimization_params = load_optimization_params(mode)
   return dataset_params, model_params, optimization_params
 
 
 def run(mode, epoch, ckpt=None):
+  if mode == "train":
+    if not os.path.isdir(FLAGS.logdir):
+      os.makedirs(FLAGS.logdir)
+
   ckpt_filepath = None
   with tf.device("/gpu:%d" % FLAGS.device):
     with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
-      dataset_params, model_params, optimization_params = load_params(mode)
+      dataset_params, model_params, optimization_params = load_params(mode, epoch)
 
       if ckpt:
         model_params.ckpt = ckpt
 
       speech_model = SpeechModel(
-          sess, mode, dataset_params, model_params, optimization_params, seed=epoch)
+          sess, mode, dataset_params, model_params, optimization_params,
+          batch_size=FLAGS.batch_size, epoch=epoch, seed=epoch)
 
       coord = tf.train.Coordinator()
       threads = []
@@ -883,17 +1210,13 @@ def run(mode, epoch, ckpt=None):
 def main(_):
   if not FLAGS.logdir:
     FLAGS.logdir = os.path.join(
-        "exp", "speech4_" + "".join(random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(8)))
+        "exp", "speech4_" + FLAGS.dataset + "_" + "".join(random.SystemRandom().choice(string.ascii_uppercase + string.digits) for _ in range(8)))
   FLAGS.logdir = os.path.abspath(FLAGS.logdir)
-  try:
-    os.makedirs(FLAGS.logdir)
-  except:
-    pass
 
   print "logdir: %s" % FLAGS.logdir
 
   ckpt_filepath = FLAGS.ckpt
-  for epoch in range(20):
+  for epoch in range(FLAGS.epochs_start, FLAGS.epochs_start + FLAGS.epochs):
     ckpt_filepath = run("train", epoch, ckpt_filepath)
     run("valid", epoch, ckpt_filepath)
     run("test", epoch, ckpt_filepath)

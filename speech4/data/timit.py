@@ -20,13 +20,14 @@ def main():
   parser = argparse.ArgumentParser(description='SPEECH3 (C) 2015 William Chan <williamchan@cmu.edu>')
   parser.add_argument('--kaldi_scp', type=str)
   parser.add_argument('--kaldi_txt', type=str)
+  parser.add_argument('--kaldi_alignment', type=str)
   parser.add_argument('--phones', type=str)
   parser.add_argument('--remap', type=str)
   parser.add_argument('--tf_records', type=str)
   args   = vars(parser.parse_args())
 
   convert(
-      args['kaldi_scp'], args['kaldi_txt'], args['phones'], args['remap'],
+      args['kaldi_scp'], args['kaldi_txt'], args['kaldi_alignment'], args['phones'], args['remap'],
       args['tf_records'])
 
 
@@ -40,6 +41,16 @@ def load_phones(phones_txt):
     phone = cols[0]
     phones.append(phone)
   return phones
+
+
+def load_remap(remap_txt):
+  lines = [line.strip() for line in open(remap_txt, 'r')]
+  remap_map = {}
+  for line in lines:
+    cols = line.split(" ")
+    for phone in cols[1:]:
+      remap_map[phone] = cols[0]
+  return remap_map
 
 
 def token_model_add_token(token_model_proto, token_id, token_string):
@@ -109,15 +120,21 @@ def load_text_map(kaldi_txt, phone_map):
   return text_map
 
 
-def extract_text_line(line):
-  cols = line.split(" ")
-  uttid = cols[0]
+def load_alignment(kaldi_alignment):
+  kaldi_ali_reader = kaldi_io.SequentialInt32VectorReader(kaldi_alignment)
+  alignment_map = {}
+  for uttid, alignment in kaldi_ali_reader:
+    alignment_map[uttid] = alignment
+  return alignment_map
 
 
 def convert(
-    kaldi_scp, kaldi_txt, phones_txt, remap_txt, tf_records):
+    kaldi_scp, kaldi_txt, kaldi_alignment, phones_txt, remap_txt, tf_records):
   token_model_proto, phone_map = create_phone_token_model(phones_txt)
+  remap_map = load_remap(remap_txt)
   text_map = load_text_map(kaldi_txt, phone_map)
+  #alignment_map = load_alignment(kaldi_alignment)
+  #remap_alignment(alignment_map, phone_map, remap_map)
 
   tf_record_writer = tf.python_io.TFRecordWriter(tf_records)
   kaldi_feat_reader = kaldi_io.SequentialBaseFloatMatrixReader(kaldi_scp)

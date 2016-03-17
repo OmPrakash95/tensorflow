@@ -4,6 +4,14 @@
 
 namespace tensorflow {
 
+REGISTER_OP("UniformDistributionSampler")
+    .Attr("seed: int = 0")
+    .Attr("seed2: int = 0")
+    .Input("distribution: float")
+    .Output("index: int32")
+    .Doc(R"doc(
+)doc");
+
 REGISTER_OP("TokenSample")
     .Attr("sample_prob: float")
     .Attr("seed: int = 0")
@@ -185,32 +193,66 @@ REGISTER_OP("Sink")
 Sink NoOp
 )doc");
 
-REGISTER_OP("CCTCEditDistance")
-    .Attr("eos_token: int = 1")
-    .Attr("eow_token: int = 2")
+REGISTER_OP("CCTCWeaklySupervisedAlignmentLabel")
+    .Attr("seed: int = 0")
+    .Attr("seed2: int = 0")
     .Attr("blank_token: int = 4")
-    .Attr("sequence_len_max: int")
-    .Input("hyp: sequence_len_max * int32")
-    .Input("ref: sequence_len_max * int32")
+    .Attr("lpad: int = 10")
+    .Attr("rpad: int = 2")
+    .Attr("flen_max: int")
+    .Attr("tlen: int")
+    .Attr("hlen_max: int = 400")
+    .Input("ref: flen_max * int32")
+    .Input("ref_len: int64")
+    .Input("hyp: tlen * int32")
+    .Input("hyp_len: int64")
+    .Input("hyp_prob: float")
+    .Output("label: int32")
+    .Output("label_weight: float")
+    .Doc(R"doc(
+)doc");
+
+
+REGISTER_OP("CCTCBootstrapAlignment")
+    .Attr("blank_token: int = 4")
+    .Attr("lpad: int = 10")
+    .Attr("rpad: int = 2")
+    .Attr("features_len_max: int")
+    .Attr("tokens_len_max: int")
+    .Input("tokens: tokens_len_max * int32")
+    .Input("tokens_len: int64")
+    .Input("features_len: int64")
+    .Output("tokens_aligned: features_len_max * int32")
+    .Output("tokens_aligned_weight: features_len_max * float")
+    .Doc(R"doc(
+)doc");
+
+REGISTER_OP("CCTCEditDistance")
+    .Attr("blank_token: int = 4")
+    .Attr("features_len_max: int")
+    .Attr("tokens_len_max: int")
+    .Input("hyp: features_len_max * int32")
+    .Input("hyp_logits: features_len_max * float")
+    .Input("hyp_probs: features_len_max * float")
+    .Input("hyp_baseline: features_len_max * float")
+    .Input("ref: tokens_len_max * int32")
+    .Input("ref_len: int64")
     .Output("edit_distance: int64")
-    .Output("ref_length: int64")
     .Doc(R"doc(
 )doc");
 
 REGISTER_OP("CCTCEditDistanceReinforceGrad")
-    .Attr("eos_token: int = 1")
-    .Attr("eow_token: int = 2")
     .Attr("blank_token: int = 4")
-    .Attr("sequence_len_max: int")
-    .Attr("discount_factor: float = 1.0")
-    .Input("hyp_probs: sequence_len_max * float")
-    .Input("hyp_baseline: sequence_len_max * float")
-    .Input("hyp: sequence_len_max * int32")
-    .Input("ref: sequence_len_max * int32")
-    .Output("edit_distance: int64")
-    .Output("ref_length: int64")
-    .Output("hyp_logits_backprop: sequence_len_max * float")
-    .Output("hyp_baseline_backprop: sequence_len_max * float")
+    .Attr("features_len_max: int")
+    .Attr("tokens_len_max: int")
+    .Attr("discount_factor: float = 0.8")
+    .Input("hyp: features_len_max * int32")
+    .Input("hyp_probs: features_len_max * float")
+    .Input("hyp_baseline: features_len_max * float")
+    .Input("ref: tokens_len_max * int32")
+    .Input("ref_len: int64")
+    .Output("hyp_logits_backprop: features_len_max * float")
+    .Output("hyp_baseline_backprop: features_len_max * float")
     .Doc(R"doc(
 )doc");
 
