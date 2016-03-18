@@ -245,6 +245,7 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
     // Sample our random numbers.
     const int kGroupSize = Distribution::kResultElementCount;
     auto local_generator = generator_.ReserveSamples32(batch_size);
+    // sample_prob[b] ~ U(0, 1)
     std::vector<float> sample_prob(batch_size);
     for (int64 i = 0; i < batch_size; i += kGroupSize) {
       auto samples = dist(&local_generator);
@@ -255,9 +256,16 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
       float w_t = 1.0f;
       int32 l_t = blank_token_;
 
+      // Reference is the ground truth (without blanks).
       const std::vector<int32>& ref = refs[b];
+      // Hypothesis is what our model has produced thus far (i.e., in the
+      // p(a_t | a_{<t}, x), the a_{x<t} part). Hyp is already collapsed.
       const std::vector<int32>& hyp = hyps[b];
+      // In this training model, we require the hyp == prefix(ref)
       CHECK(std::equal(hyp.begin(), hyp.end(), ref.begin()));
+      // Therefore, ref[hyp.size] is the next token we want the model to emit
+      // (or blank), anything else would result in a sequence that is not
+      // correct.
 
       // ali_len: the length of the total alignment including blanks.
       const int32 ali_len = hyp_len->flat<int64>()(b);
@@ -284,17 +292,23 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
           const int32 b_t = c_t - d_t;
           CHECK_GE(b_t, 0);
 
+          // token_next is the correct token we want to emit.
           const int32 token_next = ref[hyp.size()];
+          // token_next_prob: get the prob(token_next | a_{<t}, x).
           const float token_next_prob = hyp_prob->matrix<float>()(b, token_next) + 1e-6;
+          // blank_token_ is the blank token we could emit w/o making any errors.
+          // blank_prob: get the prob(token_prob | a_{x<t}, x).
           const float blank_prob = hyp_prob->matrix<float>()(b, blank_token_) + 1e-6;
+          // normalization_constant = token_next_prob + blank_prob
           const float normalization_constant = token_next_prob + blank_prob;
 
           const float blank_prob_normalized = blank_prob / normalization_constant;
 
           if (token_next_prob > blank_prob ||
-              sample_prob[b] > blank_prob_normalized ||
               hyp_list[hyp_list.size() - 1].vec<int32>()(b) == blank_token_ ||
+              sample_prob[b] > blank_prob_normalized ||
               b_t <= 0) {
+            // Set the training label to be token_next.
             l_t = token_next;
           }
         }

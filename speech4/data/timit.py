@@ -7,6 +7,10 @@
 import argparse
 import google
 import kaldi_io
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.gridspec as gridspec
+import matplotlib.pyplot as plt
 import numpy as np
 import os
 import re
@@ -128,6 +132,16 @@ def load_alignment(kaldi_alignment):
   return alignment_map
 
 
+def visualize(feats):
+  fig = plt.figure()
+  ax = fig.add_subplot(1, 1, 1)
+  ax.set_axis_off()
+  ax.imshow(feats.transpose()[:23,:], interpolation="none")
+  fig.savefig("fig.png")
+
+  raise Exception("visualize once")
+
+
 def convert(
     kaldi_scp, kaldi_txt, kaldi_alignment, phones_txt, remap_txt, tf_records):
   token_model_proto, phone_map = create_phone_token_model(phones_txt)
@@ -139,6 +153,7 @@ def convert(
   tf_record_writer = tf.python_io.TFRecordWriter(tf_records)
   kaldi_feat_reader = kaldi_io.SequentialBaseFloatMatrixReader(kaldi_scp)
 
+  features_width = 0
   features_len = 0
   features_len_max = 0
   tokens_len = 0
@@ -152,6 +167,7 @@ def convert(
     tokens = [int(token) for token in tokens]
     features_len_max = max(features_len_max, feats.shape[0])
     features_len += feats.shape[0]
+    features_width = feats.shape[1]
     tokens_len_max = max(tokens_len_max, len(tokens))
     tokens_len += len(tokens)
     feature_token_ratio_min = min(feature_token_ratio_min, feats.shape[0] / len(tokens))
@@ -164,6 +180,7 @@ def convert(
         'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(uttid)])),
         'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
     tf_record_writer.write(example.SerializeToString())
+  print("features_width: %d" % features_width)
   print("features_len_max: %d" % features_len_max)
   print("tokens_len_max: %d" % tokens_len_max)
   print("feature_token_ratio_min: %f" % feature_token_ratio_min)

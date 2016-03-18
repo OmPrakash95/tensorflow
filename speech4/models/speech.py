@@ -4,6 +4,10 @@
 import google
 import itertools
 import math
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.gridspec as gridspec
+import matplotlib.pyplot as plt
 import numpy as np
 import os.path
 import random
@@ -64,6 +68,8 @@ tf.app.flags.DEFINE_integer("epochs_start", 0,
 tf.app.flags.DEFINE_integer("epochs", 20,
                             """Epochs to run.""")
 
+tf.app.flags.DEFINE_boolean("test_only", False,
+                            """Test only.""")
 
 tf.app.flags.DEFINE_string("logdir", "",
                            """Path to our outputs and logs.""")
@@ -939,6 +945,8 @@ class SpeechModel(object):
     targets["text"] = self.text
 
     targets["tokens"] = self.tokens[:-1]
+    targets["features"] = self.features
+    targets["features_len"] = self.features_len
     targets["encoder_len"] = self.encoder_states[-1][1]
     if self.model_params.type == "cctc" and self.model_params.cctc.xent:
       targets["tokens_weights"] = self.labels_weight
@@ -970,6 +978,7 @@ class SpeechModel(object):
         self.compute_edit_distance(fetches, results_proto.edit_distance)
     if hasattr(self, "labels"):
       self.print_labels_ctcc(fetches)
+    self.visualize_alignment(fetches)
    
     step_time = time.time() - start_time
     profile_proto.secs = profile_proto.secs + step_time
@@ -1036,6 +1045,29 @@ class SpeechModel(object):
     for b in range(self.batch_size):
       labels_b = [x[b] for x in labels]
       labels_b = labels_b[:encoder_len[b]]
+
+
+  def visualize_alignment(self, fetches):
+    features = np.stack(fetches["features"])
+    features_len = fetches["features_len"]
+
+    labels = np.stack(fetches["labels"])
+    encoder_len = fetches["encoder_len"]
+
+    for b in range(self.batch_size):
+      labels_b = [x[b] for x in labels][:encoder_len[b]]
+      features_b = [x[b] for x in features]
+
+      factor = round(float(features_len[b]) / float(encoder_len[b]))
+      assert factor == 4
+
+      fig = plt.figure()
+      ax = fig.add_subplot(1, 1, 1)
+      ax.set_axis_off()
+      ax.imshow(features_b, interpolation="none")
+      fig.savefig(os.path.join(FLAGS.logdir, "fig_%d.png" % b))
+
+    raise Exception("Done visualize_alignment")
 
 
   def run_graph(self, sess, targets, feed_dict=None):
@@ -1172,9 +1204,8 @@ def load_params(mode, epoch):
 
 
 def run(mode, epoch, ckpt=None):
-  if mode == "train":
-    if not os.path.isdir(FLAGS.logdir):
-      os.makedirs(FLAGS.logdir)
+  if not os.path.isdir(FLAGS.logdir):
+    os.makedirs(FLAGS.logdir)
 
   ckpt_filepath = None
   with tf.device("/gpu:%d" % FLAGS.device):
@@ -1217,7 +1248,8 @@ def main(_):
 
   ckpt_filepath = FLAGS.ckpt
   for epoch in range(FLAGS.epochs_start, FLAGS.epochs_start + FLAGS.epochs):
-    ckpt_filepath = run("train", epoch, ckpt_filepath)
+    if not FLAGS.test_only:
+      ckpt_filepath = run("train", epoch, ckpt_filepath)
     run("valid", epoch, ckpt_filepath)
     run("test", epoch, ckpt_filepath)
 
