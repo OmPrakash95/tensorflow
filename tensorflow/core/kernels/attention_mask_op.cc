@@ -14,11 +14,6 @@
 #include "tensorflow/core/lib/random/random_distributions.h"
 #include "tensorflow/core/util/guarded_philox_random.h"
 
-#if GOOGLE_CUDA
-#include "tensorflow/stream_executor/stream.h"
-#include "tensorflow/core/common_runtime/gpu_device_context.h"
-#endif  // GOOGLE_CUDA
-
 namespace tensorflow {
 
 template <>

@@ -96,11 +96,37 @@ def bias_add_shape(op):
   bias_shape = op.inputs[1].get_shape().with_rank(1)
   if input_shape.ndims is not None:
     # Output has the same shape as input, and matches the length of
-    # bias in its last dimension.
-    output_shape = input_shape[0:-1].concatenate(
-        input_shape[-1].merge_with(bias_shape[0]))
+    # bias in its bias dimension.
+    try:
+      data_format = op.get_attr("data_format")
+    except ValueError:
+      data_format = None
+    if data_format == "NCHW":
+      # Merge the length of bias_shape into the third-to-last dimension.
+      output_shape = input_shape[0:-3].concatenate(
+          input_shape[-3].merge_with(bias_shape[0])).concatenate(
+              input_shape[-2:])
+    else:
+      output_shape = input_shape[0:-1].concatenate(
+          input_shape[-1].merge_with(bias_shape[0]))
   else:
     output_shape = tensor_shape.unknown_shape()
+  return [output_shape]
+
+
+def bias_add_grad_shape(op):
+  """Shape function for a BiasAddGrad op."""
+  input_shape = op.inputs[0].get_shape().with_rank_at_least(2)
+  try:
+    data_format = op.get_attr("data_format")
+  except ValueError:
+    data_format = None
+
+  if data_format == "NCHW":
+    output_shape = input_shape[-3]
+  else:
+    output_shape = input_shape[-1]
+
   return [output_shape]
 
 
@@ -204,18 +230,12 @@ def conv2d_shape(op):
   if stride_b != 1 or stride_d != 1:
     raise ValueError("Current implementation does not yet support "
                      "strides in the batch and depth dimensions.")
-  if stride_r != stride_c:
-    # TODO(shlens): Add support for this.
-    raise ValueError("Current implementation only supports equal length "
-                     "strides in the row and column dimensions.")
-
   # TODO(mrry,shlens): Raise an error if the stride would cause
   # information in the input to be ignored. This will require a change
   # in the kernel implementation.
-  stride = stride_r
   padding = op.get_attr("padding")
   out_rows, out_cols = get2d_conv_output_size(
-      in_rows, in_cols, filter_rows, filter_cols, stride, stride, padding)
+      in_rows, in_cols, filter_rows, filter_cols, stride_r, stride_c, padding)
 
   output_shape = [batch_size, out_rows, out_cols, depth_out]
   if data_format == "NCHW":

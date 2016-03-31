@@ -54,25 +54,26 @@ struct ApplyAdagrad<GPUDevice, T> {
 template <typename T>
 struct ApplyAdadelta<GPUDevice, T> {
   void operator()(const GPUDevice& d, typename TTypes<T>::Flat var,
-                  typename TTypes<T>::Flat accum_grad,
+                  typename TTypes<T>::Flat accum,
                   typename TTypes<T>::Flat accum_update,
                   typename TTypes<T>::ConstScalar lr,
-                  typename TTypes<T>::ConstScalar decay_rate,
+                  typename TTypes<T>::ConstScalar rho,
                   typename TTypes<T>::ConstScalar epsilon,
                   typename TTypes<T>::ConstFlat grad) {
     Eigen::array<typename TTypes<T>::Tensor::Index, 1> bcast;
     bcast[0] = grad.dimension(0);
     Eigen::Sizes<1> single;
 
-    accum_grad.device(d) =
-        accum_update * decay_rate.reshape(single).broadcast(bcast) +
-        grad.square() * (grad.constant(1) - decay_rate.reshape(single).broadcast(bcast));
+    accum.device(d) = accum_update * rho.reshape(single).broadcast(bcast) +
+                      grad.square() * (grad.constant(T(1)) -
+                                       rho.reshape(single).broadcast(bcast));
     const auto update =
         (accum_update + epsilon.reshape(single).broadcast(bcast)).sqrt() *
-        (accum_grad + epsilon.reshape(single).broadcast(bcast)).rsqrt() * grad;
+        (accum + epsilon.reshape(single).broadcast(bcast)).rsqrt() * grad;
     accum_update.device(d) =
-        accum_update * decay_rate.reshape(single).broadcast(bcast) +
-        update.square() * (grad.constant(1) - decay_rate.reshape(single).broadcast(bcast));
+        accum_update * rho.reshape(single).broadcast(bcast) +
+        update.square() *
+            (grad.constant(T(1)) - rho.reshape(single).broadcast(bcast));
     var.device(d) -= update * lr.reshape(single).broadcast(bcast);
   }
 };
