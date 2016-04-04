@@ -26,7 +26,6 @@ def main():
   parser.add_argument('--kaldi_scp', type=str)
   parser.add_argument('--kaldi_txt', type=str)
   parser.add_argument('--kaldi_alignment', type=str)
-  parser.add_argument('--transid_to_phoneid', type=str)
   parser.add_argument('--phones', type=str)
   parser.add_argument('--remap', type=str)
   parser.add_argument('--sort', action="store_true")
@@ -35,7 +34,7 @@ def main():
 
   convert(
       args['kaldi_scp'], args['kaldi_txt'], args['kaldi_alignment'],
-      args['transid_to_phoneid'], args['phones'], args['remap'], args['sort'],
+      args['phones'], args['remap'], args['sort'],
       args['tf_records'])
 
 
@@ -160,9 +159,30 @@ def load_alignment(kaldi_alignment):
   if kaldi_alignment:
     kaldi_ali_reader = kaldi_io.SequentialInt32VectorReader(kaldi_alignment)
     for uttid, alignment in kaldi_ali_reader:
-      alignment_map[uttid] = alignment.tolist()
+      alignment_map[uttid] = [x + 4 for x in alignment.tolist()]
   return alignment_map
 
+
+def cctc_downsample_alignment(alignment, blank_token, factor):
+  alignment_r = list(alignment)
+  alignment_r.reverse()
+
+  ali = []
+  next_phone = None
+  for idx in range(len(alignment)):
+    phone = alignment_r[idx]
+    if next_phone != phone:
+      ali.append(phone)
+      next_phone = phone
+    if len(ali) * factor < idx:
+      ali.append(blank_token)
+  ali.reverse()
+
+  # double check if we collapse the phones.
+  ali_test = filter(lambda a: a != blank_token, ali)
+  assert [x[0] for x in itertools.groupby(alignment)] == ali_test
+
+  return ali
 
 def remap_alignment_to_phones(alignment_map, transid_to_phoneid_map):
   alignment_in_phones_map = {}
@@ -186,15 +206,13 @@ def visualize(feats):
 
 
 def convert(
-    kaldi_scp, kaldi_txt, kaldi_alignment, transid_to_phoneid_txt, phones_txt, remap_txt, sort, tf_records):
+    kaldi_scp, kaldi_txt, kaldi_alignment, phones_txt, remap_txt, sort, tf_records):
   token_model_proto, phone_map = create_phone_token_model(phones_txt)
   # remap_map = load_remap(remap_txt)
   text_map = load_text_map(kaldi_txt, phone_map)
 
   # We only have this if we have GMM model (for training).
-  transid_to_phoneid_map = load_transid_to_phoneid(transid_to_phoneid_txt)
   alignment_map = load_alignment(kaldi_alignment)
-  alignment_in_phones_map = remap_alignment_to_phones(alignment_map, transid_to_phoneid_map)
 
   tf_record_writer = tf.python_io.TFRecordWriter(tf_records)
   kaldi_feat_reader = kaldi_io.SequentialBaseFloatMatrixReader(kaldi_scp)
@@ -212,8 +230,8 @@ def convert(
     text = text_map[uttid]
     phones = text.split(" ")
     phone_ali = None
-    if alignment_in_phones_map:
-      phone_ali = alignment_in_phones_map[uttid]
+    if alignment_map:
+      phone_ali = alignment_map[uttid]
     tokens = [phone_map[phone] for phone in phones]
     vowel_count = count_vowels(phones)
     sil_count = tokens.count(5) + tokens.count(15) + tokens.count(48) + tokens.count(22)
@@ -238,6 +256,7 @@ def convert(
       assert tokens_collapsed == phone_ali_collapsed
 
     if phone_ali:
+      phone_ali = cctc_downsample_alignment(phone_ali, token_model_proto.token_blank, 4)
       example = tf.train.Example(features=tf.train.Features(feature={
           'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats.shape[0]])),
           'features': tf.train.Feature(float_list=tf.train.FloatList(value=feats.flatten('C').tolist())),
