@@ -27,12 +27,13 @@ def main():
   parser.add_argument('--kaldi_alignment', type=str)
   parser.add_argument('--phones', type=str)
   parser.add_argument('--remap', type=str)
+  parser.add_argument('--sort', action="store_true")
   parser.add_argument('--tf_records', type=str)
   args   = vars(parser.parse_args())
 
   convert(
       args['kaldi_scp'], args['kaldi_txt'], args['kaldi_alignment'], args['phones'], args['remap'],
-      args['tf_records'])
+      args['sort'], args['tf_records'])
 
 
 def load_phones(phones_txt):
@@ -113,6 +114,18 @@ def create_phone_token_model(phones_txt):
   return token_model_proto, token_map
 
 
+def is_vowel(phone):
+  vowels = ["aa", "ae", "ax", "ah", "ao", "eh", "ih", "iy", "uh", "uw", "ay", "aw", "ey", "ow", "oy", "axr", "er"]
+  return phone in vowels
+
+
+def count_vowels(phones):
+  count = 0
+  for phone in phones:
+    if is_vowel(phone):
+      count += 1
+  return count
+
 def load_text_map(kaldi_txt, phone_map):
   lines = [line.strip() for line in open(kaldi_txt, 'r')]
   text_map = {}
@@ -143,7 +156,7 @@ def visualize(feats):
 
 
 def convert(
-    kaldi_scp, kaldi_txt, kaldi_alignment, phones_txt, remap_txt, tf_records):
+    kaldi_scp, kaldi_txt, kaldi_alignment, phones_txt, remap_txt, sort, tf_records):
   token_model_proto, phone_map = create_phone_token_model(phones_txt)
   remap_map = load_remap(remap_txt)
   text_map = load_text_map(kaldi_txt, phone_map)
@@ -154,24 +167,32 @@ def convert(
   kaldi_feat_reader = kaldi_io.SequentialBaseFloatMatrixReader(kaldi_scp)
 
   features_width = 0
-  features_len = 0
+  features_len_total = 0
   features_len_max = 0
-  tokens_len = 0
+  tokens_len_total = 0
   tokens_len_max = 0
   feature_token_ratio_min = 10
-  pad_min = 1e8
+  pad_min4 = 1e8
+  pad_max4 = 0
+  examples = []
   for uttid, feats in kaldi_feat_reader:
     text = text_map[uttid]
-    tokens = [phone_map[phone] for phone in text.split(" ")]
+    phones = text.split(" ")
+    tokens = [phone_map[phone] for phone in phones]
+    vowel_count = count_vowels(phones)
+    sil_count = tokens.count(5) + tokens.count(15) + tokens.count(48) + tokens.count(22)
     # tokens = [token_model_proto.token_sos] * 2 + tokens + [token_model_proto.token_eos]
     tokens = [int(token) for token in tokens]
-    features_len_max = max(features_len_max, feats.shape[0])
-    features_len += feats.shape[0]
+    features_len = feats.shape[0]
+    features_len_max = max(features_len_max, features_len)
+    features_len_total += features_len
     features_width = feats.shape[1]
-    tokens_len_max = max(tokens_len_max, len(tokens))
-    tokens_len += len(tokens)
-    feature_token_ratio_min = min(feature_token_ratio_min, feats.shape[0] / len(tokens))
-    pad_min = min(pad_min, features_len / 4 - tokens_len)
+    tokens_len = len(tokens)
+    tokens_len_max = max(tokens_len_max, tokens_len)
+    tokens_len_total += tokens_len
+    feature_token_ratio_min = min(feature_token_ratio_min, feats.shape[0] / tokens_len)
+    pad_min4 = min(pad_min4, features_len / 4 - tokens_len - vowel_count)
+    pad_max4 = max(pad_max4, features_len / 4 - tokens_len - vowel_count)
 
     example = tf.train.Example(features=tf.train.Features(feature={
         'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats.shape[0]])),
@@ -179,14 +200,19 @@ def convert(
         'tokens': tf.train.Feature(int64_list=tf.train.Int64List(value=tokens)),
         'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(uttid)])),
         'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
-    tf_record_writer.write(example.SerializeToString())
+    examples.append([tokens_len, example])
   print("features_width: %d" % features_width)
   print("features_len_max: %d" % features_len_max)
   print("tokens_len_max: %d" % tokens_len_max)
   print("feature_token_ratio_min: %f" % feature_token_ratio_min)
-  print("features_len: %d" % features_len)
-  print("tokens_len: %d" % tokens_len)
-  print("pad_min: %d" % pad_min)
+  print("features_len_total: %d" % features_len_total)
+  print("tokens_len_total: %d" % tokens_len_total)
+  print("pad_min4: %d" % pad_min4)
+  print("pad_max4: %d" % pad_max4)
+  if sort:
+    examples = sorted(examples, key=lambda x: x[0])
+  for tokens_len, example in examples:
+    tf_record_writer.write(example.SerializeToString())
 
 if __name__ == '__main__':
   main()
