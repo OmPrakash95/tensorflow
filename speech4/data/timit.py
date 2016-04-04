@@ -215,10 +215,6 @@ def convert(
     if alignment_in_phones_map:
       phone_ali = alignment_in_phones_map[uttid]
     tokens = [phone_map[phone] for phone in phones]
-    if phone_ali:
-      tokens_collapsed = [x[0] for x in itertools.groupby(tokens)]
-      phone_ali_collapsed = [x[0] for x in itertools.groupby(phone_ali)]
-      assert tokens_collapsed == phone_ali_collapsed
     vowel_count = count_vowels(phones)
     sil_count = tokens.count(5) + tokens.count(15) + tokens.count(48) + tokens.count(22)
     # tokens = [token_model_proto.token_sos] * 2 + tokens + [token_model_proto.token_eos]
@@ -234,12 +230,28 @@ def convert(
     pad_min4 = min(pad_min4, features_len / 4 - tokens_len - vowel_count)
     pad_max4 = max(pad_max4, features_len / 4 - tokens_len - vowel_count)
 
-    example = tf.train.Example(features=tf.train.Features(feature={
-        'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats.shape[0]])),
-        'features': tf.train.Feature(float_list=tf.train.FloatList(value=feats.flatten('C').tolist())),
-        'tokens': tf.train.Feature(int64_list=tf.train.Int64List(value=tokens)),
-        'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(uttid)])),
-        'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
+    # Sanity.
+    if phone_ali:
+      assert len(phone_ali) == features_len
+      tokens_collapsed = [x[0] for x in itertools.groupby(tokens)]
+      phone_ali_collapsed = [x[0] for x in itertools.groupby(phone_ali)]
+      assert tokens_collapsed == phone_ali_collapsed
+
+    if phone_ali:
+      example = tf.train.Example(features=tf.train.Features(feature={
+          'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats.shape[0]])),
+          'features': tf.train.Feature(float_list=tf.train.FloatList(value=feats.flatten('C').tolist())),
+          'alignment' : tf.train.Feature(int64_list=tf.train.Int64List(value=phone_ali)),
+          'tokens': tf.train.Feature(int64_list=tf.train.Int64List(value=tokens)),
+          'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(uttid)])),
+          'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
+    else:
+      example = tf.train.Example(features=tf.train.Features(feature={
+          'features_len': tf.train.Feature(int64_list=tf.train.Int64List(value=[feats.shape[0]])),
+          'features': tf.train.Feature(float_list=tf.train.FloatList(value=feats.flatten('C').tolist())),
+          'tokens': tf.train.Feature(int64_list=tf.train.Int64List(value=tokens)),
+          'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(uttid)])),
+          'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
     examples.append([tokens_len, example])
   print("features_width: %d" % features_width)
   print("features_len_max: %d" % features_len_max)

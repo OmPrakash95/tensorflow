@@ -20,6 +20,7 @@ REGISTER_OP("S4ParseUtterance")
     .Attr("frame_skip: int = 1")
     .Input("serialized: string")
     .Output("features: features_len_max * float")
+    .Output("alignment: features_len_max * int32")
     .Output("features_fbank: features_len_max * float")
     .Output("features_len: int64")
     .Output("features_width: int64")
@@ -62,6 +63,7 @@ class S4ParseUtterance : public OpKernel {
     const int64 batch_size = serialized_t.size();
 
     OpOutputList output_list_features;
+    OpOutputList output_list_alignment;
     OpOutputList output_list_features_fbank;
     Tensor* output_tensor_features_len = nullptr;
     Tensor* output_tensor_features_width = nullptr;
@@ -106,12 +108,16 @@ class S4ParseUtterance : public OpKernel {
       if (b == 0) {
         // Allocate the memory.
         OP_REQUIRES_OK(ctx, ctx->output_list("features", &output_list_features));
+        OP_REQUIRES_OK(ctx, ctx->output_list("alignment", &output_list_alignment));
         OP_REQUIRES_OK(ctx, ctx->output_list("features_fbank", &output_list_features_fbank));
         OP_REQUIRES_OK(ctx, ctx->output_list("features_weight", &output_list_features_weight));
         for (int64 t = 0; t < features_len_max_; ++t) {
           TensorShape feature_shape({batch_size, features_width});
           Tensor* feature_slice = nullptr;
           output_list_features.allocate(t, feature_shape, &feature_slice);
+
+          Tensor* alignment_slice = nullptr;
+          output_list_alignment.allocate(t, TensorShape({batch_size}), &alignment_slice);
 
           TensorShape feature_fbank_shape({batch_size, features_fbank_dim_});
           Tensor* feature_fbank_slice = nullptr;
@@ -121,6 +127,7 @@ class S4ParseUtterance : public OpKernel {
           output_list_features_weight.allocate(t, TensorShape({batch_size}), &feature_weight);
 
           std::fill_n(feature_slice->flat<float>().data(), feature_shape.num_elements(), 0.0f);
+          std::fill_n(feature_slice->flat<float>().data(), batch_size, 0);
           std::fill_n(feature_fbank_slice->flat<float>().data(), feature_fbank_shape.num_elements(), 0.0f);
           std::fill_n(feature_weight->flat<float>().data(), batch_size, 0.0f);
         }
@@ -201,6 +208,16 @@ class S4ParseUtterance : public OpKernel {
 
         Tensor* feature_weight = output_list_features_weight[t];
         feature_weight->flat<float>().data()[b] = 1.0f;
+      }
+
+      // See if we have an alignment.
+      if (feature_dict.find("alignment") != feature_dict.end()) {
+        const auto& alignment_iter = feature_dict.find("alignment");
+        const auto& alignment = alignment_iter->second.int64_list();
+        for (int64 t = 0; t < features_len; ++t) {
+          Tensor* alignment_slice = output_list_alignment[t];
+          alignment_slice->flat<int32>().data()[b] = alignment.value(t);
+        }
       }
 
       // Copy the text across.
