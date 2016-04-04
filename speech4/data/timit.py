@@ -6,6 +6,7 @@
 
 import argparse
 import google
+import itertools
 import kaldi_io
 import matplotlib
 matplotlib.use('Agg')
@@ -25,6 +26,7 @@ def main():
   parser.add_argument('--kaldi_scp', type=str)
   parser.add_argument('--kaldi_txt', type=str)
   parser.add_argument('--kaldi_alignment', type=str)
+  parser.add_argument('--transid_to_phoneid', type=str)
   parser.add_argument('--phones', type=str)
   parser.add_argument('--remap', type=str)
   parser.add_argument('--sort', action="store_true")
@@ -32,8 +34,24 @@ def main():
   args   = vars(parser.parse_args())
 
   convert(
-      args['kaldi_scp'], args['kaldi_txt'], args['kaldi_alignment'], args['phones'], args['remap'],
-      args['sort'], args['tf_records'])
+      args['kaldi_scp'], args['kaldi_txt'], args['kaldi_alignment'],
+      args['transid_to_phoneid'], args['phones'], args['remap'], args['sort'],
+      args['tf_records'])
+
+
+def load_transid_to_phoneid(transid_to_phoneid_txt):
+  transid_to_phoneid = {}
+  if transid_to_phoneid_txt:
+    lines = [line.strip() for line in open(transid_to_phoneid_txt, 'r')]
+    for line in lines:
+      cols = line.split(" ")
+      assert len(cols) == 2
+
+      transid = int(cols[0])
+      phoneid = int(cols[1]) - 1  # offset by 1.
+
+      transid_to_phoneid[transid] = phoneid
+  return transid_to_phoneid
 
 
 def load_phones(phones_txt):
@@ -138,11 +156,23 @@ def load_text_map(kaldi_txt, phone_map):
 
 
 def load_alignment(kaldi_alignment):
-  kaldi_ali_reader = kaldi_io.SequentialInt32VectorReader(kaldi_alignment)
   alignment_map = {}
-  for uttid, alignment in kaldi_ali_reader:
-    alignment_map[uttid] = alignment
+  if kaldi_alignment:
+    kaldi_ali_reader = kaldi_io.SequentialInt32VectorReader(kaldi_alignment)
+    for uttid, alignment in kaldi_ali_reader:
+      alignment_map[uttid] = alignment.tolist()
   return alignment_map
+
+
+def remap_alignment_to_phones(alignment_map, transid_to_phoneid_map):
+  alignment_in_phones_map = {}
+  for uttid, alignment in alignment_map.iteritems():
+    # phone_ali is in kaldi indexing
+    phone_ali = [transid_to_phoneid_map[x] for x in alignment]
+    # token_ali is in speech4 indexing
+    token_ali = [x + 5 for x in phone_ali]
+    alignment_in_phones_map[uttid] = token_ali
+  return alignment_in_phones_map
 
 
 def visualize(feats):
@@ -156,12 +186,15 @@ def visualize(feats):
 
 
 def convert(
-    kaldi_scp, kaldi_txt, kaldi_alignment, phones_txt, remap_txt, sort, tf_records):
+    kaldi_scp, kaldi_txt, kaldi_alignment, transid_to_phoneid_txt, phones_txt, remap_txt, sort, tf_records):
   token_model_proto, phone_map = create_phone_token_model(phones_txt)
-  remap_map = load_remap(remap_txt)
+  # remap_map = load_remap(remap_txt)
   text_map = load_text_map(kaldi_txt, phone_map)
-  #alignment_map = load_alignment(kaldi_alignment)
-  #remap_alignment(alignment_map, phone_map, remap_map)
+
+  # We only have this if we have GMM model (for training).
+  transid_to_phoneid_map = load_transid_to_phoneid(transid_to_phoneid_txt)
+  alignment_map = load_alignment(kaldi_alignment)
+  alignment_in_phones_map = remap_alignment_to_phones(alignment_map, transid_to_phoneid_map)
 
   tf_record_writer = tf.python_io.TFRecordWriter(tf_records)
   kaldi_feat_reader = kaldi_io.SequentialBaseFloatMatrixReader(kaldi_scp)
@@ -178,7 +211,14 @@ def convert(
   for uttid, feats in kaldi_feat_reader:
     text = text_map[uttid]
     phones = text.split(" ")
+    phone_ali = None
+    if alignment_in_phones_map:
+      phone_ali = alignment_in_phones_map[uttid]
     tokens = [phone_map[phone] for phone in phones]
+    if phone_ali:
+      tokens_collapsed = [x[0] for x in itertools.groupby(tokens)]
+      phone_ali_collapsed = [x[0] for x in itertools.groupby(phone_ali)]
+      assert tokens_collapsed == phone_ali_collapsed
     vowel_count = count_vowels(phones)
     sil_count = tokens.count(5) + tokens.count(15) + tokens.count(48) + tokens.count(22)
     # tokens = [token_model_proto.token_sos] * 2 + tokens + [token_model_proto.token_eos]
