@@ -132,7 +132,7 @@ class Timit(object):
 
 
   def to_string(self, token_ids):
-    return [self.id2str_map[x] for x in token_ids]
+    return [self.id2str_map[x].encode("ascii", "ignore") for x in token_ids]
 
 
 class SpeechModel(object):
@@ -190,7 +190,7 @@ class SpeechModel(object):
       self.global_step = tf.Variable(0, trainable=False)
 
       self.create_input()
-      self.create_encoder_cctc()
+      self.create_encoder_cctc(bidirectional=self.model_params.encoder_bidirectional)
       self.create_decoder_cctc(mode)
       self.create_loss_cctc()
       if mode == "train": self.create_optimizer()
@@ -223,8 +223,9 @@ class SpeechModel(object):
 
     assert self.model_params.features_width
     assert self.model_params.frame_stack
-    self.features, _, self.features_len, _, _, self.text, self.tokens, self.tokens_pinyin, self.tokens_len, self.tokens_weights, self.tokens_pinyin_weights, self.uttid = s4_parse_utterance(
+    self.features, self.alignment, self.alignment_weight, _, self.features_len, _, _, self.text, self.tokens, self.tokens_pinyin, self.tokens_len, self.tokens_weights, self.tokens_pinyin_weights, self.uttid = s4_parse_utterance(
         serialized, features_len_max=self.model_params.features_len_max,
+        alignment_len_max=self.model_params.features_len_max / 4,
         tokens_len_max=self.model_params.tokens_len_max + 1,
         frame_stack=self.model_params.frame_stack,
         frame_skip=self.model_params.frame_skip)
@@ -233,6 +234,10 @@ class SpeechModel(object):
       feature.set_shape([self.batch_size, self.model_params.features_width * self.model_params.frame_stack])
     for token in self.tokens:
       token.set_shape([self.batch_size])
+    for alignment in self.alignment:
+      alignment.set_shape([self.batch_size])
+    for alignment_weight in self.alignment_weight:
+      alignment_weight.set_shape([self.batch_size])
     self.features_len.set_shape([self.batch_size])
 
 
@@ -263,7 +268,7 @@ class SpeechModel(object):
     self.encoder_embedding = [encoder_embedding, self.encoder_states[-1][1]]
 
 
-  def create_encoder_cctc(self):
+  def create_encoder_cctc(self, bidirectional=False):
     print("creating encoder...")
     self.encoder_states = [[self.features, self.features_len]]
 
@@ -271,21 +276,24 @@ class SpeechModel(object):
     assert self.model_params.encoder_layer
     for idx, s in enumerate(self.model_params.encoder_layer):
       with vs.variable_scope("encoder_%d" % (idx + 1)) as scope:
-        self.create_monolithic_encoder_layer(input_time_stride=int(s), scope=scope)
+        self.create_monolithic_encoder_layer(
+            input_time_stride=int(s), bidirectional=bidirectional, scope=scope)
 
 
   def create_decoder_cctc(self, mode):
     print("creating decoder...")
     with vs.variable_scope("decoder"):
-      self.decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(
-          self.model_params.decoder_cell_size)
       self.decoder_cell = tf.nn.rnn_cell.GRUCell(
+          self.model_params.decoder_cell_size)
+      self.decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(
           self.model_params.decoder_cell_size)
 
       if self.model_params.cctc.xent:
-        self.labels, self.labels_weight = gen_gru_ops.cctc_bootstrap_alignment(
-            self.tokens, self.tokens_len, self.encoder_states[-1][1],
-            len(self.encoder_states[-1][0]), lpad=10, rpad=2)
+        self.labels = self.alignment
+        self.labels_weight = self.alignment_weight
+        #self.labels, self.labels_weight = gen_gru_ops.cctc_bootstrap_alignment(
+        #    self.tokens, self.tokens_len, self.encoder_states[-1][1],
+        #    len(self.encoder_states[-1][0]), lpad=10, rpad=2)
       elif self.model_params.cctc.weakly_supervised:
         self.labels = []
         self.labels_weight = []
@@ -301,7 +309,7 @@ class SpeechModel(object):
           vs.get_variable_scope().reuse_variables()
 
         # What do we condition on?
-        if decoder_time_idx == 0:
+        if decoder_time_idx == 0 or True == True:
           blank_token = 4
           inp = tf.constant(
               blank_token, shape=[self.batch_size], dtype=tf.int32)
@@ -349,11 +357,17 @@ class SpeechModel(object):
 
         if self.model_params.cctc.weakly_supervised:
           if mode == "train":
+            if self.model_params.encoder_bidirectional:
+              lpad = 2
+              rpad = 2
+            else:
+              lpad = 6
+              rpad = 0
             label, label_weight = gen_gru_ops.cctc_weakly_supervised_alignment_label(
                 self.tokens, self.tokens_len, conditioned_path,
                 self.encoder_states[-1][1], prob,
                 seed=decoder_time_idx + 2016, seed2=decoder_time_idx + 43110,
-                lpad=10, rpad=2, hlen_max=len(self.encoder_states[-1][0]))
+                lpad=lpad, rpad=rpad, hlen_max=len(self.encoder_states[-1][0]))
             self.labels.append(label)
             self.labels_weight.append(label_weight)
           else:
@@ -373,8 +387,8 @@ class SpeechModel(object):
     # Create the encoder layers.
     assert self.model_params.encoder_layer
     for idx, s in enumerate(self.model_params.encoder_layer):
-      with vs.variable_scope("encoder_%d" % (idx + 1)) as scope:
-        self.create_monolithic_encoder_layer(input_time_stride=int(s), scope=scope)
+      with vs.variable_scope("encoder_%d" % (idx + 1)):
+        self.create_monolithic_encoder_layer(input_time_stride=int(s))
 
     # Concat the encoder states.
     encoder_states = self.encoder_states[-1][0]
@@ -386,18 +400,31 @@ class SpeechModel(object):
     self.encoder_states.append([encoder_states, self.encoder_states[-1][1]])
 
 
-  def create_monolithic_encoder_layer(self, input_time_stride=1, scope=None):
+  def create_monolithic_encoder_layer(
+      self, input_time_stride, bidirectional, scope=None):
     input_time_stride_t = tf.constant(
         input_time_stride, shape=[self.batch_size], dtype=tf.int64)
     sequence_len = tf.div(self.encoder_states[-1][1], input_time_stride_t)
 
-    # xs = self.encoder_states[-1][0][0::input_time_stride]
-    xs = []
-    for idx in range(input_time_stride - 1, len(self.encoder_states[-1][0]), input_time_stride):
-      xs.append(self.encoder_states[-1][0][idx])
-    self.encoder_states.append([gru_ops.gru(
-        cell_size=self.model_params.encoder_cell_size,
-        sequence_len=sequence_len, xs=xs)[-1], sequence_len])
+    xs = self.encoder_states[-1][0][input_time_stride - 1::input_time_stride]
+    #xs = []
+    #for idx in range(input_time_stride - 1, len(self.encoder_states[-1][0]), input_time_stride):
+    #  xs.append(self.encoder_states[-1][0][idx])
+    if bidirectional:
+      with vs.variable_scope("fwd"):
+        fwd = gru_ops.gru(
+            cell_size=self.model_params.encoder_cell_size,
+            sequence_len=sequence_len, xs=xs)[-1]
+      with vs.variable_scope("bwd"):
+        bwd = rnn._reverse_seq(gru_ops.gru(
+            cell_size=self.model_params.encoder_cell_size,
+            sequence_len=sequence_len, xs=rnn._reverse_seq(xs, sequence_len))[-1], sequence_len)
+      self.encoder_states.append([[array_ops.concat(1, [fw, bw])
+                                   for fw, bw in zip(fwd, bwd)], sequence_len])
+    else:
+      self.encoder_states.append([gru_ops.gru(
+          cell_size=self.model_params.encoder_cell_size,
+          sequence_len=sequence_len, xs=xs)[-1], sequence_len])
 
   def create_dynamic_encoder(self):
     print("creating dynamic encoder...")
@@ -846,7 +873,7 @@ class SpeechModel(object):
       assert self.optimization_params.adadelta.epsilon
       opt = tf.train.AdadeltaOptimizer(
           learning_rate=self.optimization_params.adadelta.learning_rate,
-          decay_rate=self.optimization_params.adadelta.decay_rate,
+          rho=self.optimization_params.adadelta.decay_rate,
           epsilon=self.optimization_params.adadelta.epsilon)
     elif self.optimization_params.type == "adam":
       opt = tf.train.AdamOptimizer(
@@ -960,6 +987,7 @@ class SpeechModel(object):
       targets["edit_distance"] = self.edit_distance
     if hasattr(self, "labels"):
       targets["labels"] = self.labels
+      targets["labels_weight"] = self.labels_weight
 
     if update:
       targets["updates"] = self.updates
@@ -978,7 +1006,7 @@ class SpeechModel(object):
         self.compute_edit_distance(fetches, results_proto.edit_distance)
     if hasattr(self, "labels"):
       self.print_labels_ctcc(fetches)
-    self.visualize_alignment(fetches)
+    #self.visualize_alignment(fetches)
    
     step_time = time.time() - start_time
     profile_proto.secs = profile_proto.secs + step_time
@@ -1031,7 +1059,7 @@ class SpeechModel(object):
 
           decode_results_file.write("ref:   %s\n" % self.timit.to_string(ref))
           decode_results_file.write("hyp:   %s\n" % self.timit.to_string(hyp))
-          decode_results_file.write("hyp_b: %s\n" % self.timit.to_string(hyp_b))
+          #decode_results_file.write("hyp_b: %s\n" % self.timit.to_string(hyp_b))
 
         edit_distance = las_utils.LevensteinDistance(ref, hyp)
 
@@ -1041,10 +1069,13 @@ class SpeechModel(object):
 
   def print_labels_ctcc(self, fetches):
     labels = np.stack(fetches["labels"])
+    labels_weight = np.stack(fetches["labels_weight"])
     encoder_len = fetches["encoder_len"]
     for b in range(self.batch_size):
       labels_b = [x[b] for x in labels]
       labels_b = labels_b[:encoder_len[b]]
+      labels_weight_b = [x[b] for x in labels_weight]
+      labels_weight_b = labels_weight_b[encoder_len[b]:]
 
 
   def visualize_alignment(self, fetches):
@@ -1105,9 +1136,11 @@ def create_dataset_params(name, path, size):
 def load_dataset_params(mode):
   if FLAGS.dataset == "wsj":
     wsj = {}
-    wsj["train"] = create_dataset_params("train_si284", "speech4/data/train_si284.tfrecords", 37416)
-    wsj["valid"] = create_dataset_params("test_dev93", "speech4/data/test_dev93.tfrecords", 503)
-    wsj["test"] = create_dataset_params("test_eval92", "speech4/data/test_eval92.tfrecords", 333)
+    wsj["train"] = create_dataset_params("train_si284", "/data-local/data/tfrecords/wsj_train_si284.tfrecords", 37416)
+    wsj["valid"] = create_dataset_params("test_dev93", "/data-local/data/tfrecords/wsj_test_eval92.tfrecords", 503)
+    wsj["test"] = create_dataset_params("test_eval92", "/data-local/data/tfrecords/wsj_test_dev93.tfrecords", 333)
+    for key in wsj:
+      wsj[key].feature_size = 120
     return wsj[mode]
   elif FLAGS.dataset == "gale_mandarin":
     gale = {}
@@ -1130,6 +1163,7 @@ def load_dataset_params(mode):
     timit["test"].tokens_len_max = 68
     for key in timit:
       timit[key].features_size = 69
+      timit[key].features_size = 207
     return timit[mode]
 
   raise Exception("Unknown dataset %s" % FLAGS.dataset)
@@ -1228,6 +1262,7 @@ def run(mode, epoch, ckpt=None):
       profile_proto = speech4_pb2.ProfileProto()
       print("epoch: %d" % epoch)
       speech_model.step_epoch(sess, mode == "train", results_proto, profile_proto)
+      print str(results_proto)
 
       if mode == "train":
         prefix = os.path.join(FLAGS.logdir, "%d" % (epoch + 1))
