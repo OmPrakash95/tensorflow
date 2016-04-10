@@ -1,0 +1,5 @@
+type: "gd"
+gd {
+  learning_rate: 0.1
+}
+max_gradient_norm: 100.0
