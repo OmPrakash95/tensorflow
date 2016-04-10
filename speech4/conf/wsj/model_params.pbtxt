@@ -1,0 +1,19 @@
+type: "cctc"
+features_width: 120
+features_len_max: 2560
+tokens_len_max: 256
+vocab_size: 64
+embedding_size: 32
+encoder_cell_size: 256
+decoder_cell_size: 256
+encoder_layer: "1"
+encoder_layer: "1"
+encoder_layer: "2"
+encoder_layer: "1"
+cctc {
+  xent: false
+  weakly_supervised: false
+  reinforce: false
+  sample: true
+  wsj_greedy_supervised: true
+}
