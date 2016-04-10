@@ -1,0 +1,212 @@
+tokens {
+  token_string: "<S>"
+}
+tokens {
+  token_id: 1
+  token_string: "</S>"
+}
+tokens {
+  token_id: 2
+  token_string: " "
+}
+tokens {
+  token_id: 3
+  token_string: "<UNK>"
+}
+tokens {
+  token_id: 4
+  token_string: "~"
+}
+tokens {
+  token_id: 5
+  token_string: "A"
+}
+tokens {
+  token_id: 6
+  token_string: "B"
+}
+tokens {
+  token_id: 7
+  token_string: "C"
+}
+tokens {
+  token_id: 8
+  token_string: "D"
+}
+tokens {
+  token_id: 9
+  token_string: "E"
+}
+tokens {
+  token_id: 10
+  token_string: "F"
+}
+tokens {
+  token_id: 11
+  token_string: "G"
+}
+tokens {
+  token_id: 12
+  token_string: "H"
+}
+tokens {
+  token_id: 13
+  token_string: "I"
+}
+tokens {
+  token_id: 14
+  token_string: "J"
+}
+tokens {
+  token_id: 15
+  token_string: "K"
+}
+tokens {
+  token_id: 16
+  token_string: "L"
+}
+tokens {
+  token_id: 17
+  token_string: "M"
+}
+tokens {
+  token_id: 18
+  token_string: "N"
+}
+tokens {
+  token_id: 19
+  token_string: "O"
+}
+tokens {
+  token_id: 20
+  token_string: "P"
+}
+tokens {
+  token_id: 21
+  token_string: "Q"
+}
+tokens {
+  token_id: 22
+  token_string: "R"
+}
+tokens {
+  token_id: 23
+  token_string: "S"
+}
+tokens {
+  token_id: 24
+  token_string: "T"
+}
+tokens {
+  token_id: 25
+  token_string: "U"
+}
+tokens {
+  token_id: 26
+  token_string: "V"
+}
+tokens {
+  token_id: 27
+  token_string: "W"
+}
+tokens {
+  token_id: 28
+  token_string: "X"
+}
+tokens {
+  token_id: 29
+  token_string: "Y"
+}
+tokens {
+  token_id: 30
+  token_string: "Z"
+}
+tokens {
+  token_id: 31
+  token_string: "0"
+}
+tokens {
+  token_id: 32
+  token_string: "1"
+}
+tokens {
+  token_id: 33
+  token_string: "2"
+}
+tokens {
+  token_id: 34
+  token_string: "3"
+}
+tokens {
+  token_id: 35
+  token_string: "4"
+}
+tokens {
+  token_id: 36
+  token_string: "5"
+}
+tokens {
+  token_id: 37
+  token_string: "6"
+}
+tokens {
+  token_id: 38
+  token_string: "7"
+}
+tokens {
+  token_id: 39
+  token_string: "8"
+}
+tokens {
+  token_id: 40
+  token_string: "9"
+}
+tokens {
+  token_id: 41
+  token_string: "$"
+}
+tokens {
+  token_id: 42
+  token_string: "&"
+}
+tokens {
+  token_id: 43
+  token_string: "/"
+}
+tokens {
+  token_id: 44
+  token_string: "-"
+}
+tokens {
+  token_id: 45
+  token_string: "\'"
+}
+tokens {
+  token_id: 46
+  token_string: "."
+}
+tokens {
+  token_id: 47
+  token_string: "!"
+}
+tokens {
+  token_id: 48
+  token_string: "?"
+}
+tokens {
+  token_id: 49
+  token_string: ","
+}
+tokens {
+  token_id: 50
+  token_string: ":"
+}
+token_string_sos: "<S>"
+token_eos: 1
+token_string_eos: "</S>"
+token_eow: 2
+token_string_eow: " "
+token_unk: 3
+token_string_unk: "<UNK>"
+token_blank: 4
+token_string_blank: "<BLANK>"
