@@ -354,16 +354,16 @@ class CCTCWsjGreedySupervisedAlignmentOp : public OpKernel {
       CHECK_GE(lpad, 0);
       CHECK_GE(rpad, 0);
 
-      const int32 wpad =
-        count_eow == 0
-            ? 0
-            : std::min(static_cast<int32>((ali_len - lpad - rpad - ref.size()) / count_eow), word_pad_);
-      const int32 vpad =
-        count_vowels == 0
-            ? 0
-            : std::min(static_cast<int32>((ali_len - lpad - rpad - ref.size() - wpad * count_eow) / count_vowels), vowel_pad_);
-      CHECK_GE(wpad, 0);
-      CHECK_GE(vpad, 0);
+      int32 wpad = count_eow == 0
+          ? 0
+          : std::min((ali_len - lpad_ - rpad_ - static_cast<int32>(ref.size()) - 1) / count_eow,
+                     word_pad_);
+      wpad = std::max(wpad, 0);
+      int32 vpad = count_vowels == 0
+          ? 0
+          : std::min((ali_len - lpad_ - rpad_ - static_cast<int32>(ref.size()) - wpad * count_eow - 1) / count_vowels,
+                     vowel_pad_);
+      vpad = std::max(vpad, 0);
 
       // Account for the lpad.
       if (tlen_ >= lpad) {
@@ -384,8 +384,17 @@ class CCTCWsjGreedySupervisedAlignmentOp : public OpKernel {
           // Number of blanks we still have to emit.
           const int32 b_t = c_t - d_t;
           if (b_t < 0) {
+            LOG(INFO) << VectorToString(ref);
             LOG(INFO) << VectorToString(hyp);
             LOG(INFO) << VectorToString(hyp_uncollapsed);
+            LOG(INFO) << "wpad: " << wpad;
+            LOG(INFO) << "vpad: " << vpad;
+            LOG(INFO) << tlen_;
+            LOG(INFO) << count_vowels;
+            LOG(INFO) << lpad;
+            LOG(INFO) << ali_len;
+            LOG(INFO) << ref.size();
+            LOG(INFO) << ali_len - lpad_ - rpad_ - static_cast<int32>(ref.size());
           }
           CHECK_GE(b_t, 0);
 
@@ -419,7 +428,7 @@ class CCTCWsjGreedySupervisedAlignmentOp : public OpKernel {
               static_cast<float>(frames) / static_cast<float>(ref_size + count_eow * wpad + count_vowels * vpad);
           const int32 tokens =
               (hyp.size() + CountEOW(eow_token_, hyp) * wpad + CountVowel(hyp) * vpad);
-          if (tokens < (tlen_ - lpad) / f_per_t) {
+          if (tokens <= (tlen_ - lpad) / f_per_t) {
             l_t = token_next;
           }
         }

@@ -203,7 +203,10 @@ class S4ParseUtterance : public OpKernel {
         // Copy the features from the proto to our Tensor.
         const int64 frame_remaining = frame_total - t * frame_skip_;
         CHECK_GE(frame_remaining, 0);
-        const int64 copy_width = std::min(features_width, frame_remaining);
+        // const int64 copy_width = std::min(features_width, frame_remaining);
+        const int64 copy_width = features_width;
+        CHECK_EQ(frame_skip_, 1);
+        CHECK_EQ(frame_stack_, 1);
 
         Tensor* feature_slice = output_list_features[t];
         Tensor* feature_fbank_slice = output_list_features_fbank[t];
