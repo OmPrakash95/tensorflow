@@ -52,6 +52,7 @@ message CCTCParamsProto {
   bool reinforce = 3;
   bool sample = 4;
   bool discount_factor = 5;
+  bool wsj_greedy_supervised = 6;
 };
 
 message ModelParamsProto {
@@ -63,17 +64,18 @@ message ModelParamsProto {
   int64 encoder_cell_size = 6;
   int64 decoder_cell_size = 7;
   int64 attention_embedding_size = 8;
+  bool encoder_bidirectional = 9;
 
   // placeholder (old decoder), decoder_greedy (greedy decoder).
-  string input_layer = 9;
+  string input_layer = 10;
 
-  bool encoder_only = 10;
-  bool encoder_lm = 11;
+  bool encoder_only = 11;
+  bool encoder_lm = 12;
 
-  AttentionParamsProto attention_params = 12;
+  AttentionParamsProto attention_params = 13;
 
-  string mode = 13;
-  string type = 14;
+  string mode = 30;
+  string type = 31;
 
   int64 frame_stack = 20;
   int64 frame_skip = 21;

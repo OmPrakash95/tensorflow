@@ -213,6 +213,28 @@ REGISTER_OP("CCTCWeaklySupervisedAlignmentLabel")
 )doc");
 
 
+REGISTER_OP("CCTCWsjGreedySupervisedAlignment")
+    .Attr("seed: int = 0")
+    .Attr("seed2: int = 0")
+    .Attr("eow_token: int = 2")
+    .Attr("blank_token: int = 4")
+    .Attr("lpad: int = 10")
+    .Attr("rpad: int = 2")
+    .Attr("vowel_pad: int = 1")
+    .Attr("word_pad: int = 2")
+    .Attr("flen_max: int")
+    .Attr("tlen: int")
+    .Input("ref: flen_max * int32")
+    .Input("ref_len: int64")
+    .Input("hyp: tlen * int32")
+    .Input("hyp_len: int64")
+    .Input("hyp_prob: float")
+    .Output("label: int32")
+    .Output("label_weight: float")
+    .Doc(R"doc(
+)doc");
+
+
 REGISTER_OP("CCTCBootstrapAlignment")
     .Attr("blank_token: int = 4")
     .Attr("lpad: int = 10")

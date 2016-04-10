@@ -135,6 +135,26 @@ class Timit(object):
     return [self.id2str_map[x].encode("ascii", "ignore") for x in token_ids]
 
 
+class Wsj(object):
+  def __init__(self):
+    self.token_model_proto = try_load_proto("speech4/conf/wsj/token_model.pbtxt", token_model_pb2.TokenModelProto())
+
+    self.id2str_map = {}
+    self.str2id_map = {}
+    for token in self.token_model_proto.tokens:
+      self.id2str_map[token.token_id] = token.token_string
+      self.str2id_map[token.token_string] = token.token_id
+
+  def to_string(self, token_ids):
+    string = ""
+    for token_id in token_ids:
+      if token_id in self.id2str_map:
+        string += self.id2str_map[token_id].encode("ascii", "ignore")
+      else:
+        string += "*"
+    return string
+
+
 class SpeechModel(object):
   def __init__(self, sess, mode, dataset_params, model_params, optimization_params, batch_size=16, epoch=0, seed=1):
     dataset_params = try_load_proto(dataset_params, dataset_params)
@@ -147,6 +167,8 @@ class SpeechModel(object):
 
     if FLAGS.dataset == "timit":
       self.timit = Timit()
+    elif FLAGS.dataset == "wsj":
+      self.wsj = Wsj()
 
     self.batch_size = batch_size
     if mode == "test":
@@ -297,6 +319,9 @@ class SpeechModel(object):
       elif self.model_params.cctc.weakly_supervised:
         self.labels = []
         self.labels_weight = []
+      elif self.model_params.cctc.wsj_greedy_supervised:
+        self.labels = []
+        self.labels_weight = []
 
       state = None
       logits = []
@@ -309,7 +334,7 @@ class SpeechModel(object):
           vs.get_variable_scope().reuse_variables()
 
         # What do we condition on?
-        if decoder_time_idx == 0 or True == True:
+        if decoder_time_idx == 0:
           blank_token = 4
           inp = tf.constant(
               blank_token, shape=[self.batch_size], dtype=tf.int32)
@@ -319,6 +344,8 @@ class SpeechModel(object):
         elif self.model_params.cctc.xent:
           inp = self.labels[decoder_time_idx - 1]
         elif self.model_params.cctc.weakly_supervised:
+          inp = self.labels[-1]
+        elif self.model_params.cctc.wsj_greedy_supervised:
           inp = self.labels[-1]
         elif self.model_params.cctc.reinforce and self.model_params.cctc.sample:
           inp = gen_gru_ops.uniform_distribution_sampler(
@@ -364,10 +391,30 @@ class SpeechModel(object):
               lpad = 6
               rpad = 0
             label, label_weight = gen_gru_ops.cctc_weakly_supervised_alignment_label(
-                self.tokens, self.tokens_len, conditioned_path,
-                self.encoder_states[-1][1], prob,
+                self.tokens, self.tokens_len, conditioned_path, self.encoder_states[-1][1], prob,
                 seed=decoder_time_idx + 2016, seed2=decoder_time_idx + 43110,
                 lpad=lpad, rpad=rpad, hlen_max=len(self.encoder_states[-1][0]))
+            self.labels.append(label)
+            self.labels_weight.append(label_weight)
+          else:
+            self.labels.append(tf.constant(blank_token, shape=[self.batch_size], dtype=tf.int32))
+            self.labels_weight.append(tf.constant(1.0, shape=[self.batch_size], dtype=tf.float32))
+        elif self.model_params.cctc.wsj_greedy_supervised:
+          if mode == "train":
+            if self.model_params.encoder_bidirectional:
+              lpad = 20
+              rpad = 10
+            else:
+              lpad = 30
+              rpad = 10
+            label, label_weight = gen_gru_ops.cctc_wsj_greedy_supervised_alignment(
+                self.tokens, self.tokens_len, conditioned_path, self.encoder_states[-1][1], prob,
+                seed=decoder_time_idx + 2016, seed2=decoder_time_idx + 43110,
+                lpad=lpad, rpad=rpad, vowel_pad=2, word_pad=4)
+            #label, label_weight = gen_gru_ops.cctc_weakly_supervised_alignment_label(
+            #    self.tokens, self.tokens_len, conditioned_path, self.encoder_states[-1][1], prob,
+            #    seed=decoder_time_idx + 2016, seed2=decoder_time_idx + 43110,
+            #    lpad=lpad, rpad=rpad, hlen_max=len(self.encoder_states[-1][0]))
             self.labels.append(label)
             self.labels_weight.append(label_weight)
           else:
@@ -803,6 +850,8 @@ class SpeechModel(object):
       self.create_loss_cctc_xent()
     if self.model_params.cctc.weakly_supervised:
       self.create_loss_cctc_weakly_supervised_label()
+    if self.model_params.cctc.wsj_greedy_supervised:
+      self.create_loss_log_prob()
     self.create_loss_cctc_edit_distance()
 
 
@@ -911,7 +960,7 @@ class SpeechModel(object):
 
 
   def step_epoch(self, sess, update, results_proto, profile_proto):
-    steps_per_report = 100
+    steps_per_report = 10
     if update == False:
       steps_per_report = 1
     for idx in range(self.dataset_params.size / self.batch_size):
@@ -979,6 +1028,8 @@ class SpeechModel(object):
       targets["tokens_weights"] = self.labels_weight
     elif self.model_params.type == "cctc" and self.model_params.cctc.weakly_supervised:
       targets["tokens_weights"] = self.labels_weight
+    elif self.model_params.type == "cctc" and self.model_params.cctc.wsj_greedy_supervised:
+      targets["tokens_weights"] = self.labels_weight
     else:
       targets["tokens_weights"] = self.tokens_weights[:-1]
     if hasattr(self, "correct"):
@@ -1036,6 +1087,23 @@ class SpeechModel(object):
     edit_distance_proto.ref_length += ref_length
 
 
+  def visualize_feats_alignment(self, feats, alignment):
+    text = alignment.replace("~", "")
+
+    time_factor = len(self.encoder_states[-1][0]) / len(self.features)
+    alignment.ljust(len(feats), "~")
+
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    ax.set_title(text)
+    ax.imshow(feats, interpolation="none")
+    ax.get_yaxis().set_visible(False)
+    ax.set_xticks(np.arange(0, feats.shape[1], 2), minor=False)
+    ax.set_xticklabels(range(0, len(alignment)), alignment)
+    ax.set_xlabel(alignment, fontsize=4)
+    fig.savefig(os.path.join(FLAGS.logdir, "fig_alignment_%s.png" % text.replace(" ", "_")))
+
+
   def compute_edit_distance_ctcc(self, fetches, edit_distance_proto):
     assert "edit_distance" in fetches
 
@@ -1043,12 +1111,22 @@ class SpeechModel(object):
     with open(decode_results_filepath, "a") as decode_results_file:
       refs = np.stack(fetches["tokens"])
       hyps = np.stack(fetches["hyp"])
+      labs = np.stack(fetches["labels"])
+
+      #feats = np.stack(fetches["features"])
+      #feats_len = fetches["features_len"]
       for b in range(self.batch_size):
         ref = filter(lambda a: a != 0, [x[b] for x in refs])
         hyp = filter(lambda a: a != 4, [x[b] for x in hyps])
         hyp_b = [x[b] for x in hyps]
+        lab_b = [x[b] for x in labs]
+
+        #feats_b = np.array([x[b] for x in feats[:feats_len[b]]])
+        #feats_b = feats_b.transpose()[:40,:]
         while hyp_b and hyp_b[-1] == 4:
           hyp_b.pop()
+        while lab_b and lab_b[-1] == 4:
+          lab_b.pop()
 
         if FLAGS.dataset == "timit":
           # Remap our phones before distance comparison.
@@ -1060,12 +1138,19 @@ class SpeechModel(object):
           decode_results_file.write("ref:   %s\n" % self.timit.to_string(ref))
           decode_results_file.write("hyp:   %s\n" % self.timit.to_string(hyp))
           #decode_results_file.write("hyp_b: %s\n" % self.timit.to_string(hyp_b))
+        elif FLAGS.dataset == "wsj":
+          decode_results_file.write("ref:   %s\n" % self.wsj.to_string(ref))
+          decode_results_file.write("hyp:   %s\n" % self.wsj.to_string(hyp))
+          alignment_b = self.wsj.to_string(lab_b)
+          decode_results_file.write("lab_b: %s\n" % alignment_b)
+
+          #self.visualize_feats_alignment(feats_b, alignment_b)
 
         edit_distance = las_utils.LevensteinDistance(ref, hyp)
 
         edit_distance_proto.edit_distance += edit_distance
         edit_distance_proto.ref_length += len(ref)
-
+    # raise Exception("DONE!")
 
   def print_labels_ctcc(self, fetches):
     labels = np.stack(fetches["labels"])
@@ -1137,10 +1222,16 @@ def load_dataset_params(mode):
   if FLAGS.dataset == "wsj":
     wsj = {}
     wsj["train"] = create_dataset_params("train_si284", "/data-local/data/tfrecords/wsj_train_si284.tfrecords", 37416)
+    wsj["train"].features_len_max = 2433
+    wsj["train"].tokens_len_max = 253
     wsj["valid"] = create_dataset_params("test_dev93", "/data-local/data/tfrecords/wsj_test_eval92.tfrecords", 503)
+    wsj["valid"].features_len_max = 1986
+    wsj["valid"].tokens_len_max = 199
     wsj["test"] = create_dataset_params("test_eval92", "/data-local/data/tfrecords/wsj_test_dev93.tfrecords", 333)
+    wsj["test"].features_len_max = 1447
+    wsj["test"].tokens_len_max = 194
     for key in wsj:
-      wsj[key].feature_size = 120
+      wsj[key].features_size = 120
     return wsj[mode]
   elif FLAGS.dataset == "gale_mandarin":
     gale = {}

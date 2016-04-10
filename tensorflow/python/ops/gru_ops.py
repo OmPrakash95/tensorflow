@@ -301,6 +301,13 @@ def _CCTCWeaklySupervisedAlignmentLabelShape(op):
   return [tensor_shape.TensorShape([batch_size])] * 2
 
 
+ops.NoGradient("CCTCWsjGreedySupervisedAlignment")
+@ops.RegisterShape("CCTCWsjGreedySupervisedAlignment")
+def _CCTCWsjGreedySupervisedAlignmentShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  return [tensor_shape.TensorShape([batch_size])] * 2
+
+
 @ops.RegisterShape("CCTCBootstrapAlignment")
 def _CCTCBootstrapAlignmentShape(op):
   batch_size = op.inputs[0].get_shape()[0].value

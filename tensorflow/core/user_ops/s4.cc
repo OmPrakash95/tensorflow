@@ -13,6 +13,7 @@ namespace {
 REGISTER_OP("S4ParseUtterance")
     .Attr("features_fbank_dim: int = 40")
     .Attr("features_len_max: int")
+    .Attr("alignment_len_max: int")
     .Attr("tokens_len_max: int")
     .Attr("eow_weight: float = 1.0")
     .Attr("token_model: string = 'speech4/conf/token_model_character_simple.pbtxt'")
@@ -20,7 +21,8 @@ REGISTER_OP("S4ParseUtterance")
     .Attr("frame_skip: int = 1")
     .Input("serialized: string")
     .Output("features: features_len_max * float")
-    .Output("alignment: features_len_max * int32")
+    .Output("alignment: alignment_len_max * int32")
+    .Output("alignment_weight: alignment_len_max * float")
     .Output("features_fbank: features_len_max * float")
     .Output("features_len: int64")
     .Output("features_width: int64")
@@ -41,6 +43,7 @@ class S4ParseUtterance : public OpKernel {
   explicit S4ParseUtterance(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("features_fbank_dim", &features_fbank_dim_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("features_len_max", &features_len_max_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("alignment_len_max", &alignment_len_max_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("tokens_len_max", &tokens_len_max_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("eow_weight", &eow_weight_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("frame_stack", &frame_stack_));
@@ -64,6 +67,7 @@ class S4ParseUtterance : public OpKernel {
 
     OpOutputList output_list_features;
     OpOutputList output_list_alignment;
+    OpOutputList output_list_alignment_weight;
     OpOutputList output_list_features_fbank;
     Tensor* output_tensor_features_len = nullptr;
     Tensor* output_tensor_features_width = nullptr;
@@ -109,15 +113,13 @@ class S4ParseUtterance : public OpKernel {
         // Allocate the memory.
         OP_REQUIRES_OK(ctx, ctx->output_list("features", &output_list_features));
         OP_REQUIRES_OK(ctx, ctx->output_list("alignment", &output_list_alignment));
+        OP_REQUIRES_OK(ctx, ctx->output_list("alignment_weight", &output_list_alignment_weight));
         OP_REQUIRES_OK(ctx, ctx->output_list("features_fbank", &output_list_features_fbank));
         OP_REQUIRES_OK(ctx, ctx->output_list("features_weight", &output_list_features_weight));
         for (int64 t = 0; t < features_len_max_; ++t) {
           TensorShape feature_shape({batch_size, features_width});
           Tensor* feature_slice = nullptr;
           output_list_features.allocate(t, feature_shape, &feature_slice);
-
-          Tensor* alignment_slice = nullptr;
-          output_list_alignment.allocate(t, TensorShape({batch_size}), &alignment_slice);
 
           TensorShape feature_fbank_shape({batch_size, features_fbank_dim_});
           Tensor* feature_fbank_slice = nullptr;
@@ -127,9 +129,18 @@ class S4ParseUtterance : public OpKernel {
           output_list_features_weight.allocate(t, TensorShape({batch_size}), &feature_weight);
 
           std::fill_n(feature_slice->flat<float>().data(), feature_shape.num_elements(), 0.0f);
-          std::fill_n(feature_slice->flat<float>().data(), batch_size, 0);
           std::fill_n(feature_fbank_slice->flat<float>().data(), feature_fbank_shape.num_elements(), 0.0f);
           std::fill_n(feature_weight->flat<float>().data(), batch_size, 0.0f);
+        }
+
+        for (int64 t = 0; t < alignment_len_max_; ++t) {
+          Tensor* alignment_slice = nullptr;
+          output_list_alignment.allocate(t, TensorShape({batch_size}), &alignment_slice);
+          std::fill_n(alignment_slice->flat<int32>().data(), batch_size, 0);
+
+          Tensor* alignment_weight_slice = nullptr;
+          output_list_alignment_weight.allocate(t, TensorShape({batch_size}), &alignment_weight_slice);
+          std::fill_n(alignment_weight_slice->flat<float>().data(), batch_size, 0.0f);
         }
 
         TensorShape x({batch_size});
@@ -214,9 +225,17 @@ class S4ParseUtterance : public OpKernel {
       if (feature_dict.find("alignment") != feature_dict.end()) {
         const auto& alignment_iter = feature_dict.find("alignment");
         const auto& alignment = alignment_iter->second.int64_list();
-        for (int64 t = 0; t < features_len; ++t) {
+        for (int64 t = 0; t < alignment.value().size(); ++t) {
           Tensor* alignment_slice = output_list_alignment[t];
-          alignment_slice->flat<int32>().data()[b] = alignment.value(t);
+          int32 phone = alignment.value(t);
+          alignment_slice->flat<int32>().data()[b] = phone;
+
+          Tensor* alignment_weight_slice = output_list_alignment_weight[t];
+          if (phone == 4) {
+            alignment_weight_slice->flat<float>().data()[b] = 0.1f;
+          } else {
+            alignment_weight_slice->flat<float>().data()[b] = 1.0f;
+          }
         }
       }
 
@@ -283,6 +302,7 @@ class S4ParseUtterance : public OpKernel {
  protected:
   int64 features_fbank_dim_;
   int64 features_len_max_;
+  int64 alignment_len_max_;
   int64 tokens_len_max_;
   int64 tokens_pinyin_len_max_;
   float eow_weight_;

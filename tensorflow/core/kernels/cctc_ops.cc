@@ -53,15 +53,16 @@ void ExtractSequence(
 }
 
 void CollapseSequence(
-    int32 blank_token, std::vector<std::vector<int32>>* sequences) {
-  for (int64 b = 0; b < static_cast<int64>(sequences->size()); ++b) {
+    int32 blank_token, const std::vector<std::vector<int32>>& sequences,
+    std::vector<std::vector<int32>>* collapsed_sequences) {
+  for (size_t b = 0; b < sequences.size(); ++b) {
     std::vector<int32> filtered;
     std::copy_if(
-        (*sequences)[b].begin(), (*sequences)[b].end(),
+        sequences[b].begin(), sequences[b].end(),
         std::back_inserter(filtered), [blank_token](const int32 x)->bool {
             return x != blank_token;
         });
-    (*sequences)[b].swap(filtered);
+    collapsed_sequences->emplace_back(filtered);
   }
 }
 
@@ -190,6 +191,263 @@ void ComputeEditDistance(
   *err = v1[hyp.size()];
 }
 
+
+class CCTCWsjGreedySupervisedAlignmentOp : public OpKernel {
+ public:
+  explicit CCTCWsjGreedySupervisedAlignmentOp(OpKernelConstruction* ctx)
+    : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, generator_.Init(ctx));
+
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("eow_token", &blank_token_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("blank_token", &blank_token_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("lpad", &lpad_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("rpad", &rpad_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("vowel_pad", &vowel_pad_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("word_pad", &word_pad_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("flen_max", &flen_max_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("tlen", &tlen_));
+  }
+
+  void PadWords(
+      int32 eow_token, int32 blank_token, int32 word_pad,
+      const std::vector<int32>& in, std::vector<int32>* out) const {
+    for (int32 token : in) {
+      if (token == eow_token) {
+        for (int32 p = 0; p < word_pad; ++p) {
+          out->emplace_back(blank_token);
+        }
+      }
+      out->emplace_back(token);
+    }
+  }
+
+  int32 CountEOW(int32 eow_token, const std::vector<int32>& tokens) const {
+    int32 count = 0;
+    for (int32 token : tokens) {
+      count += token == eow_token;
+    }
+    return count;
+  }
+
+  bool IsVowel(int32 token) const {
+    return token == 5 ||   // A
+           token == 9 ||   // E
+           token == 13 ||  // I
+           token == 19 ||  // O
+           token == 25 ||  // U
+           token == 29;    // Y
+  }
+
+  void PadVowels(
+      int32 blank_token, int32 vowel_pad,
+      const std::vector<int32>& in, std::vector<int32>* out) const {
+    for (int32 token : in) {
+      if (IsVowel(token)) {
+        for (int32 p = 0; p < vowel_pad; ++p) {
+          out->emplace_back(blank_token);
+        }
+      }
+      out->emplace_back(token);
+    }
+  }
+
+  int32 CountVowel(const std::vector<int32>& tokens) const {
+    int32 count = 0;
+    for (int32 token : tokens) {
+      count += IsVowel(token);
+    }
+    return count;
+  }
+
+  bool HasPadding(
+      const std::vector<int32>& tokens, int32 blank_token, int32 count) const {
+    if (static_cast<int32>(tokens.size()) < count) {
+      return false;
+    }
+    for (int32 c = 0; c < count; ++c) {
+      if (tokens[tokens.size() - c - 1] != blank_token) return false;
+    }
+    return true;
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    OpInputList ref_list;
+    OP_REQUIRES_OK(ctx, ctx->input_list("ref", &ref_list));
+
+    OpInputList hyp_list;
+    OP_REQUIRES_OK(ctx, ctx->input_list("hyp", &hyp_list));
+
+    const Tensor* ref_len = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("ref_len", &ref_len));
+
+    const Tensor* hyp_len = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("hyp_len", &hyp_len));
+
+    const Tensor* hyp_prob = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("hyp_prob", &hyp_prob));
+
+    std::vector<std::vector<int32>> refs;
+    ExtractSequence(ref_list, *ref_len, &refs);
+
+    std::vector<std::vector<int32>> hyps;
+    ExtractSequence(hyp_list, &hyps);
+    std::vector<std::vector<int32>> collapsed_hyps;
+    CollapseSequence(blank_token_, hyps, &collapsed_hyps);
+
+    const int64 batch_size = ref_len->dim_size(0);
+
+    Tensor* label = nullptr;
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_output("label", TensorShape({batch_size}), &label));
+
+   Tensor* label_weight = nullptr;
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_output("label_weight", TensorShape({batch_size}), &label_weight));
+
+    // Random number generator setup.
+    typedef random::UniformDistribution<random::PhiloxRandom, float>
+        Distribution;
+    Distribution dist;
+
+    // Sample our random numbers.
+    const int kGroupSize = Distribution::kResultElementCount;
+    auto local_generator = generator_.ReserveSamples32(batch_size);
+    // sample_prob[b] ~ U(0, 1)
+    std::vector<float> sample_prob(batch_size);
+    for (int64 i = 0; i < batch_size; i += kGroupSize) {
+      auto samples = dist(&local_generator);
+      std::copy(&samples[0], &samples[0] + kGroupSize, &sample_prob[i]);
+    }
+
+    // Process 1 utterance at a time.
+    for (int64 b = 0; b < batch_size; ++b) {
+      float w_t = 1.0f;
+      int32 l_t = blank_token_;
+
+      // Reference is the ground truth (without blanks).
+      const std::vector<int32>& ref = refs[b];
+
+      const int32 count_eow = CountEOW(eow_token_, ref);
+      const int32 count_vowels = CountVowel(ref);
+
+      // Hypothesis is what our model has produced thus far (i.e., in the
+      // p(a_t | a_{<t}, x), the a_{x<t} part). Hyp is already collapsed.
+      const std::vector<int32>& hyp = collapsed_hyps[b];
+      const std::vector<int32>& hyp_uncollapsed = hyps[b];
+
+      // In this training model, we require the hyp == prefix(ref)
+      CHECK(std::equal(hyp.begin(), hyp.end(), ref.begin()));
+      // Therefore, ref[hyp.size] is the next token we want the model to emit
+      // (or blank), anything else would result in a sequence that is not
+      // correct.
+
+      // ali_len: the length of the total alignment including blanks.
+      const int32 ali_len = hyp_len->flat<int64>()(b);
+
+      const int32 ref_size = ref.size();
+
+      // Compute the maximum lpad.
+      const int32 lpad = std::min(lpad_, ali_len - ref_size);
+
+      // Compute the maximum rpad.
+      const int32 rpad = std::min(rpad_, ali_len - ref_size - lpad);
+      CHECK_GE(lpad, 0);
+      CHECK_GE(rpad, 0);
+
+      const int32 wpad =
+        count_eow == 0
+            ? 0
+            : std::min(static_cast<int32>((ali_len - lpad - rpad - ref.size()) / count_eow), word_pad_);
+      const int32 vpad =
+        count_vowels == 0
+            ? 0
+            : std::min(static_cast<int32>((ali_len - lpad - rpad - ref.size() - wpad * count_eow) / count_vowels), vowel_pad_);
+      CHECK_GE(wpad, 0);
+      CHECK_GE(vpad, 0);
+
+      // Account for the lpad.
+      if (tlen_ >= lpad) {
+        if (hyp.size() >= ref.size()) {
+          CHECK_EQ(hyp.size(), ref.size());
+          // hyps[b].resize(ali_len);
+          // LOG(INFO) << VectorToString(hyps[b]);
+          w_t = 0.0f;
+        } else {
+          // Number of tokens (including blank) we still have to emit.
+          const int32 c_t = ali_len - tlen_ - rpad;
+          CHECK_GE(c_t, 0);
+
+          // Number of tokens (excluding blank) we still have to emit.
+          const int32 d_t = ref.size() - hyp.size();
+          CHECK_GE(d_t, 0);
+
+          // Number of blanks we still have to emit.
+          const int32 b_t = c_t - d_t;
+          if (b_t < 0) {
+            LOG(INFO) << VectorToString(hyp);
+            LOG(INFO) << VectorToString(hyp_uncollapsed);
+          }
+          CHECK_GE(b_t, 0);
+
+          // token_next is the correct token we want to emit.
+          int32 token_next = ref[hyp.size()];
+          const float token_next_prob = hyp_prob->matrix<float>()(b, token_next);
+          const float token_blank_prob = hyp_prob->matrix<float>()(b, blank_token_);
+
+          if (token_next_prob > token_blank_prob) {
+            // Our model predicted (partially) correctly!
+            l_t = token_next;
+          } else if (token_next == eow_token_) {
+            // Forced EOW padding.
+            if (!HasPadding(hyp_uncollapsed, blank_token_, wpad)) {
+              token_next = blank_token_;
+              l_t = token_next;
+            }
+          } else if (IsVowel(token_next)) {
+            // Forced Vowel padding.
+            if (!HasPadding(hyp_uncollapsed, blank_token_, vpad)) {
+              token_next = blank_token_;
+              l_t = token_next;
+            }
+          }
+          
+          // Check if we are behind or ahead, if we are behind we force the
+          // model to emit a token (rather than blank).
+          const int32 frames = ali_len - lpad - rpad;
+          CHECK_GE(frames, 0);
+          const float f_per_t =
+              static_cast<float>(frames) / static_cast<float>(ref_size + count_eow * wpad + count_vowels * vpad);
+          const int32 tokens =
+              (hyp.size() + CountEOW(eow_token_, hyp) * wpad + CountVowel(hyp) * vpad);
+          if (tokens < (tlen_ - lpad) / f_per_t) {
+            l_t = token_next;
+          }
+        }
+      }
+
+      label->flat<int32>()(b) = l_t;
+      label_weight->flat<float>()(b) = w_t;
+    }
+  }
+
+ private:
+  int32 eow_token_;
+  int32 blank_token_;
+  int32 lpad_;
+  int32 rpad_;
+  int32 vowel_pad_;
+  int32 word_pad_;
+  int32 flen_max_;
+  int32 tlen_;
+
+  GuardedPhiloxRandom generator_;
+};
+REGISTER_KERNEL_BUILDER(Name("CCTCWsjGreedySupervisedAlignment")
+                            .Device(DEVICE_CPU),
+                        CCTCWsjGreedySupervisedAlignmentOp);
+
+
+
 class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
  public:
   explicit CCTCWeaklySupervisedAlignmentLabelOp(OpKernelConstruction* ctx)
@@ -225,7 +483,8 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
 
     std::vector<std::vector<int32>> hyps;
     ExtractSequence(hyp_list, &hyps);
-    CollapseSequence(blank_token_, &hyps);
+    std::vector<std::vector<int32>> collapsed_hyps;
+    CollapseSequence(blank_token_, hyps, &collapsed_hyps);
 
     const int64 batch_size = ref_len->dim_size(0);
 
@@ -260,7 +519,7 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
       const std::vector<int32>& ref = refs[b];
       // Hypothesis is what our model has produced thus far (i.e., in the
       // p(a_t | a_{<t}, x), the a_{x<t} part). Hyp is already collapsed.
-      const std::vector<int32>& hyp = hyps[b];
+      const std::vector<int32>& hyp = collapsed_hyps[b];
       // In this training model, we require the hyp == prefix(ref)
       CHECK(std::equal(hyp.begin(), hyp.end(), ref.begin()));
       // Therefore, ref[hyp.size] is the next token we want the model to emit
@@ -272,12 +531,16 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
 
       // Compute the minimum lpad.
       const int32 ref_size = ref.size();
-      const int32 lpad = std::min(lpad_, ali_len - ref_size - 1);
-      const int32 rpad = std::min(rpad_, ali_len - ref_size - lpad - 1);
+      const int32 lpad = std::min(lpad_, ali_len - ref_size);
+      const int32 rpad = std::min(rpad_, ali_len - ref_size - lpad);
+      CHECK_GE(lpad, 0);
+      CHECK_GE(rpad, 0);
 
-      if (tlen_ > lpad) {
+      if (tlen_ >= lpad) {
         if (hyp.size() >= ref.size()) {
           CHECK_EQ(hyp.size(), ref.size());
+          // hyps[b].resize(ali_len);
+          // LOG(INFO) << VectorToString(hyps[b]);
           w_t = 0.0f;
         } else {
           // Number of tokens (including blank) we still have to emit.
@@ -294,23 +557,39 @@ class CCTCWeaklySupervisedAlignmentLabelOp : public OpKernel {
 
           // token_next is the correct token we want to emit.
           const int32 token_next = ref[hyp.size()];
+
+          const int32 frames = std::max(ali_len - lpad - rpad, ref_size);
+          const float f_per_t = static_cast<float>(frames) / static_cast<float>(ref_size);
+          const int32 index = lpad + hyp.size() * f_per_t;
+          if (tlen_ == index) {
+            l_t = token_next;
+          }
+
+          /*
           // token_next_prob: get the prob(token_next | a_{<t}, x).
-          const float token_next_prob = hyp_prob->matrix<float>()(b, token_next) + 1e-6;
+          const float token_next_prob = hyp_prob->matrix<float>()(b, token_next);
           // blank_token_ is the blank token we could emit w/o making any errors.
           // blank_prob: get the prob(token_prob | a_{x<t}, x).
-          const float blank_prob = hyp_prob->matrix<float>()(b, blank_token_) + 1e-6;
-          // normalization_constant = token_next_prob + blank_prob
-          const float normalization_constant = token_next_prob + blank_prob;
+          const float token_blank_prob = hyp_prob->matrix<float>()(b, blank_token_);
 
-          const float blank_prob_normalized = blank_prob / normalization_constant;
+          // normalize our probs.
+          const float normalization_constant = token_next_prob + token_blank_prob;
+          const float token_blank_prob_normalized =
+              std::max(0.01f, token_blank_prob / normalization_constant);
+          const float token_next_prob_normalized = 1.0f - token_blank_prob_normalized;
 
-          if (token_next_prob > blank_prob ||
-              hyp_list[hyp_list.size() - 1].vec<int32>()(b) == blank_token_ ||
-              sample_prob[b] > blank_prob_normalized ||
+          // uniform prior probability:
+          const float token_next_prob_prior =
+              static_cast<float>(d_t) / static_cast<float>(c_t);
+          const float token_blank_prob_prior = 1.0f - token_next_prob_prior;
+
+          if (token_next_prob > token_blank_prob ||
+              sample_prob[b] > token_blank_prob_prior ||
               b_t <= 0) {
             // Set the training label to be token_next.
             l_t = token_next;
           }
+          */
         }
       }
 

@@ -16,6 +16,7 @@ import numpy as np
 import os
 import re
 import os
+import string
 import sys
 import tensorflow as tf
 import tensorflow.core.framework.token_model_pb2 as token_model_pb2
@@ -29,6 +30,68 @@ def main():
   args   = vars(parser.parse_args())
 
   convert(args['kaldi_scp'], args['kaldi_txt'], args['tf_records'])
+
+
+def token_model_add_token(token_model_proto, token_id, token_string):
+  token = token_model_proto.tokens.add()
+  token.token_id = int(token_id)
+  token.token_string = str(token_string)
+
+
+def create_token_model():
+  token_model_proto = token_model_pb2.TokenModelProto()
+  
+  token_model_proto.token_sos = 0
+  token_model_proto.token_string_sos = "<S>"
+  token_model_add_token(
+      token_model_proto, token_model_proto.token_sos,
+      token_model_proto.token_string_sos)
+
+  token_model_proto.token_eos = 1
+  token_model_proto.token_string_eos = "</S>"
+  token_model_add_token(
+      token_model_proto, token_model_proto.token_eos,
+      token_model_proto.token_string_eos)
+
+  token_model_proto.token_eow = 2
+  token_model_proto.token_string_eow = " "
+  token_model_add_token(
+      token_model_proto, token_model_proto.token_eow,
+      token_model_proto.token_string_eow)
+
+
+  token_model_proto.token_unk = 3
+  token_model_proto.token_string_unk = "<UNK>"
+  token_model_add_token(
+      token_model_proto, token_model_proto.token_unk,
+      token_model_proto.token_string_unk)
+
+  token_model_proto.token_blank = 4
+  token_model_proto.token_string_blank = "<BLANK>"
+  token_model_add_token(
+      token_model_proto, token_model_proto.token_blank,
+      token_model_proto.token_string_blank)
+
+  token_id = 5
+
+  for c in string.ascii_uppercase:
+    token_model_add_token(token_model_proto, token_id, c)
+    token_id = token_id + 1
+
+  for n in range(10):
+    token_model_add_token(token_model_proto, token_id, str(n))
+    token_id = token_id + 1
+
+  for c in "$&/-\'.!?,:":
+    token_model_add_token(token_model_proto, token_id, c)
+    token_id = token_id + 1
+
+  assert token_id == 51
+
+  with open("speech4/conf/wsj/token_model.pbtxt", "w") as proto_file:
+    proto_file.write(str(token_model_proto))
+
+  return token_model_proto
 
 
 def normalize_text_wsj(line):
@@ -114,62 +177,6 @@ def normalize_text_wsj(line):
   return [uttid, utt]
 
 
-def token_model_add_token(token_model_proto, token_id, token_string):
-  token = token_model_proto.tokens.add()
-  token.token_id = int(token_id)
-  token.token_string = str(token_string)
-
-
-def create_phone_token_model(phones_txt):
-  token_model_proto = token_model_pb2.TokenModelProto()
-  
-  token_model_proto.token_sos = 0
-  token_model_proto.token_string_sos = "<S>"
-  token_model_add_token(
-      token_model_proto, token_model_proto.token_sos,
-      token_model_proto.token_string_sos)
-
-  token_model_proto.token_eos = 1
-  token_model_proto.token_string_eos = "</S>"
-  token_model_add_token(
-      token_model_proto, token_model_proto.token_eos,
-      token_model_proto.token_string_eos)
-
-  token_model_proto.token_eow = 2
-  token_model_proto.token_string_eow = " "
-  token_model_add_token(
-      token_model_proto, token_model_proto.token_eow,
-      token_model_proto.token_string_eow)
-
-
-  token_model_proto.token_unk = 3
-  token_model_proto.token_string_unk = "<UNK>"
-  token_model_add_token(
-      token_model_proto, token_model_proto.token_unk,
-      token_model_proto.token_string_unk)
-
-  token_model_proto.token_blank = 4
-  token_model_proto.token_string_blank = "<BLANK>"
-  token_model_add_token(
-      token_model_proto, token_model_proto.token_blank,
-      token_model_proto.token_string_blank)
-
-  token_id = 5
-  token_map = {}
-
-  phones = load_phones(phones_txt)
-  for phone in phones:
-    token_model_add_token(token_model_proto, token_id, phone)
-    token_map[phone] = token_id
-
-    token_id = token_id + 1
-
-  with open("speech4/conf/timit/token_model.pbtxt", "w") as proto_file:
-    proto_file.write(str(token_model_proto))
-
-  return token_model_proto, token_map
-
-
 def is_vowel(c):
   vowels = ["A", "E", "I", "O", "U", "Y"]
   return c in vowels
@@ -188,11 +195,14 @@ def count_vowels(s):
 
 def convert(
     kaldi_scp, kaldi_txt, tf_records):
+  create_token_model()
+
   # Load the token model.
   token_model_proto = token_model_pb2.TokenModelProto()
 
   character_to_token_map = {}
   token_model_pbtxt = "/data-local/wchan/speech4/speech4/conf/token_model_character_simple.pbtxt"
+  token_model_pbtxt = "speech4/conf/wsj/token_model.pbtxt"
   with open(token_model_pbtxt, "r") as proto_file:
     google.protobuf.text_format.Merge(proto_file.read(), token_model_proto)
 
@@ -217,8 +227,8 @@ def convert(
   tokens_len_total = 0
   tokens_len_max = 0
   feature_token_ratio_min = 10
-  vowel_count = 0
-  word_count = 0
+  vowel_count_total = 0
+  word_count_total = 0
   pad_min4 = 1e8
   pad_max4 = 0
   pad_sum4 = 0
@@ -239,10 +249,12 @@ def convert(
     if tokens_len:
       feature_token_ratio_min = min(feature_token_ratio_min, feats.shape[0] / tokens_len)
 
-    vowel_count += count_vowels(text)
-    word_count += count_words(text)
+    vowel_count = count_vowels(text)
+    word_count = count_words(text)
+    vowel_count_total += vowel_count
+    word_count_total += word_count
 
-    pad4 = features_len / time_factor - tokens_len
+    pad4 = features_len / time_factor - tokens_len - word_count * 2 - vowel_count
     if pad4 <= 0:
       pad4 = features_len / time_factor - tokens_len
     if pad4 <= 0:
@@ -271,10 +283,10 @@ def convert(
   print("tokens_len_avg: %f" % (float(tokens_len_total) / float(utterance_count)))
   print("tokens_len_max: %d" % tokens_len_max)
   print("feature_token_ratio_min: %f" % feature_token_ratio_min)
-  print("vowel_count: %d" % vowel_count)
-  print("vowel_ratio: %f" % (float(vowel_count) / float(features_len_total / time_factor)))
-  print("word_count: %d" % word_count)
-  print("word_ratio: %f" % (float(word_count) / float(features_len_total / time_factor)))
+  print("vowel_count_total: %d" % vowel_count_total)
+  print("vowel_ratio: %f" % (float(vowel_count_total) / float(features_len_total / time_factor)))
+  print("word_count_total: %d" % word_count_total)
+  print("word_ratio: %f" % (float(word_count_total) / float(features_len_total / time_factor)))
   print("pad_min4: %d" % pad_min4)
   print("pad_max4: %d" % pad_max4)
   print("pad_sum4: %d" % pad_sum4)
