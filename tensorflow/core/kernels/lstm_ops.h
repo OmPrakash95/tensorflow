@@ -52,8 +52,8 @@ struct LSTMCellFprop {
         b.broadcast(Eigen::array<int, 2>({batch_size, 1}));
 
     // Forget gate bias.
-    states.slice(f_offsets, cell_extents).device(d) +=
-        states.slice(f_offsets, cell_extents).constant(forget_bias);
+    auto f = states.slice(f_offsets, cell_extents);
+    f.device(d) += f.constant(forget_bias);
 
     // Apply activation functions to input, forget, output and cell input.
     // i = sigmoid(states[0])
@@ -65,23 +65,24 @@ struct LSTMCellFprop {
         states.slice(ifo_offsets, ifo_extents).sigmoid();
 
     // ci = tanh(states[3])
-    states.slice(ci_offsets, cell_extents).device(d) =
+    auto ci = states.slice(ci_offsets, cell_extents);
+    ci.device(d) =
         states.slice(cs_offsets, cell_extents).tanh();
     
     // cs = ci .* i + f .* cs_prev
-    states.slice(cs_offsets, cell_extents).device(d) =
-        states.slice(i_offsets, cell_extents) * states.slice(ci_offsets, cell_extents) +
-        states.slice(f_offsets, cell_extents) * states_prev.slice(cs_offsets, cell_extents);
+    auto i = states.slice(i_offsets, cell_extents);
+    auto cs_prev = states_prev.slice(cs_offsets, cell_extents);
+    auto cs = states.slice(cs_offsets, cell_extents);
+    cs.device(d) = i * ci + f * cs_prev;
     // states = [i, f, o, cs]
 
     // co = tanh(cs)
-    states.slice(co_offsets, cell_extents).device(d) =
-        states.slice(cs_offsets, cell_extents).tanh();
+    auto co = states.slice(co_offsets, cell_extents);
+    co.device(d) = cs.tanh();
 
     // h = o .* co
-    states.slice(h_offsets, cell_extents).device(d) =
-        states.slice(o_offsets, cell_extents) *
-        states.slice(co_offsets, cell_extents);
+    auto o = states.slice(o_offsets, cell_extents);
+    states.slice(h_offsets, cell_extents).device(d) = o * co;
 
     h.device(d) = states.slice(h_offsets, cell_extents);
   }
