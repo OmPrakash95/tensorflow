@@ -1038,6 +1038,7 @@ tf_kernel_libraries(
         "in_topk_op",
         "l2loss_op",
         "lrn_op",
+        "lstm_ops",
         "relu_op",
         "softmax_op",
         "softplus_op",

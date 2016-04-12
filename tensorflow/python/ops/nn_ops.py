@@ -711,4 +711,13 @@ def top_k(input, k=1, sorted=True, name=None):
   return gen_nn_ops._top_kv2(input, k=k, sorted=sorted, name=name)
 
 
+@ops.RegisterShape("LSTMCellBlock")
+def _LSTMCellBlockShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  cell_size = op.get_attr("cell_size")
+
+  return [tensorflow.TensorShape([batch_size, cell_size * 6]),
+          tensorflow.TensorShape([batch_size, cell_size])]
+
+
 # pylint: enable=invalid-name
