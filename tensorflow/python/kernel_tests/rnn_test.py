@@ -574,59 +574,16 @@ class LSTMTest(tf.test.TestCase):
       sequence_length = None
 
     ########### Step 1: Run static graph and generate readouts
-    with self.test_session(use_gpu=use_gpu, graph=tf.Graph()) as sess:
-      concat_inputs = tf.placeholder(tf.float32,
-                                     shape=(time_steps, batch_size, input_size))
-      inputs = tf.unpack(concat_inputs)
-      initializer = tf.random_uniform_initializer(-0.01, 0.01, seed=self._seed)
+    initializer = tf.random_uniform_initializer(-0.01, 0.01, seed=self._seed)
+    cell = tf.nn.rnn_cell.LSTMCell(
+        num_units, input_size, use_peepholes=True,
+        initializer=initializer, num_proj=num_proj)
 
-      cell = tf.nn.rnn_cell.LSTMCell(
-          num_units, input_size, use_peepholes=True,
-          initializer=initializer, num_proj=num_proj)
-
-      with tf.variable_scope("dynamic_scope"):
-        outputs_static, state_static = tf.nn.rnn(
-            cell, inputs, sequence_length=sequence_length, dtype=tf.float32)
-
-      feeds = {concat_inputs: input_values}
-
-      # Initialize
-      tf.initialize_all_variables().run(feed_dict=feeds)
-
-      # Generate gradients of sum of outputs w.r.t. inputs
-      static_gradients = tf.gradients(
-          outputs_static + [state_static], [concat_inputs])
-
-      # Generate gradients of individual outputs w.r.t. inputs
-      static_individual_gradients = _flatten([
-          tf.gradients(y, [concat_inputs])
-          for y in [outputs_static[0],
-                    outputs_static[-1],
-                    state_static]])
-
-      # Generate gradients of individual variables w.r.t. inputs
-      trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-      assert len(trainable_variables) > 1, (
-          "Count of trainable variables: %d" % len(trainable_variables))
-      # pylint: disable=bad-builtin
-      static_individual_variable_gradients = _flatten([
-          tf.gradients(y, trainable_variables)
-          for y in [outputs_static[0],
-                    outputs_static[-1],
-                    state_static]])
-
-      # Test forward pass
-      values_static = sess.run(outputs_static, feed_dict=feeds)
-      (state_value_static,) = sess.run((state_static,), feed_dict=feeds)
-
-      # Test gradients to inputs and variables w.r.t. outputs & final state
-      static_grad_values = sess.run(static_gradients, feed_dict=feeds)
-
-      static_individual_grad_values = sess.run(
-          static_individual_gradients, feed_dict=feeds)
-
-      static_individual_var_grad_values = sess.run(
-          static_individual_variable_gradients, feed_dict=feeds)
+    (values_static, state_value_static, static_grad_values,
+     static_individual_grad_values,
+     static_individual_var_grad_values) = run_static_rnn(
+         self, time_steps, batch_size, input_size, cell, sequence_length,
+         input_values, use_gpu)
 
     ########## Step 2: Run dynamic graph and generate readouts
     with self.test_session(use_gpu=use_gpu, graph=tf.Graph()) as sess:
@@ -968,6 +925,81 @@ def _timer(sess, ops):
     sess.run(ops)
   end = time.time()
   return (end - start)/float(runs)
+
+
+def run_static_rnn(test, time_steps, batch_size, input_size, cell,
+                   sequence_length, input_values, use_gpu, check_states=True,
+                   initializer=None):
+  with test.test_session(use_gpu=use_gpu, graph=tf.Graph()) as sess:
+    concat_inputs = tf.placeholder(tf.float32,
+                                   shape=(time_steps, batch_size, input_size))
+    inputs = tf.unpack(concat_inputs)
+
+    with tf.variable_scope("dynamic_scope", initializer=initializer):
+      outputs_static, state_static = tf.nn.rnn(
+          cell, inputs, sequence_length=sequence_length, dtype=tf.float32)
+
+    feeds = {concat_inputs: input_values}
+
+    # Initialize
+    tf.initialize_all_variables().run(feed_dict=feeds)
+
+    # Generate gradients of sum of outputs w.r.t. inputs
+    if check_states:
+      static_gradients = tf.gradients(
+          outputs_static + [state_static], [concat_inputs])
+    else:
+      static_gradients = tf.gradients(
+          outputs_static, [concat_inputs])
+
+    # Generate gradients of individual outputs w.r.t. inputs
+    if check_states:
+      static_individual_gradients = _flatten([
+          tf.gradients(y, [concat_inputs])
+          for y in [outputs_static[0],
+                    outputs_static[-1],
+                    state_static]])
+    else:
+      static_individual_gradients = _flatten([
+          tf.gradients(y, [concat_inputs])
+          for y in [outputs_static[0],
+                    outputs_static[-1]]])
+
+    # Generate gradients of individual variables w.r.t. inputs
+    trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+    assert len(trainable_variables) > 1, (
+        "Count of trainable variables: %d" % len(trainable_variables))
+    # pylint: disable=bad-builtin
+    if check_states:
+      static_individual_variable_gradients = _flatten([
+          tf.gradients(y, trainable_variables)
+          for y in [outputs_static[0],
+                    outputs_static[-1],
+                    state_static]])
+    else:
+      static_individual_variable_gradients = _flatten([
+          tf.gradients(y, trainable_variables)
+          for y in [outputs_static[0],
+                    outputs_static[-1]]])
+
+    # Test forward pass
+    values_static = sess.run(outputs_static, feed_dict=feeds)
+    if check_states:
+      (state_value_static,) = sess.run((state_static,), feed_dict=feeds)
+    else:
+      state_value_static = None
+
+    # Test gradients to inputs and variables w.r.t. outputs & final state
+    static_grad_values = sess.run(static_gradients, feed_dict=feeds)
+
+    static_individual_grad_values = sess.run(
+        static_individual_gradients, feed_dict=feeds)
+
+    static_individual_var_grad_values = sess.run(
+        static_individual_variable_gradients, feed_dict=feeds)
+
+    return (values_static, state_value_static, static_grad_values,
+            static_individual_grad_values, static_individual_var_grad_values)
 
 
 def static_vs_dynamic_rnn_benchmark(batch_size, max_time, num_units, use_gpu):
