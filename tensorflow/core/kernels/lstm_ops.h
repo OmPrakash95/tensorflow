@@ -96,9 +96,90 @@ struct LSTMCellBprop {
                   typename TTypes<float>::ConstMatrix states_prev,
                   typename TTypes<float>::ConstMatrix w,
                   typename TTypes<float>::ConstVec b,
-                  typename TTypes<float>::Matrix h,
-                  typename TTypes<float>::Matrix states) {
-}
+                  typename TTypes<float>::ConstMatrix h,
+                  typename TTypes<float>::ConstMatrix states,
+                  typename TTypes<float>::ConstMatrix h_grad,
+                  typename TTypes<float>::ConstMatrix states_grad,
+                  typename TTypes<float>::Matrix xh_grad,
+                  typename TTypes<float>::Matrix x_grad,
+                  typename TTypes<float>::Matrix states_prev_grad,
+                  typename TTypes<float>::Matrix w_grad,
+                  typename TTypes<float>::Matrix b_grad) {
+    Eigen::array<int, 2> i_offsets  = {0, cell_size * 0};
+    Eigen::array<int, 2> f_offsets  = {0, cell_size * 1};
+    Eigen::array<int, 2> o_offsets  = {0, cell_size * 2};
+    Eigen::array<int, 2> cs_offsets = {0, cell_size * 3};
+    Eigen::array<int, 2> ci_offsets = {0, cell_size * 4};
+    Eigen::array<int, 2> co_offsets = {0, cell_size * 5};
+    Eigen::array<int, 2> h_offsets  = {0, cell_size * 6};
+
+    Eigen::array<int, 2> cell_extents = {batch_size, cell_size};
+
+    // xh = [x, h_prev]
+    Eigen::array<int, 2> xh_x_offsets = {0, 0};
+    Eigen::array<int, 2> xh_x_extents = {batch_size, input_size};
+    Eigen::array<int, 2> xh_h_offsets = {0, input_size};
+    Eigen::array<int, 2> xh_h_extents = {batch_size, cell_size};
+    xh.slice(xh_x_offsets, xh_x_extents).device(d) = x;
+    xh.slice(xh_h_offsets, xh_h_extents).device(d) =
+        states_prev.slice(h_offsets, cell_extents);
+
+    // dh.
+    auto dh = states_prev_grad.slice(h_offsets, cell_extents);
+    dh.device(d) =
+        h_grad + states_grad.slice(h_offsets, cell_extents);
+
+    // do[t] = sigm'(o[t]) .* dh[t] .* co[t]
+    auto co = states.slice(co_offsets, cell_extents);
+    auto o = states.slice(o_offsets, cell_extents);
+    states_prev_grad.slice(o_offsets, cell_extents).device(d) =
+        o * (o.constant(1.0f) - o) * dh * co;
+
+    // dcs[t] += tanh'(cs[t]) .* dh[t] .* o[t]
+    auto f = states.slice(f_offsets, cell_extents);
+    auto dcs_next = states_grad.slice(co_offsets, cell_extents);
+    states_prev_grad.slice(co_offsets, cell_extents).device(d) =
+        (co.constant(1.0f) - co * co) * dh * o + dcs_next * f;
+    auto dcs = states_prev_grad.slice(co_offsets, cell_extents);
+
+    // dci[t] = tanh'(ci[t]) dcs[t] i[t]
+    auto ci = states.slice(ci_offsets, cell_extents);
+    auto i = states.slice(i_offsets, cell_extents);
+    states_prev_grad.slice(cs_offsets, cell_extents).device(d) =
+        (ci.constant(1.0f) - ci * ci) * dcs * i;
+
+    // df[t] = sigm'(f[t]) dcs[t] cs[t - 1]
+    auto cs_prev = states_prev.slice(cs_offsets, cell_extents);
+    states_prev_grad.slice(f_offsets, cell_extents).device(d) =
+        f * (f.constant(1.0f) - f) * dcs * cs_prev; 
+
+    // di[t] = sigm'(i[t]) dcs[t] ci[t]
+    states_prev_grad.slice(i_offsets, cell_extents).device(d) =
+        i * (i.constant(1.0f) - i) * dcs * ci;
+
+    // xh_grad.
+    Eigen::array<int, 2> states_offsets = {0, 0};
+    Eigen::array<int, 2> states_extents = {batch_size, cell_size * 4};
+
+    auto dstate4 = states_prev_grad.slice(states_offsets, states_extents);
+
+    Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> xh_grad_contract_pairs;
+    xh_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(0, 0);
+
+    xh_grad.device(d) =
+        w.contract(dstate4, xh_grad_contract_pairs);
+
+    x_grad.device(d) = xh_grad.slice(xh_x_offsets, xh_x_extents);
+    states_prev_grad.slice(h_offsets, cell_extents).device(d) =
+        xh_grad.slice(xh_h_offsets, xh_h_extents);
+    
+    // w_grad, b_grad.
+    Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> w_grad_contract_pairs;
+    w_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(1, 1);
+    w_grad.device(d) = dstate4.contract(xh, w_grad_contract_pairs);
+    b_grad.device(d) = dstate4.sum(Eigen::array<int, 1>(0));
+  }
+};
 
 }  // namespace functor
 }  // namespace tensorflow

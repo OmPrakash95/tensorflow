@@ -677,7 +677,6 @@ tf_gen_op_wrapper_py(
         "ReluGrad",
         "Relu6Grad",
         "EluGrad",
-        "LSTMCellBlock",
         "SoftplusGrad",
         "SoftsignGrad",
         "TopK",

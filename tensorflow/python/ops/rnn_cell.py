@@ -215,7 +215,7 @@ class LSTMCellBlock(RNNCell):
   """LSTMCellBlock.
   """
 
-  def __init__(self, num_units, forget_bias=1.0)
+  def __init__(self, num_units, forget_bias=1.0):
     self._num_units = num_units
     self._forget_bias = forget_bias
 
@@ -233,7 +233,7 @@ class LSTMCellBlock(RNNCell):
       w_n = self._num_units * 4
       w = vs.get_variable("W", [w_m, w_n])
       b = vs.get_variable("b", [w.get_shape()[1]])
-      h, states = gen_nn_ops._lstm_cell_block(
+      h, states = gen_nn_ops.lstm_cell_block(
           x, states_prev, w, b, cell_size=self._num_units,
           forget_bias=self._forget_bias)
       return h, states

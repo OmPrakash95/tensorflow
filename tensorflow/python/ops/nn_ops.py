@@ -720,4 +720,11 @@ def _LSTMCellBlockShape(op):
           tensorflow.TensorShape([batch_size, cell_size])]
 
 
+@ops.RegisterGradient("LSTMCellBlock")
+def _LSTMCellBlockGrad(op, *grad):
+  return gen_nn_ops.lstm_cell_block_grad(
+      op.inputs[0], op.inputs[1], op.inputs[2], op.inputs[3], op.outputs[0],
+      x.outputs[1], grad[0], grad[1], cell_size=op.get_attr("cell_size"))
+
+
 # pylint: enable=invalid-name
