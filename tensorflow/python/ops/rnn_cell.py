@@ -29,6 +29,7 @@ from tensorflow.python.ops import embedding_ops
 from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import nn_ops
+from tensorflow.python.ops import gen_nn_ops
 from tensorflow.python.ops import variable_scope as vs
 
 from tensorflow.python.ops.math_ops import sigmoid
@@ -232,7 +233,8 @@ class LSTMCellBlock(RNNCell):
       w_m = x.get_shape()[1] + self._num_units
       w_n = self._num_units * 4
       w = vs.get_variable("W", [w_m, w_n])
-      b = vs.get_variable("b", [w.get_shape()[1]])
+      b = vs.get_variable("b", [w.get_shape()[1]],
+                          initializer=init_ops.constant_initializer(0.0))
       h, states = gen_nn_ops.lstm_cell_block(
           x, states_prev, w, b, cell_size=self._num_units,
           forget_bias=self._forget_bias)

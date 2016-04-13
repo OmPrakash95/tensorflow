@@ -10,7 +10,7 @@ namespace tensorflow {
 namespace functor {
 
 template <typename Device>
-struct LSTMCellFprop {
+struct LSTMCellBlockFprop {
   void operator()(const Device& d, const int batch_size, const int input_size,
                   const int cell_size, const float forget_bias,
                   typename TTypes<float>::ConstMatrix x,
@@ -20,6 +20,7 @@ struct LSTMCellFprop {
                   typename TTypes<float>::ConstVec b,
                   typename TTypes<float>::Matrix h,
                   typename TTypes<float>::Matrix states) {
+    // Pointer offsets.
     Eigen::array<int, 2> i_offsets  = {0, cell_size * 0};
     Eigen::array<int, 2> f_offsets  = {0, cell_size * 1};
     Eigen::array<int, 2> o_offsets  = {0, cell_size * 2};
@@ -36,8 +37,8 @@ struct LSTMCellFprop {
     Eigen::array<int, 2> xh_h_offsets = {0, input_size};
     Eigen::array<int, 2> xh_h_extents = {batch_size, cell_size};
     xh.slice(xh_x_offsets, xh_x_extents).device(d) = x;
-    xh.slice(xh_h_offsets, xh_h_extents).device(d) =
-        states_prev.slice(h_offsets, cell_extents);
+    auto h_prev = states_prev.slice(h_offsets, cell_extents);
+    xh.slice(xh_h_offsets, xh_h_extents).device(d) = h_prev;
 
     // contract_pairs is GEMM w/o any transpose.
     Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> contract_pairs;
@@ -68,7 +69,7 @@ struct LSTMCellFprop {
     auto ci = states.slice(ci_offsets, cell_extents);
     ci.device(d) =
         states.slice(cs_offsets, cell_extents).tanh();
-    
+
     // cs = ci .* i + f .* cs_prev
     auto i = states.slice(i_offsets, cell_extents);
     auto cs_prev = states_prev.slice(cs_offsets, cell_extents);
@@ -89,7 +90,7 @@ struct LSTMCellFprop {
 };
 
 template <typename Device>
-struct LSTMCellBprop {
+struct LSTMCellBlockBprop {
   void operator()(const Device& d, const int batch_size, const int input_size,
                   const int cell_size,
                   typename TTypes<float>::ConstMatrix x,
@@ -105,7 +106,8 @@ struct LSTMCellBprop {
                   typename TTypes<float>::Matrix x_grad,
                   typename TTypes<float>::Matrix states_prev_grad,
                   typename TTypes<float>::Matrix w_grad,
-                  typename TTypes<float>::Matrix b_grad) {
+                  typename TTypes<float>::Vec b_grad) {
+    // Pointer offsets.
     Eigen::array<int, 2> i_offsets  = {0, cell_size * 0};
     Eigen::array<int, 2> f_offsets  = {0, cell_size * 1};
     Eigen::array<int, 2> o_offsets  = {0, cell_size * 2};
@@ -122,8 +124,8 @@ struct LSTMCellBprop {
     Eigen::array<int, 2> xh_h_offsets = {0, input_size};
     Eigen::array<int, 2> xh_h_extents = {batch_size, cell_size};
     xh.slice(xh_x_offsets, xh_x_extents).device(d) = x;
-    xh.slice(xh_h_offsets, xh_h_extents).device(d) =
-        states_prev.slice(h_offsets, cell_extents);
+    auto h_prev = states_prev.slice(h_offsets, cell_extents);
+    xh.slice(xh_h_offsets, xh_h_extents).device(d) = h_prev;
 
     // dh.
     auto dh = states_prev_grad.slice(h_offsets, cell_extents);
@@ -137,11 +139,10 @@ struct LSTMCellBprop {
         o * (o.constant(1.0f) - o) * dh * co;
 
     // dcs[t] += tanh'(cs[t]) .* dh[t] .* o[t]
-    auto f = states.slice(f_offsets, cell_extents);
-    auto dcs_next = states_grad.slice(co_offsets, cell_extents);
-    states_prev_grad.slice(co_offsets, cell_extents).device(d) =
-        (co.constant(1.0f) - co * co) * dh * o + dcs_next * f;
     auto dcs = states_prev_grad.slice(co_offsets, cell_extents);
+    dcs.device(d) =
+        (co.constant(1.0f) - co * co) * dh * o +
+        states_grad.slice(ci_offsets, cell_extents);
 
     // dci[t] = tanh'(ci[t]) dcs[t] i[t]
     auto ci = states.slice(ci_offsets, cell_extents);
@@ -150,9 +151,10 @@ struct LSTMCellBprop {
         (ci.constant(1.0f) - ci * ci) * dcs * i;
 
     // df[t] = sigm'(f[t]) dcs[t] cs[t - 1]
+    auto f = states.slice(f_offsets, cell_extents);
     auto cs_prev = states_prev.slice(cs_offsets, cell_extents);
     states_prev_grad.slice(f_offsets, cell_extents).device(d) =
-        f * (f.constant(1.0f) - f) * dcs * cs_prev; 
+        f * (f.constant(1.0f) - f) * dcs * cs_prev;
 
     // di[t] = sigm'(i[t]) dcs[t] ci[t]
     states_prev_grad.slice(i_offsets, cell_extents).device(d) =
@@ -173,7 +175,10 @@ struct LSTMCellBprop {
     x_grad.device(d) = xh_grad.slice(xh_x_offsets, xh_x_extents);
     states_prev_grad.slice(h_offsets, cell_extents).device(d) =
         xh_grad.slice(xh_h_offsets, xh_h_extents);
-    
+
+    // dcs.
+    states_prev_grad.slice(ci_offsets, cell_extents).device(d) = dcs * f;
+
     // w_grad, b_grad.
     Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> w_grad_contract_pairs;
     w_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(1, 1);

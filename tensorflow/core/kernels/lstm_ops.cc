@@ -37,7 +37,7 @@ class LSTMCellBlockOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->input("x", &x_tensor));
 
     const Tensor* states_prev_tensor = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->input("stats_prev", &states_prev_tensor));
+    OP_REQUIRES_OK(ctx, ctx->input("states_prev", &states_prev_tensor));
 
     const Tensor* w_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("w", &w_tensor));
@@ -70,7 +70,7 @@ class LSTMCellBlockOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, input_size + cell_size_}), &xh_tensor));
 
-    functor::LSTMCellFprop<Device>()(
+    functor::LSTMCellBlockFprop<Device>()(
         ctx->eigen_device<Device>(), batch_size, input_size, cell_size_,
         forget_bias_, x_tensor->matrix<float>(), xh_tensor.matrix<float>(),
         states_prev_tensor->matrix<float>(),
@@ -88,6 +88,21 @@ REGISTER_KERNEL_BUILDER(Name("LSTMCellBlock")    \
                         LSTMCellBlockOp<CPUDevice>);
 
 #if GOOGLE_CUDA
+namespace functor {
+  template <>
+  void LSTMCellBlockFprop<GPUDevice>::operator()(
+      const GPUDevice& d, const int batch_size, const int input_size,
+      const int cell_size, const float forget_bias,
+      typename TTypes<float>::ConstMatrix x,
+      typename TTypes<float>::Matrix xh,
+      typename TTypes<float>::ConstMatrix states_prev,
+      typename TTypes<float>::ConstMatrix w,
+      typename TTypes<float>::ConstVec b,
+      typename TTypes<float>::Matrix h,
+      typename TTypes<float>::Matrix states);
+  extern template struct LSTMCellBlockFprop<GPUDevice>;
+}  // namespace functor
+
 REGISTER_KERNEL_BUILDER(Name("LSTMCellBlock")    \
                             .Device(DEVICE_GPU),
                         LSTMCellBlockOp<GPUDevice>);
@@ -105,7 +120,7 @@ class LSTMCellBlockGradOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->input("x", &x_tensor));
 
     const Tensor* states_prev_tensor = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->input("stats_prev", &states_prev_tensor));
+    OP_REQUIRES_OK(ctx, ctx->input("states_prev", &states_prev_tensor));
 
     const Tensor* w_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("w", &w_tensor));
@@ -147,7 +162,7 @@ class LSTMCellBlockGradOp : public OpKernel {
     CHECK_EQ(h_grad_tensor->dim_size(1), cell_size_);
 
     CHECK_EQ(states_grad_tensor->dim_size(0), batch_size);
-    CHECK_EQ(states_grad_tensor->dim_size(1), cell_size_);
+    CHECK_EQ(states_grad_tensor->dim_size(1), cell_size_ * 7);
 
     Tensor* x_grad_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("x_grad",
@@ -155,7 +170,7 @@ class LSTMCellBlockGradOp : public OpKernel {
 
     Tensor* states_prev_grad_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("states_prev_grad",
-          TensorShape({batch_size, input_size}), &states_prev_grad_tensor));
+          TensorShape({batch_size, cell_size_ * 7}), &states_prev_grad_tensor));
 
     Tensor* w_grad_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("w_grad",
@@ -174,7 +189,7 @@ class LSTMCellBlockGradOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, input_size + cell_size_}), &xh_grad_tensor));
 
-    functor::LSTMCellBprop<Device>()(
+    functor::LSTMCellBlockBprop<Device>()(
         ctx->eigen_device<Device>(), batch_size, input_size, cell_size_,
         x_tensor->matrix<float>(), xh_tensor.matrix<float>(),
         states_prev_tensor->matrix<float>(), w_tensor->matrix<float>(),
@@ -182,7 +197,7 @@ class LSTMCellBlockGradOp : public OpKernel {
         states_tensor->matrix<float>(), h_grad_tensor->matrix<float>(),
         states_grad_tensor->matrix<float>(), xh_grad_tensor.matrix<float>(),
         x_grad_tensor->matrix<float>(), states_prev_grad_tensor->matrix<float>(),
-        w_grad_tensor->matrix<float>(), b_grad_tensor->matrix<float>());
+        w_grad_tensor->matrix<float>(), b_grad_tensor->vec<float>());
   }
 
  protected:
@@ -194,6 +209,28 @@ REGISTER_KERNEL_BUILDER(Name("LSTMCellBlockGrad")    \
                         LSTMCellBlockGradOp<CPUDevice>);
 
 #if GOOGLE_CUDA
+namespace functor {
+  template <>
+  void LSTMCellBlockBprop<GPUDevice>::operator()(
+      const GPUDevice& d, const int batch_size, const int input_size,
+      const int cell_size,
+      typename TTypes<float>::ConstMatrix x,
+      typename TTypes<float>::Matrix xh,
+      typename TTypes<float>::ConstMatrix states_prev,
+      typename TTypes<float>::ConstMatrix w,
+      typename TTypes<float>::ConstVec b,
+      typename TTypes<float>::ConstMatrix h,
+      typename TTypes<float>::ConstMatrix states,
+      typename TTypes<float>::ConstMatrix h_grad,
+      typename TTypes<float>::ConstMatrix states_grad,
+      typename TTypes<float>::Matrix xh_grad,
+      typename TTypes<float>::Matrix x_grad,
+      typename TTypes<float>::Matrix states_prev_grad,
+      typename TTypes<float>::Matrix w_grad,
+      typename TTypes<float>::Vec b_grad);
+  extern template struct LSTMCellBlockBprop<GPUDevice>;
+}  // namespace functor
+
 REGISTER_KERNEL_BUILDER(Name("LSTMCellBlockGrad")    \
                             .Device(DEVICE_GPU),
                         LSTMCellBlockGradOp<GPUDevice>);
