@@ -167,10 +167,10 @@ struct LSTMCellBlockBprop {
     auto dstate4 = states_prev_grad.slice(states_offsets, states_extents);
 
     Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> xh_grad_contract_pairs;
-    xh_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(0, 0);
+    xh_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(1, 1);
 
     xh_grad.device(d) =
-        w.contract(dstate4, xh_grad_contract_pairs);
+        dstate4.contract(w, xh_grad_contract_pairs);
 
     x_grad.device(d) = xh_grad.slice(xh_x_offsets, xh_x_extents);
     states_prev_grad.slice(h_offsets, cell_extents).device(d) =
@@ -181,8 +181,8 @@ struct LSTMCellBlockBprop {
 
     // w_grad, b_grad.
     Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> w_grad_contract_pairs;
-    w_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(1, 1);
-    w_grad.device(d) = dstate4.contract(xh, w_grad_contract_pairs);
+    w_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(0, 0);
+    w_grad.device(d) = xh.contract(dstate4, w_grad_contract_pairs);
     b_grad.device(d) = dstate4.sum(Eigen::array<int, 1>(0));
   }
 };
