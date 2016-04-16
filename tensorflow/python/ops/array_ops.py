@@ -130,13 +130,7 @@ def _SliceHelper(tensor, slice_spec):
   sizes = []
   squeeze_dims = []
   for dim, s in enumerate(slice_spec):
-    if isinstance(s, int):
-      if s < 0:
-        raise NotImplementedError("Negative indices are currently unsupported")
-      indices.append(s)
-      sizes.append(1)
-      squeeze_dims.append(dim)
-    elif isinstance(s, _baseslice):
+    if isinstance(s, _baseslice):
       if s.step not in (None, 1):
         raise NotImplementedError(
             "Steps other than 1 are not currently supported")
@@ -161,7 +155,15 @@ def _SliceHelper(tensor, slice_spec):
     elif s is Ellipsis:
       raise NotImplementedError("Ellipsis is not currently supported")
     else:
-      raise TypeError("Bad slice index %s of type %s" % (s, type(s)))
+      try:
+        s = int(s)
+      except TypeError:
+        raise TypeError("Bad slice index %s of type %s" % (s, type(s)))
+      if s < 0:
+        raise NotImplementedError("Negative indices are currently unsupported")
+      indices.append(s)
+      sizes.append(1)
+      squeeze_dims.append(dim)
   sliced = slice(tensor, indices, sizes)
   if squeeze_dims:
     return squeeze(sliced, squeeze_dims=squeeze_dims)
@@ -614,10 +616,10 @@ def zeros(shape, dtype=dtypes.float32, name=None):
     A `Tensor` with all elements set to zero.
   """
   with ops.op_scope([shape], name, "zeros") as name:
-    if isinstance(shape, list):
+    if isinstance(shape, (list, tuple)):
       output = constant(0, shape=shape, dtype=dtype, name=name)
     else:
-      shape = ops.convert_to_tensor(shape, name="shape")
+      shape = ops.convert_to_tensor(shape, dtype=dtypes.int32, name="shape")
       output = fill(shape, constant(0, dtype=dtype), name=name)
   assert output.dtype.base_dtype == dtypes.as_dtype(dtype).base_dtype
   return output
@@ -710,10 +712,10 @@ def ones(shape, dtype=dtypes.float32, name=None):
     A `Tensor` with all elements set to 1.
   """
   with ops.op_scope([shape], name, "ones") as name:
-    if isinstance(shape, list):
+    if isinstance(shape, (list, tuple)):
       output = constant(1, shape=shape, dtype=dtype, name=name)
     else:
-      shape = ops.convert_to_tensor(shape, name="shape")
+      shape = ops.convert_to_tensor(shape, dtype=dtypes.int32, name="shape")
       output = fill(shape, constant(1, dtype=dtype), name=name)
   assert output.dtype.base_dtype == dtypes.as_dtype(dtype).base_dtype
   return output
@@ -842,6 +844,7 @@ def _PlaceholderShape(op):
 @ops.RegisterShape("Identity")
 @ops.RegisterShape("RefIdentity")
 @ops.RegisterShape("StopGradient")
+@ops.RegisterShape("BatchMatrixBandPart")
 def _UnchangedShape(op):
   return [op.inputs[0].get_shape()]
 
