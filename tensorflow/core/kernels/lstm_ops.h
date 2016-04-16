@@ -4,22 +4,37 @@
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "tensorflow/core/framework/tensor_types.h"
 #include "tensorflow/core/platform/types.h"
-
+#include "tensorflow/stream_executor/stream.h"
 
 namespace tensorflow {
+
+#if GOOGLE_CUDA
+
+namespace {
+template <typename T>
+perftools::gputools::DeviceMemory<T> AsDeviceMemory(const T* cuda_memory) {
+  perftools::gputools::DeviceMemoryBase wrapped(const_cast<T*>(cuda_memory));
+  perftools::gputools::DeviceMemory<T> typed(wrapped);
+  return typed;
+}
+}  // namespace
+
+#endif  // GOOGLE_CUDA
+
 namespace functor {
 
-template <typename Device>
+template <typename Device, bool USE_CUBLAS>
 struct LSTMCellBlockFprop {
-  void operator()(const Device& d, const int batch_size, const int input_size,
-                  const int cell_size, const float forget_bias,
-                  typename TTypes<float>::ConstMatrix x,
-                  typename TTypes<float>::Matrix xh,
-                  typename TTypes<float>::ConstMatrix states_prev,
-                  typename TTypes<float>::ConstMatrix w,
-                  typename TTypes<float>::ConstVec b,
-                  typename TTypes<float>::Matrix h,
-                  typename TTypes<float>::Matrix states) {
+  void operator()(
+      perftools::gputools::Stream* stream, const Device& d,
+      const int batch_size, const int input_size, const int cell_size, const float forget_bias,
+      typename TTypes<float>::ConstMatrix x,
+      typename TTypes<float>::Matrix xh,
+      typename TTypes<float>::ConstMatrix states_prev,
+      typename TTypes<float>::ConstMatrix w,
+      typename TTypes<float>::ConstVec b,
+      typename TTypes<float>::Matrix h,
+      typename TTypes<float>::Matrix states) {
     // Pointer offsets.
     Eigen::array<int, 2> i_offsets  = {0, cell_size * 0};
     Eigen::array<int, 2> f_offsets  = {0, cell_size * 1};
@@ -31,13 +46,16 @@ struct LSTMCellBlockFprop {
 
     Eigen::array<int, 2> cell_extents = {batch_size, cell_size};
 
-    // xh = [x, h_prev]
+    // xh = [x, h_prev].
     Eigen::array<int, 2> xh_x_offsets = {0, 0};
     Eigen::array<int, 2> xh_x_extents = {batch_size, input_size};
     Eigen::array<int, 2> xh_h_offsets = {0, input_size};
     Eigen::array<int, 2> xh_h_extents = {batch_size, cell_size};
+
+    auto h_prev =
+        states_prev.slice(h_offsets, cell_extents);
+
     xh.slice(xh_x_offsets, xh_x_extents).device(d) = x;
-    auto h_prev = states_prev.slice(h_offsets, cell_extents);
     xh.slice(xh_h_offsets, xh_h_extents).device(d) = h_prev;
 
     // contract_pairs is GEMM w/o any transpose.
@@ -47,10 +65,30 @@ struct LSTMCellBlockFprop {
     Eigen::array<int, 2> states_offsets = {0, 0};
     Eigen::array<int, 2> states_extents = {batch_size, cell_size * 4};
 
-    // states = xh * W + b
-    states.slice(states_offsets, states_extents).device(d) =
-        xh.contract(w, contract_pairs) +
-        b.broadcast(Eigen::array<int, 2>({batch_size, 1}));
+    // states = xh * w + b
+    if (USE_CUBLAS) {
+      states.slice(states_offsets, states_extents).device(d) =
+         xh.contract(w, contract_pairs);
+      auto kNoTranspose =
+          perftools::gputools::blas::Transpose::kNoTranspose;
+
+      const uint64 m = batch_size;
+      const uint64 k = input_size + cell_size;
+      const uint64 n = cell_size * 4;
+
+      auto a_ptr = AsDeviceMemory(xh.data());
+      auto b_ptr = AsDeviceMemory(w.data());
+      auto c_ptr = AsDeviceMemory(states.data());
+
+      bool blas_launch_status = stream->ThenBlasGemm(
+          kNoTranspose, kNoTranspose, n, m, k, 1.0f, b_ptr, n, a_ptr, k, 1.0f,
+          &c_ptr, cell_size * 7).ok();
+      CHECK(blas_launch_status);
+    } else {
+      states.slice(states_offsets, states_extents).device(d) =
+          xh.contract(w, contract_pairs) +
+          b.broadcast(Eigen::array<int, 2>({batch_size, 1}));
+    }
 
     // Forget gate bias.
     auto f = states.slice(f_offsets, cell_extents);
@@ -89,24 +127,25 @@ struct LSTMCellBlockFprop {
   }
 };
 
-template <typename Device>
+template <typename Device, bool USE_CUBLAS>
 struct LSTMCellBlockBprop {
-  void operator()(const Device& d, const int batch_size, const int input_size,
-                  const int cell_size,
-                  typename TTypes<float>::ConstMatrix x,
-                  typename TTypes<float>::Matrix xh,
-                  typename TTypes<float>::ConstMatrix states_prev,
-                  typename TTypes<float>::ConstMatrix w,
-                  typename TTypes<float>::ConstVec b,
-                  typename TTypes<float>::ConstMatrix h,
-                  typename TTypes<float>::ConstMatrix states,
-                  typename TTypes<float>::ConstMatrix h_grad,
-                  typename TTypes<float>::ConstMatrix states_grad,
-                  typename TTypes<float>::Matrix xh_grad,
-                  typename TTypes<float>::Matrix x_grad,
-                  typename TTypes<float>::Matrix states_prev_grad,
-                  typename TTypes<float>::Matrix w_grad,
-                  typename TTypes<float>::Vec b_grad) {
+  void operator()(
+      perftools::gputools::Stream* stream, const Device& d,
+      const int batch_size, const int input_size, const int cell_size,
+      typename TTypes<float>::ConstMatrix x,
+      typename TTypes<float>::Matrix xh,
+      typename TTypes<float>::ConstMatrix states_prev,
+      typename TTypes<float>::ConstMatrix w,
+      typename TTypes<float>::ConstVec b,
+      typename TTypes<float>::ConstMatrix h,
+      typename TTypes<float>::ConstMatrix states,
+      typename TTypes<float>::ConstMatrix h_grad,
+      typename TTypes<float>::ConstMatrix states_grad,
+      typename TTypes<float>::Matrix xh_grad,
+      typename TTypes<float>::Matrix x_grad,
+      typename TTypes<float>::Matrix states_prev_grad,
+      typename TTypes<float>::Matrix w_grad,
+      typename TTypes<float>::Vec b_grad) {
     // Pointer offsets.
     Eigen::array<int, 2> i_offsets  = {0, cell_size * 0};
     Eigen::array<int, 2> f_offsets  = {0, cell_size * 1};
@@ -169,8 +208,29 @@ struct LSTMCellBlockBprop {
     Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> xh_grad_contract_pairs;
     xh_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(1, 1);
 
-    xh_grad.device(d) =
-        dstate4.contract(w, xh_grad_contract_pairs);
+    // xh_grad = dstate4 * w^T
+    if (USE_CUBLAS) {
+      auto kTranspose =
+          perftools::gputools::blas::Transpose::kTranspose;
+      auto kNoTranspose =
+          perftools::gputools::blas::Transpose::kNoTranspose;
+
+      const uint64 m = batch_size;
+      const uint64 k = cell_size * 4;
+      const uint64 n = input_size + cell_size;
+
+      auto a_ptr = AsDeviceMemory(states_prev_grad.data());
+      auto b_ptr = AsDeviceMemory(w.data());
+      auto c_ptr = AsDeviceMemory(xh_grad.data());
+
+      bool blas_launch_status = stream->ThenBlasGemm(
+          kTranspose, kNoTranspose, n, m, k, 1.0f, b_ptr,
+          k, a_ptr, cell_size * 7, 0.0f, &c_ptr, n).ok();
+      CHECK(blas_launch_status);
+    } else {
+      xh_grad.device(d) =
+          dstate4.contract(w, xh_grad_contract_pairs);
+    }
 
     x_grad.device(d) = xh_grad.slice(xh_x_offsets, xh_x_extents);
     states_prev_grad.slice(h_offsets, cell_extents).device(d) =
@@ -182,7 +242,27 @@ struct LSTMCellBlockBprop {
     // w_grad, b_grad.
     Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> w_grad_contract_pairs;
     w_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(0, 0);
-    w_grad.device(d) = xh.contract(dstate4, w_grad_contract_pairs);
+    if (USE_CUBLAS) {
+      auto kTranspose =
+          perftools::gputools::blas::Transpose::kTranspose;
+      auto kNoTranspose =
+          perftools::gputools::blas::Transpose::kNoTranspose;
+
+      const uint64 m = input_size + cell_size;
+      const uint64 k = batch_size;
+      const uint64 n = cell_size * 4;
+
+      auto a_ptr = AsDeviceMemory(xh.data());
+      auto b_ptr = AsDeviceMemory(states_prev_grad.data());
+      auto c_ptr = AsDeviceMemory(w_grad.data());
+
+      bool blas_launch_status = stream->ThenBlasGemm(
+          kNoTranspose, kTranspose, n, m, k, 1.0f, b_ptr,
+          cell_size * 7, a_ptr, m, 0.0f, &c_ptr, n).ok();
+      CHECK(blas_launch_status);
+    } else {
+      w_grad.device(d) = xh.contract(dstate4, w_grad_contract_pairs);
+    }
     b_grad.device(d) = dstate4.sum(Eigen::array<int, 1>(0));
   }
 };

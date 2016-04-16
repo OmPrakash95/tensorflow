@@ -24,7 +24,7 @@ namespace tensorflow {
 typedef Eigen::ThreadPoolDevice CPUDevice;
 typedef Eigen::GpuDevice GPUDevice;
 
-template <typename Device>
+template <typename Device, bool USE_CUBLAS>
 class LSTMCellBlockOp : public OpKernel {
  public:
   explicit LSTMCellBlockOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -52,8 +52,8 @@ class LSTMCellBlockOp : public OpKernel {
     CHECK_EQ(states_prev_tensor->dim_size(0), batch_size);
     CHECK_EQ(states_prev_tensor->dim_size(1), cell_size_ * 7);
 
-    CHECK_EQ(w_tensor->dim_size(0), input_size + cell_size_);
-    CHECK_EQ(w_tensor->dim_size(1), cell_size_ * 4);
+    // CHECK_EQ(w_tensor->dim_size(0), input_size + cell_size_);
+    // CHECK_EQ(w_tensor->dim_size(1), cell_size_ * 4);
 
     CHECK_EQ(b_tensor->dim_size(0), cell_size_ * 4);
 
@@ -70,10 +70,11 @@ class LSTMCellBlockOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, input_size + cell_size_}), &xh_tensor));
 
-    functor::LSTMCellBlockFprop<Device>()(
-        ctx->eigen_device<Device>(), batch_size, input_size, cell_size_,
-        forget_bias_, x_tensor->matrix<float>(), xh_tensor.matrix<float>(),
-        states_prev_tensor->matrix<float>(),
+    functor::LSTMCellBlockFprop<Device, USE_CUBLAS>()(
+        ctx->op_device_context()->stream(), ctx->eigen_device<Device>(),
+        batch_size, input_size, cell_size_, forget_bias_,
+        x_tensor->matrix<float>(),
+        xh_tensor.matrix<float>(), states_prev_tensor->matrix<float>(),
         w_tensor->matrix<float>(), b_tensor->vec<float>(),
         h_tensor->matrix<float>(), states_tensor->matrix<float>());
   }
@@ -85,13 +86,13 @@ class LSTMCellBlockOp : public OpKernel {
 
 REGISTER_KERNEL_BUILDER(Name("LSTMCellBlock")    \
                             .Device(DEVICE_CPU),
-                        LSTMCellBlockOp<CPUDevice>);
+                        LSTMCellBlockOp<CPUDevice, false>);
 
 #if GOOGLE_CUDA
 namespace functor {
   template <>
-  void LSTMCellBlockFprop<GPUDevice>::operator()(
-      const GPUDevice& d, const int batch_size, const int input_size,
+  void LSTMCellBlockFprop<GPUDevice, true>::operator()(
+      perftools::gputools::Stream* stream, const GPUDevice& d, const int batch_size, const int input_size,
       const int cell_size, const float forget_bias,
       typename TTypes<float>::ConstMatrix x,
       typename TTypes<float>::Matrix xh,
@@ -100,15 +101,15 @@ namespace functor {
       typename TTypes<float>::ConstVec b,
       typename TTypes<float>::Matrix h,
       typename TTypes<float>::Matrix states);
-  extern template struct LSTMCellBlockFprop<GPUDevice>;
-}  // namespace functor
+  extern template struct LSTMCellBlockFprop<GPUDevice, true>;
+}  // end namespace functor
 
 REGISTER_KERNEL_BUILDER(Name("LSTMCellBlock")    \
                             .Device(DEVICE_GPU),
-                        LSTMCellBlockOp<GPUDevice>);
+                        LSTMCellBlockOp<GPUDevice, true>);
 #endif  // GOOGLE_CUDA
 
-template <typename Device>
+template <typename Device, bool USE_CUBLAS>
 class LSTMCellBlockGradOp : public OpKernel {
  public:
   explicit LSTMCellBlockGradOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -147,8 +148,8 @@ class LSTMCellBlockGradOp : public OpKernel {
     CHECK_EQ(states_prev_tensor->dim_size(0), batch_size);
     CHECK_EQ(states_prev_tensor->dim_size(1), cell_size_ * 7);
 
-    CHECK_EQ(w_tensor->dim_size(0), input_size + cell_size_);
-    CHECK_EQ(w_tensor->dim_size(1), cell_size_ * 4);
+    // CHECK_EQ(w_tensor->dim_size(0), input_size + cell_size_);
+    // CHECK_EQ(w_tensor->dim_size(1), cell_size_ * 4);
 
     CHECK_EQ(b_tensor->dim_size(0), cell_size_ * 4);
 
@@ -189,8 +190,9 @@ class LSTMCellBlockGradOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, input_size + cell_size_}), &xh_grad_tensor));
 
-    functor::LSTMCellBlockBprop<Device>()(
-        ctx->eigen_device<Device>(), batch_size, input_size, cell_size_,
+    functor::LSTMCellBlockBprop<Device, USE_CUBLAS>()(
+        ctx->op_device_context()->stream(), ctx->eigen_device<Device>(),
+        batch_size, input_size, cell_size_,
         x_tensor->matrix<float>(), xh_tensor.matrix<float>(),
         states_prev_tensor->matrix<float>(), w_tensor->matrix<float>(),
         b_tensor->vec<float>(), h_tensor->matrix<float>(),
@@ -206,14 +208,14 @@ class LSTMCellBlockGradOp : public OpKernel {
 
 REGISTER_KERNEL_BUILDER(Name("LSTMCellBlockGrad")    \
                             .Device(DEVICE_CPU),
-                        LSTMCellBlockGradOp<CPUDevice>);
+                        LSTMCellBlockGradOp<CPUDevice, false>);
 
 #if GOOGLE_CUDA
 namespace functor {
   template <>
-  void LSTMCellBlockBprop<GPUDevice>::operator()(
-      const GPUDevice& d, const int batch_size, const int input_size,
-      const int cell_size,
+  void LSTMCellBlockBprop<GPUDevice, true>::operator()(
+      perftools::gputools::Stream* stream, const GPUDevice& d,
+      const int batch_size, const int input_size, const int cell_size,
       typename TTypes<float>::ConstMatrix x,
       typename TTypes<float>::Matrix xh,
       typename TTypes<float>::ConstMatrix states_prev,
@@ -228,12 +230,12 @@ namespace functor {
       typename TTypes<float>::Matrix states_prev_grad,
       typename TTypes<float>::Matrix w_grad,
       typename TTypes<float>::Vec b_grad);
-  extern template struct LSTMCellBlockBprop<GPUDevice>;
+  extern template struct LSTMCellBlockBprop<GPUDevice, true>;
 }  // namespace functor
 
 REGISTER_KERNEL_BUILDER(Name("LSTMCellBlockGrad")    \
                             .Device(DEVICE_GPU),
-                        LSTMCellBlockGradOp<GPUDevice>);
+                        LSTMCellBlockGradOp<GPUDevice, true>);
 #endif  // GOOGLE_CUDA
 
-}  // namespace tensorflow
+}  // end namespace tensorflow
