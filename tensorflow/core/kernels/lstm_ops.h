@@ -58,17 +58,14 @@ struct LSTMCellBlockFprop {
     xh.slice(xh_x_offsets, xh_x_extents).device(d) = x;
     xh.slice(xh_h_offsets, xh_h_extents).device(d) = h_prev;
 
-    // contract_pairs is GEMM w/o any transpose.
-    Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> contract_pairs;
-    contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(1, 0);
-
     Eigen::array<int, 2> states_offsets = {0, 0};
     Eigen::array<int, 2> states_extents = {batch_size, cell_size * 4};
 
     // states = xh * w + b
     if (USE_CUBLAS) {
       states.slice(states_offsets, states_extents).device(d) =
-         xh.contract(w, contract_pairs);
+          b.broadcast(Eigen::array<int, 2>({batch_size, 1}));
+
       auto kNoTranspose =
           perftools::gputools::blas::Transpose::kNoTranspose;
 
@@ -85,6 +82,9 @@ struct LSTMCellBlockFprop {
           &c_ptr, cell_size * 7).ok();
       CHECK(blas_launch_status);
     } else {
+      Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> contract_pairs;
+      contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(1, 0);
+
       states.slice(states_offsets, states_extents).device(d) =
           xh.contract(w, contract_pairs) +
           b.broadcast(Eigen::array<int, 2>({batch_size, 1}));
@@ -240,8 +240,6 @@ struct LSTMCellBlockBprop {
     states_prev_grad.slice(ci_offsets, cell_extents).device(d) = dcs * f;
 
     // w_grad, b_grad.
-    Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> w_grad_contract_pairs;
-    w_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(0, 0);
     if (USE_CUBLAS) {
       auto kTranspose =
           perftools::gputools::blas::Transpose::kTranspose;
@@ -261,6 +259,9 @@ struct LSTMCellBlockBprop {
           cell_size * 7, a_ptr, m, 0.0f, &c_ptr, n).ok();
       CHECK(blas_launch_status);
     } else {
+      Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> w_grad_contract_pairs;
+      w_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(0, 0);
+
       w_grad.device(d) = xh.contract(dstate4, w_grad_contract_pairs);
     }
     b_grad.device(d) = dstate4.sum(Eigen::array<int, 1>(0));
