@@ -617,7 +617,7 @@ def lstm_block(inputs, cell_size, sequence_length=None, initial_state=None,
 
     if initial_state is None:
       initial_state = array_ops.constant(
-          0, dtype=dtypes.float32, shape=[batch_size, cell_size * 7])
+          0.0, dtype=dtypes.float32, shape=[batch_size, cell_size * 7])
 
     return gen_nn_ops.lstm_block(
         sequence_length, initial_state, inputs, w, b, cell_size=cell_size,

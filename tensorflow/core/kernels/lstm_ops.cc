@@ -33,7 +33,7 @@ perftools::gputools::DeviceMemory<float> AsDeviceMemory(const float* cuda_memory
 void TensorMemZero(Tensor* tensor, perftools::gputools::Stream* stream) {
   auto ptr = AsDeviceMemory(tensor->flat<float>().data());
   if (stream) {
-    stream->ThenMemZero(&ptr, tensor->TotalBytes());
+    CHECK(stream->ThenMemZero(&ptr, tensor->TotalBytes()).ok());
   } else {
     std::memset(tensor->flat<float>().data(), 0, tensor->TotalBytes());
   }
@@ -301,20 +301,29 @@ class LSTMBlockOp : public OpKernel {
     const int64 input_size = x_tensors[0].dim_size(1);
     const int64 sequence_len_max =
         *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
+    CHECK_LE(sequence_len_max, sequence_len_max_);
+
+    CHECK_EQ(initial_state_tensor->dim_size(0), batch_size);
+    CHECK_EQ(initial_state_tensor->dim_size(1), cell_size_ * 7);
+
+    CHECK_EQ(w_tensor->dim_size(0), input_size + cell_size_);
+    CHECK_EQ(w_tensor->dim_size(1), cell_size_ * 4);
+
+    CHECK_EQ(b_tensor->dim_size(0), cell_size_ * 4);
 
     perftools::gputools::Stream* stream =
         ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
 
     for (int64 t = 0; t < sequence_len_max_; ++t ) {
-      Tensor* states_tensor = nullptr;
-      states_tensors.allocate(
-          t, TensorShape({batch_size, cell_size_ * 7}), &states_tensor);
-      TensorMemZero(states_tensor, stream);
-
       Tensor* h_tensor = nullptr;
       h_tensors.allocate(
           t, TensorShape({batch_size, cell_size_}), &h_tensor);
       TensorMemZero(h_tensor, stream);
+
+      Tensor* states_tensor = nullptr;
+      states_tensors.allocate(
+          t, TensorShape({batch_size, cell_size_ * 7}), &states_tensor);
+      TensorMemZero(states_tensor, stream);
     }
 
     Tensor xh_tensor;
@@ -331,15 +340,15 @@ class LSTMBlockOp : public OpKernel {
       Tensor* h_tensor = h_tensors[t];
 
       functor::LSTMCellBlockFprop<Device, USE_CUBLAS>()(
-        stream, ctx->eigen_device<Device>(),
-        batch_size, input_size, cell_size_, forget_bias_,
-        x_tensor.matrix<float>(),
-        xh_tensor.matrix<float>(),
-        states_prev_tensor->matrix<float>(),
-        w_tensor->matrix<float>(),
-        b_tensor->vec<float>(),
-        h_tensor->matrix<float>(),
-        states_tensor->matrix<float>());
+          stream, ctx->eigen_device<Device>(),
+          batch_size, input_size, cell_size_, forget_bias_,
+          x_tensor.matrix<float>(),
+          xh_tensor.matrix<float>(),
+          states_prev_tensor->matrix<float>(),
+          w_tensor->matrix<float>(),
+          b_tensor->vec<float>(),
+          h_tensor->matrix<float>(),
+          states_tensor->matrix<float>());
     }
   }
 
@@ -399,6 +408,12 @@ class LSTMBlockGradOp : public OpKernel {
     const int64 input_size = x_tensors[0].dim_size(1);
     const int64 sequence_len_max =
         *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
+    CHECK_LE(sequence_len_max, sequence_len_max_);
+
+    CHECK_EQ(w_tensor->dim_size(0), input_size + cell_size_);
+    CHECK_EQ(w_tensor->dim_size(1), cell_size_ * 4);
+    
+    CHECK_EQ(b_tensor->dim_size(0), cell_size_ * 4);
 
     perftools::gputools::Stream* stream =
         ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
@@ -443,14 +458,19 @@ class LSTMBlockGradOp : public OpKernel {
         TensorShape({batch_size, cell_size_ * 7}), &states_prev_grad_tensor));
 
     for (int64 t = sequence_len_max - 1; t >= 0; --t) {
-      const Tensor x_tensor = x_tensors[t];
-      const Tensor states_prev_tensor =
+      const Tensor& x_tensor = x_tensors[t];
+      const Tensor& states_prev_tensor =
           t <= 0 ? *initial_state_tensor : states_tensors[t - 1];
-      const Tensor states_tensor = states_tensors[t];
-      const Tensor h_grad_tensor = h_grad_tensors[t];
+      const Tensor& states_tensor = states_tensors[t];
+      CHECK_EQ(states_tensor.dim_size(0), batch_size);
+      CHECK_EQ(states_tensor.dim_size(1), cell_size_ * 7);
+
+      const Tensor& h_grad_tensor = h_grad_tensors[t];
+      CHECK_EQ(h_grad_tensor.dim_size(0), batch_size);
+      CHECK_EQ(h_grad_tensor.dim_size(1), cell_size_);
 
       Tensor* x_grad_tensor = x_grad_tensors[t];
-      const Tensor states_grad_const_tensor = states_grad_tensor;
+      const Tensor& states_grad_const_tensor = states_grad_tensor;
 
       functor::LSTMCellBlockBprop<Device, USE_CUBLAS>()(
           stream, ctx->eigen_device<Device>(),
@@ -467,17 +487,16 @@ class LSTMBlockGradOp : public OpKernel {
           x_grad_tensor->matrix<float>(),
           states_prev_grad_tensor.matrix<float>(),
           w_grad_tensor->matrix<float>(),
-          b_grad_tensor->vec<float>()
-      );
+          b_grad_tensor->vec<float>());
 
       if (stream) {
         auto states_grad_ptr =
             AsDeviceMemory(states_grad_tensor.flat<float>().data());
         auto states_prev_grad_ptr =
             AsDeviceMemory(states_prev_grad_tensor.flat<float>().data());
-        stream->ThenMemcpy(
+        CHECK(stream->ThenMemcpy(
             &states_grad_ptr, states_prev_grad_ptr,
-            states_grad_tensor.TotalBytes());
+            states_grad_tensor.TotalBytes()).ok());
       } else {
         std::memcpy(states_grad_tensor.flat<float>().data(),
                     states_prev_grad_tensor.flat<float>().data(),
