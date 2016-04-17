@@ -268,6 +268,11 @@ with g.device(matmul_on_gpu):
   # on CPU 0.
 ```
 
+**N.B.** The device scope may be overridden by op wrappers or
+other library code. For example, a variable assignment op
+`v.assign()` must be colocated with the `tf.Variable` `v`, and
+incompatible device scopes will be ignored.
+
 ##### Args:
 
 
@@ -1703,6 +1708,32 @@ protocol buffer, and extract individual objects in the `GraphDef` as
 *  <b>`ValueError`</b>: If `input_map`, or `return_elements` contains names that
     do not appear in `graph_def`, or `graph_def` is not well-formed (e.g.
     it refers to an unknown tensor).
+
+
+- - -
+
+### `tf.load_file_system_library(library_filename)` {#load_file_system_library}
+
+Loads a TensorFlow plugin, containing file system implementation.
+
+Pass `library_filename` to a platform-specific mechanism for dynamically
+loading a library. The rules for determining the exact location of the
+library are platform-specific and are not documented here.
+
+##### Args:
+
+
+*  <b>`library_filename`</b>: Path to the plugin.
+    Relative or absolute filesystem path to a dynamic library file.
+
+##### Returns:
+
+  None.
+
+##### Raises:
+
+
+*  <b>`RuntimeError`</b>: when unable to load the library.
 
 
 - - -
