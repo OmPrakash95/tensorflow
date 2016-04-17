@@ -223,7 +223,7 @@ struct LSTMCellBlockBprop {
       auto b_ptr = AsDeviceMemory(w.data());
       auto c_ptr = AsDeviceMemory(xh_grad.data());
 
-      bool blas_launch_status = stream->ThenBlasGemm(
+      bool blas_launch_status = CHECK_NOTNULL(stream)->ThenBlasGemm(
           kTranspose, kNoTranspose, n, m, k, 1.0f, b_ptr,
           k, a_ptr, cell_size * 7, 0.0f, &c_ptr, n).ok();
       CHECK(blas_launch_status);
@@ -254,17 +254,17 @@ struct LSTMCellBlockBprop {
       auto b_ptr = AsDeviceMemory(states_prev_grad.data());
       auto c_ptr = AsDeviceMemory(w_grad.data());
 
-      bool blas_launch_status = stream->ThenBlasGemm(
+      bool blas_launch_status = CHECK_NOTNULL(stream)->ThenBlasGemm(
           kNoTranspose, kTranspose, n, m, k, 1.0f, b_ptr,
-          cell_size * 7, a_ptr, m, 0.0f, &c_ptr, n).ok();
+          cell_size * 7, a_ptr, m, 1.0f, &c_ptr, n).ok();
       CHECK(blas_launch_status);
     } else {
       Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> w_grad_contract_pairs;
       w_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(0, 0);
 
-      w_grad.device(d) = xh.contract(dstate4, w_grad_contract_pairs);
+      w_grad.device(d) += xh.contract(dstate4, w_grad_contract_pairs);
     }
-    b_grad.device(d) = dstate4.sum(Eigen::array<int, 1>(0));
+    b_grad.device(d) += dstate4.sum(Eigen::array<int, 1>(0));
   }
 };
 

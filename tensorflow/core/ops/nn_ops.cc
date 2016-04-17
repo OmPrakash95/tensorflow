@@ -901,19 +901,31 @@ REGISTER_OP("LSTMCellBlockGrad")
     .Doc(R"doc(
 )doc");
 
-REGISTER_OP("LSTM")
+REGISTER_OP("LSTMBlock")
     .Attr("cell_size: int")
     .Attr("sequence_len_max: int")
     .Input("sequence_len: int64")
+    .Input("x: sequence_len_max * float")
     .Input("w: float")
     .Input("b: float")
-    .Input("xs: sequence_len_max * float")
-    .Output("is: sequence_len_max * float")
-    .Output("fs: sequence_len_max * float")
-    .Output("cs: sequence_len_max * float")
-    .Output("co: sequence_len_max * float")
-    .Output("os: sequence_len_max * float")
-    .Output("hs: sequence_len_max * float")
+    .Output("states: sequence_len_max * float")
+    .Output("h: sequence_len_max * float")
+    .Doc(R"doc(
+)doc");
+
+REGISTER_OP("LSTMBlockGrad")
+    .Attr("cell_size: int")
+    .Attr("sequence_len_max: int")
+    .Input("sequence_len: int64")
+    .Input("x: sequence_len_max * float")
+    .Input("w: float")
+    .Input("b: float")
+    .Input("states: sequence_len_max * float")
+    .Input("h: sequence_len_max * float")
+    .Input("h_grad: sequence_len_max * float")
+    .Output("x_grad: sequence_len_max * float")
+    .Output("w_grad: float")
+    .Output("b_grad: float")
     .Doc(R"doc(
 )doc");
 

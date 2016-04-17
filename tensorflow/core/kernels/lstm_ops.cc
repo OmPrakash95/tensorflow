@@ -21,6 +21,27 @@
 
 namespace tensorflow {
 
+#if GOOGLE_CUDA
+
+namespace {
+perftools::gputools::DeviceMemory<float> AsDeviceMemory(const float* cuda_memory) {
+  perftools::gputools::DeviceMemoryBase wrapped(const_cast<float*>(cuda_memory));
+  perftools::gputools::DeviceMemory<float> typed(wrapped);
+  return typed;
+}
+
+void TensorMemZero(Tensor* tensor, perftools::gputools::Stream* stream) {
+  auto ptr = AsDeviceMemory(tensor->flat<float>().data());
+  if (stream) {
+    stream->ThenMemZero(&ptr, tensor->TotalBytes());
+  } else {
+    std::memset(tensor->flat<float>().data(), 0, tensor->TotalBytes());
+  }
+}
+}  // namespace
+
+#endif  // GOOGLE_CUDA
+
 typedef Eigen::ThreadPoolDevice CPUDevice;
 typedef Eigen::GpuDevice GPUDevice;
 
@@ -48,6 +69,9 @@ class LSTMCellBlockOp : public OpKernel {
     const int64 batch_size = x_tensor->dim_size(0);
     const int64 input_size = x_tensor->dim_size(1);
 
+    perftools::gputools::Stream* stream =
+        ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
+
     // Sanity checks for our input shapes.
     CHECK_EQ(states_prev_tensor->dim_size(0), batch_size);
     CHECK_EQ(states_prev_tensor->dim_size(1), cell_size_ * 7);
@@ -71,7 +95,7 @@ class LSTMCellBlockOp : public OpKernel {
         TensorShape({batch_size, input_size + cell_size_}), &xh_tensor));
 
     functor::LSTMCellBlockFprop<Device, USE_CUBLAS>()(
-        ctx->op_device_context()->stream(), ctx->eigen_device<Device>(),
+        stream, ctx->eigen_device<Device>(),
         batch_size, input_size, cell_size_, forget_bias_,
         x_tensor->matrix<float>(),
         xh_tensor.matrix<float>(), states_prev_tensor->matrix<float>(),
@@ -104,8 +128,8 @@ namespace functor {
   extern template struct LSTMCellBlockFprop<GPUDevice, true>;
 }  // end namespace functor
 
-REGISTER_KERNEL_BUILDER(Name("LSTMCellBlock")    \
-                            .Device(DEVICE_GPU),
+REGISTER_KERNEL_BUILDER(Name("LSTMCellBlock")     \
+                            .Device(DEVICE_GPU),  \
                         LSTMCellBlockOp<GPUDevice, true>);
 #endif  // GOOGLE_CUDA
 
@@ -144,6 +168,9 @@ class LSTMCellBlockGradOp : public OpKernel {
     const int64 batch_size = x_tensor->dim_size(0);
     const int64 input_size = x_tensor->dim_size(1);
 
+    perftools::gputools::Stream* stream =
+        ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
+
     // Sanity checks for our input shapes.
     CHECK_EQ(states_prev_tensor->dim_size(0), batch_size);
     CHECK_EQ(states_prev_tensor->dim_size(1), cell_size_ * 7);
@@ -177,10 +204,12 @@ class LSTMCellBlockGradOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output("w_grad",
           TensorShape({input_size + cell_size_, cell_size_ * 4}),
           &w_grad_tensor));
+    TensorMemZero(w_grad_tensor, stream);
 
     Tensor* b_grad_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("b_grad",
           TensorShape({cell_size_ * 4}), &b_grad_tensor));
+    TensorMemZero(b_grad_tensor, stream);
 
     Tensor xh_tensor;
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
@@ -191,7 +220,7 @@ class LSTMCellBlockGradOp : public OpKernel {
         TensorShape({batch_size, input_size + cell_size_}), &xh_grad_tensor));
 
     functor::LSTMCellBlockBprop<Device, USE_CUBLAS>()(
-        ctx->op_device_context()->stream(), ctx->eigen_device<Device>(),
+        stream, ctx->eigen_device<Device>(),
         batch_size, input_size, cell_size_,
         x_tensor->matrix<float>(), xh_tensor.matrix<float>(),
         states_prev_tensor->matrix<float>(), w_tensor->matrix<float>(),
@@ -233,9 +262,247 @@ namespace functor {
   extern template struct LSTMCellBlockBprop<GPUDevice, true>;
 }  // namespace functor
 
-REGISTER_KERNEL_BUILDER(Name("LSTMCellBlockGrad")    \
-                            .Device(DEVICE_GPU),
+REGISTER_KERNEL_BUILDER(Name("LSTMCellBlockGrad")  \
+                            .Device(DEVICE_GPU),   \
                         LSTMCellBlockGradOp<GPUDevice, true>);
 #endif  // GOOGLE_CUDA
 
+template <typename Device, bool USE_CUBLAS>
+class LSTMBlockOp : public OpKernel {
+ public:
+  explicit LSTMBlockOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("sequence_len_max", &sequence_len_max_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("cell_size", &cell_size_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("forget_bias", &forget_bias_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    const Tensor* sequence_len_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("sequence_len", &sequence_len_tensor));
+
+    OpInputList x_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("x", &x_tensors));
+
+    const Tensor* w_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("w", &w_tensor));
+
+    const Tensor* b_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("b", &b_tensor));
+
+    OpOutputList states_tensors;
+    OP_REQUIRES_OK(ctx, ctx->output_list("states", &states_tensors));
+
+    OpOutputList h_tensors;
+    OP_REQUIRES_OK(ctx, ctx->output_list("h", &h_tensors));
+
+    auto sequence_len_t = sequence_len_tensor->vec<int64>();
+    std::vector<int64> seq_lens_vector(sequence_len_t.size());
+    ctx->eigen_device<Device>().memcpyDeviceToHost(
+        seq_lens_vector.data(), sequence_len_t.data(),
+        sizeof(int64) * sequence_len_t.size());
+
+    const int64 batch_size = x_tensors[0].dim_size(0);
+    const int64 input_size = x_tensors[0].dim_size(1);
+    const int64 sequence_len_max =
+        *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
+
+    perftools::gputools::Stream* stream =
+        ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
+
+    for (int64 t = 0; t < sequence_len_max_; ++t ) {
+      Tensor* states_tensor = nullptr;
+      states_tensors.allocate(
+          t, TensorShape({batch_size, cell_size_ * 7}), &states_tensor);
+      TensorMemZero(states_tensor, stream);
+
+      Tensor* h_tensor = nullptr;
+      h_tensors.allocate(
+          t, TensorShape({batch_size, cell_size_}), &h_tensor);
+      TensorMemZero(h_tensor, stream);
+    }
+
+    Tensor xh_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(
+          DT_FLOAT, TensorShape({batch_size, input_size + cell_size_}),
+          &xh_tensor));
+    
+    for (int64 t = 0; t < sequence_len_max; ++t) {
+      const Tensor x_tensor = x_tensors[t];
+      const Tensor* states_prev_tensor =
+          t <= 0 ? states_tensors[0] : states_tensors[t - 1];
+
+      Tensor* states_tensor = states_tensors[t];
+      Tensor* h_tensor = h_tensors[t];
+
+      functor::LSTMCellBlockFprop<Device, USE_CUBLAS>()(
+        stream, ctx->eigen_device<Device>(),
+        batch_size, input_size, cell_size_, forget_bias_,
+        x_tensor.matrix<float>(),
+        xh_tensor.matrix<float>(),
+        states_prev_tensor->matrix<float>(),
+        w_tensor->matrix<float>(),
+        b_tensor->vec<float>(),
+        h_tensor->matrix<float>(),
+        states_tensor->matrix<float>());
+    }
+  }
+
+ private:
+  int64 sequence_len_max_;
+  int64 cell_size_;
+  float forget_bias_;
+};
+
+REGISTER_KERNEL_BUILDER(Name("LSTMBlock")         \
+                            .Device(DEVICE_CPU),  \
+                        LSTMBlockOp<CPUDevice, false>);
+
+#ifdef GOOGLE_CUDA
+REGISTER_KERNEL_BUILDER(Name("LSTMBlock")         \
+                            .Device(DEVICE_GPU),  \
+                        LSTMBlockOp<GPUDevice, true>);
+#endif  // GOOGLE_CUDA
+
+template <typename Device, bool USE_CUBLAS>
+class LSTMBlockGradOp : public OpKernel {
+ public:
+  explicit LSTMBlockGradOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("sequence_len_max", &sequence_len_max_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("cell_size", &cell_size_));
+  }
+
+  void Compute(OpKernelContext* ctx) override {
+    const Tensor* sequence_len_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("sequence_len", &sequence_len_tensor));
+
+    OpInputList x_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("x", &x_tensors));
+
+    const Tensor* w_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("w", &w_tensor));
+
+    const Tensor* b_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("b", &b_tensor));
+
+    OpInputList states_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("states", &x_tensors));
+
+    OpInputList h_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("h", &h_tensors));
+
+    OpInputList h_grad_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("h_grad", &x_tensors));
+
+    auto sequence_len_t = sequence_len_tensor->vec<int64>();
+    std::vector<int64> seq_lens_vector(sequence_len_t.size());
+    ctx->eigen_device<Device>().memcpyDeviceToHost(
+        seq_lens_vector.data(), sequence_len_t.data(),
+        sizeof(int64) * sequence_len_t.size());
+
+    const int64 batch_size = x_tensors[0].dim_size(0);
+    const int64 input_size = x_tensors[0].dim_size(1);
+    const int64 sequence_len_max =
+        *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
+
+    perftools::gputools::Stream* stream =
+        ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
+
+    OpOutputList x_grad_tensors;
+    OP_REQUIRES_OK(ctx, ctx->output_list("x_grad", &x_grad_tensors));
+
+    Tensor* w_grad_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("w_grad",
+          TensorShape({input_size + cell_size_, cell_size_ * 4}),
+          &w_grad_tensor));
+    TensorMemZero(w_grad_tensor, stream);
+
+    Tensor* b_grad_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("b_grad",
+          TensorShape({cell_size_ * 4}), &b_grad_tensor));
+    TensorMemZero(b_grad_tensor, stream);
+
+    for (int64 t = 0; t < sequence_len_max_; ++t) {
+      Tensor* x_grad_tensor = nullptr;
+      x_grad_tensors.allocate(
+          t, TensorShape({batch_size, input_size}), &x_grad_tensor);
+      TensorMemZero(x_grad_tensor, stream);
+    }
+
+    Tensor xh_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(
+          DT_FLOAT, TensorShape({batch_size, input_size + cell_size_}),
+          &xh_tensor));
+
+    Tensor xh_grad_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, input_size + cell_size_}), &xh_grad_tensor));
+
+    Tensor states_grad_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_ * 7}), &states_grad_tensor));
+    TensorMemZero(&states_grad_tensor, stream);
+
+    Tensor states_prev_grad_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_ * 7}), &states_prev_grad_tensor));
+    
+    for (int64 t = 0; t < sequence_len_max; ++t) {
+      const Tensor x_tensor = x_tensors[t];
+      const Tensor states_prev_tensor = states_tensors[t - 1];
+      const Tensor states_tensor = states_tensors[t];
+      const Tensor h_tensor = h_tensors[t];
+      const Tensor h_grad_tensor = h_grad_tensors[t];
+
+      Tensor* x_grad_tensor = x_grad_tensors[t];
+      const Tensor states_grad_const_tensor = states_grad_tensor;
+
+      functor::LSTMCellBlockBprop<Device, USE_CUBLAS>()(
+          stream, ctx->eigen_device<Device>(),
+          batch_size, input_size, cell_size_,
+          x_tensor.matrix<float>(),
+          xh_tensor.matrix<float>(),
+          states_prev_tensor.matrix<float>(),
+          w_tensor->matrix<float>(),
+          b_tensor->vec<float>(),
+          h_tensor.matrix<float>(),
+          states_tensor.matrix<float>(),
+          h_grad_tensor.matrix<float>(),
+          states_grad_const_tensor.matrix<float>(),
+          xh_grad_tensor.matrix<float>(),
+          x_grad_tensor->matrix<float>(),
+          states_prev_grad_tensor.matrix<float>(),
+          w_grad_tensor->matrix<float>(),
+          b_grad_tensor->vec<float>()
+      );
+
+      if (stream) {
+        auto states_grad_ptr =
+            AsDeviceMemory(states_grad_tensor.flat<float>().data());
+        auto states_prev_grad_ptr =
+            AsDeviceMemory(states_prev_grad_tensor.flat<float>().data());
+        stream->ThenMemcpy(
+            &states_grad_ptr, states_prev_grad_ptr,
+            states_grad_tensor.TotalBytes());
+      } else {
+        std::memcpy(states_grad_tensor.flat<float>().data(),
+                    states_prev_grad_tensor.flat<float>().data(),
+                    states_grad_tensor.TotalBytes());
+      }
+    }
+  }
+
+ private:
+  int64 sequence_len_max_;
+  int64 cell_size_;
+};
+
+REGISTER_KERNEL_BUILDER(Name("LSTMBlockGrad")     \
+                            .Device(DEVICE_CPU),  \
+                        LSTMBlockGradOp<CPUDevice, false>);
+
+#ifdef GOOGLE_CUDA
+REGISTER_KERNEL_BUILDER(Name("LSTMBlockGrad")     \
+                            .Device(DEVICE_GPU),  \
+                        LSTMBlockGradOp<GPUDevice, true>);
+#endif  // GOOGLE_CUDA
 }  // end namespace tensorflow
