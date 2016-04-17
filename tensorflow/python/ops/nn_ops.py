@@ -734,9 +734,17 @@ def _LSTMCellBlockGradShape(op):
 
 @ops.RegisterGradient("LSTMCellBlock")
 def _LSTMCellBlockGrad(op, *grad):
+  x = op.inputs[0]
+  states_prev = op.inputs[1]
+  w = op.inputs[2]
+  b = op.inputs[3]
+  states = op.outputs[1]
+  x_grad = grad[0]
+  states_grad = grad[1]
+
   return gen_nn_ops.lstm_cell_block_grad(
-      op.inputs[0], op.inputs[1], op.inputs[2], op.inputs[3], op.outputs[0],
-      op.outputs[1], grad[0], grad[1], cell_size=op.get_attr("cell_size"))
+      x, states_prev, w, b, states, x_grad, states_grad,
+      cell_size=op.get_attr("cell_size"))
 
 
 @ops.RegisterShape("LSTMBlock")
@@ -752,7 +760,7 @@ def _LSTMBlockShape(op):
 @ops.RegisterShape("LSTMBlockGrad")
 def _LSTMBlockGradShape(op):
   batch_size = op.inputs[0].get_shape()[0].value
-  input_size = op.inputs[1].get_shape()[1].value
+  input_size = op.inputs[2].get_shape()[1].value
   cell_size = op.get_attr("cell_size")
   sequence_len_max = op.get_attr("sequence_len_max")
 
@@ -766,18 +774,22 @@ def _LSTMBlockGrad(op, *grad):
   cell_size = op.get_attr("cell_size")
   sequence_len_max = op.get_attr("sequence_len_max")
 
-  assert len(op.inputs) == sequence_len_max + 3
+  assert len(op.inputs) == sequence_len_max + 4
   assert len(op.outputs) == sequence_len_max * 2
   assert len(grad) == sequence_len_max * 2
 
-  lstm_block_grads = gen_nn_ops.lstm_block_grad(
-      op.inputs[0], op.inputs[1:sequence_len_max + 1],
-      op.inputs[sequence_len_max + 1], op.inputs[sequence_len_max + 2],
-      op.outputs[0:sequence_len_max],
-      op.outputs[sequence_len_max:sequence_len_max * 2],
-      grad[0:sequence_len_max], cell_size=cell_size)
+  sequence_len = op.inputs[0]
+  initial_state = op.inputs[1]
+  x = op.inputs[2:sequence_len_max + 2]
+  w = op.inputs[sequence_len_max + 2]
+  b = op.inputs[sequence_len_max + 3]
+  states = op.outputs[sequence_len_max:sequence_len_max * 2]
+  h_grad = grad[0:sequence_len_max]
 
-  return [None] + lstm_block_grads[0] + [lstm_block_grads[1]] + [lstm_block_grads[2]]
+  lstm_block_grads = gen_nn_ops.lstm_block_grad(
+      sequence_len, initial_state, x, w, b, states, h_grad, cell_size=cell_size)
+
+  return [None] + [None] + lstm_block_grads[0] + [lstm_block_grads[1]] + [lstm_block_grads[2]]
 
 
 # pylint: enable=invalid-name

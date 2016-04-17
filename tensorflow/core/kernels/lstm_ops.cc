@@ -153,9 +153,6 @@ class LSTMCellBlockGradOp : public OpKernel {
     const Tensor* b_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("b", &b_tensor));
 
-    const Tensor* h_tensor = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->input("h", &h_tensor));
-
     const Tensor* states_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("states", &states_tensor));
 
@@ -179,9 +176,6 @@ class LSTMCellBlockGradOp : public OpKernel {
     // CHECK_EQ(w_tensor->dim_size(1), cell_size_ * 4);
 
     CHECK_EQ(b_tensor->dim_size(0), cell_size_ * 4);
-
-    CHECK_EQ(h_tensor->dim_size(0), batch_size);
-    CHECK_EQ(h_tensor->dim_size(1), cell_size_);
 
     CHECK_EQ(states_tensor->dim_size(0), batch_size);
     CHECK_EQ(states_tensor->dim_size(1), cell_size_ * 7);
@@ -224,7 +218,7 @@ class LSTMCellBlockGradOp : public OpKernel {
         batch_size, input_size, cell_size_,
         x_tensor->matrix<float>(), xh_tensor.matrix<float>(),
         states_prev_tensor->matrix<float>(), w_tensor->matrix<float>(),
-        b_tensor->vec<float>(), h_tensor->matrix<float>(),
+        b_tensor->vec<float>(),
         states_tensor->matrix<float>(), h_grad_tensor->matrix<float>(),
         states_grad_tensor->matrix<float>(), xh_grad_tensor.matrix<float>(),
         x_grad_tensor->matrix<float>(), states_prev_grad_tensor->matrix<float>(),
@@ -250,7 +244,6 @@ namespace functor {
       typename TTypes<float>::ConstMatrix states_prev,
       typename TTypes<float>::ConstMatrix w,
       typename TTypes<float>::ConstVec b,
-      typename TTypes<float>::ConstMatrix h,
       typename TTypes<float>::ConstMatrix states,
       typename TTypes<float>::ConstMatrix h_grad,
       typename TTypes<float>::ConstMatrix states_grad,
@@ -279,6 +272,9 @@ class LSTMBlockOp : public OpKernel {
   void Compute(OpKernelContext* ctx) override {
     const Tensor* sequence_len_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("sequence_len", &sequence_len_tensor));
+
+    const Tensor* initial_state_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("initial_state", &initial_state_tensor));
 
     OpInputList x_tensors;
     OP_REQUIRES_OK(ctx, ctx->input_list("x", &x_tensors));
@@ -329,7 +325,7 @@ class LSTMBlockOp : public OpKernel {
     for (int64 t = 0; t < sequence_len_max; ++t) {
       const Tensor x_tensor = x_tensors[t];
       const Tensor* states_prev_tensor =
-          t <= 0 ? states_tensors[0] : states_tensors[t - 1];
+          t <= 0 ? initial_state_tensor : states_tensors[t - 1];
 
       Tensor* states_tensor = states_tensors[t];
       Tensor* h_tensor = h_tensors[t];
@@ -375,6 +371,9 @@ class LSTMBlockGradOp : public OpKernel {
     const Tensor* sequence_len_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("sequence_len", &sequence_len_tensor));
 
+    const Tensor* initial_state_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("initial_state", &initial_state_tensor));
+
     OpInputList x_tensors;
     OP_REQUIRES_OK(ctx, ctx->input_list("x", &x_tensors));
 
@@ -383,9 +382,6 @@ class LSTMBlockGradOp : public OpKernel {
 
     const Tensor* b_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("b", &b_tensor));
-
-    OpInputList h_tensors;
-    OP_REQUIRES_OK(ctx, ctx->input_list("h", &h_tensors));
 
     OpInputList states_tensors;
     OP_REQUIRES_OK(ctx, ctx->input_list("states", &states_tensors));
@@ -446,17 +442,11 @@ class LSTMBlockGradOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, cell_size_ * 7}), &states_prev_grad_tensor));
 
-    Tensor states_zero_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
-        TensorShape({batch_size, cell_size_ * 7}), &states_zero_tensor));
-    TensorMemZero(&states_zero_tensor, stream);
-
     for (int64 t = sequence_len_max - 1; t >= 0; --t) {
       const Tensor x_tensor = x_tensors[t];
       const Tensor states_prev_tensor =
-          t <= 0 ? states_zero_tensor : states_tensors[t - 1];
+          t <= 0 ? *initial_state_tensor : states_tensors[t - 1];
       const Tensor states_tensor = states_tensors[t];
-      const Tensor h_tensor = h_tensors[t];
       const Tensor h_grad_tensor = h_grad_tensors[t];
 
       Tensor* x_grad_tensor = x_grad_tensors[t];
@@ -470,7 +460,6 @@ class LSTMBlockGradOp : public OpKernel {
           states_prev_tensor.matrix<float>(),
           w_tensor->matrix<float>(),
           b_tensor->vec<float>(),
-          h_tensor.matrix<float>(),
           states_tensor.matrix<float>(),
           h_grad_tensor.matrix<float>(),
           states_grad_const_tensor.matrix<float>(),

@@ -137,7 +137,6 @@ struct LSTMCellBlockBprop {
       typename TTypes<float>::ConstMatrix states_prev,
       typename TTypes<float>::ConstMatrix w,
       typename TTypes<float>::ConstVec b,
-      typename TTypes<float>::ConstMatrix h,
       typename TTypes<float>::ConstMatrix states,
       typename TTypes<float>::ConstMatrix h_grad,
       typename TTypes<float>::ConstMatrix states_grad,
