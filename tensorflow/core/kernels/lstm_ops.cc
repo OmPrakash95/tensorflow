@@ -289,11 +289,11 @@ class LSTMBlockOp : public OpKernel {
     const Tensor* b_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("b", &b_tensor));
 
-    OpOutputList states_tensors;
-    OP_REQUIRES_OK(ctx, ctx->output_list("states", &states_tensors));
-
     OpOutputList h_tensors;
     OP_REQUIRES_OK(ctx, ctx->output_list("h", &h_tensors));
+
+    OpOutputList states_tensors;
+    OP_REQUIRES_OK(ctx, ctx->output_list("states", &states_tensors));
 
     auto sequence_len_t = sequence_len_tensor->vec<int64>();
     std::vector<int64> seq_lens_vector(sequence_len_t.size());
@@ -384,14 +384,14 @@ class LSTMBlockGradOp : public OpKernel {
     const Tensor* b_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("b", &b_tensor));
 
-    OpInputList states_tensors;
-    OP_REQUIRES_OK(ctx, ctx->input_list("states", &x_tensors));
-
     OpInputList h_tensors;
     OP_REQUIRES_OK(ctx, ctx->input_list("h", &h_tensors));
 
+    OpInputList states_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("states", &states_tensors));
+
     OpInputList h_grad_tensors;
-    OP_REQUIRES_OK(ctx, ctx->input_list("h_grad", &x_tensors));
+    OP_REQUIRES_OK(ctx, ctx->input_list("h_grad", &h_grad_tensors));
 
     auto sequence_len_t = sequence_len_tensor->vec<int64>();
     std::vector<int64> seq_lens_vector(sequence_len_t.size());
@@ -445,10 +445,16 @@ class LSTMBlockGradOp : public OpKernel {
     Tensor states_prev_grad_tensor;
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, cell_size_ * 7}), &states_prev_grad_tensor));
-    
-    for (int64 t = 0; t < sequence_len_max; ++t) {
+
+    Tensor states_zero_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_ * 7}), &states_zero_tensor));
+    TensorMemZero(&states_zero_tensor, stream);
+
+    for (int64 t = sequence_len_max - 1; t >= 0; --t) {
       const Tensor x_tensor = x_tensors[t];
-      const Tensor states_prev_tensor = states_tensors[t - 1];
+      const Tensor states_prev_tensor =
+          t <= 0 ? states_zero_tensor : states_tensors[t - 1];
       const Tensor states_tensor = states_tensors[t];
       const Tensor h_tensor = h_tensors[t];
       const Tensor h_grad_tensor = h_grad_tensors[t];

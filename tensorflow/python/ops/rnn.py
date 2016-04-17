@@ -25,6 +25,8 @@ from tensorflow.python.framework import tensor_shape
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
+from tensorflow.python.ops import gen_nn_ops
+from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import logging_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import rnn_cell
@@ -598,3 +600,16 @@ def _dynamic_rnn_loop(
       const_time_steps, const_batch_size, cell.output_size])
 
   return (final_outputs, final_state)
+
+
+def lstm_block(inputs, sequence_length, cell_size, forget_bias=1.0, scope=None):
+  with vs.variable_scope(scope or "LSTM") as varscope:
+    w_m = inputs[0].get_shape()[1] + cell_size
+    w_n = cell_size * 4
+    w = vs.get_variable("W", [w_m, w_n])
+    b = vs.get_variable("b", [w.get_shape()[1]],
+                        initializer=init_ops.constant_initializer(0.0))
+
+    return gen_nn_ops.lstm_block(
+        sequence_len=sequence_length, x=inputs, w=w, b=b,
+        cell_size=cell_size, forget_bias=forget_bias)

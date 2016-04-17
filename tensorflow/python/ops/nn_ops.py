@@ -719,6 +719,7 @@ def _LSTMCellBlockShape(op):
   return [tensor_shape.TensorShape([batch_size, cell_size]),
           tensor_shape.TensorShape([batch_size, cell_size * 7])]
 
+
 @ops.RegisterShape("LSTMCellBlockGrad")
 def _LSTMCellBlockGradShape(op):
   batch_size = op.inputs[0].get_shape()[0].value
@@ -736,6 +737,47 @@ def _LSTMCellBlockGrad(op, *grad):
   return gen_nn_ops.lstm_cell_block_grad(
       op.inputs[0], op.inputs[1], op.inputs[2], op.inputs[3], op.outputs[0],
       op.outputs[1], grad[0], grad[1], cell_size=op.get_attr("cell_size"))
+
+
+@ops.RegisterShape("LSTMBlock")
+def _LSTMBlockShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  cell_size = op.get_attr("cell_size")
+  sequence_len_max = op.get_attr("sequence_len_max")
+
+  return [tensor_shape.TensorShape([batch_size, cell_size])] * sequence_len_max + [
+          tensor_shape.TensorShape([batch_size, cell_size * 7])] * sequence_len_max
+
+
+@ops.RegisterShape("LSTMBlockGrad")
+def _LSTMBlockGradShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  input_size = op.inputs[1].get_shape()[1].value
+  cell_size = op.get_attr("cell_size")
+  sequence_len_max = op.get_attr("sequence_len_max")
+
+  return [tensor_shape.TensorShape([batch_size, input_size])] * sequence_len_max + [
+          tensor_shape.TensorShape([input_size + cell_size, cell_size * 4])] + [
+          tensor_shape.TensorShape([cell_size * 4])]
+
+
+@ops.RegisterGradient("LSTMBlock")
+def _LSTMBlockGrad(op, *grad):
+  cell_size = op.get_attr("cell_size")
+  sequence_len_max = op.get_attr("sequence_len_max")
+
+  assert len(op.inputs) == sequence_len_max + 3
+  assert len(op.outputs) == sequence_len_max * 2
+  assert len(grad) == sequence_len_max * 2
+
+  lstm_block_grads = gen_nn_ops.lstm_block_grad(
+      op.inputs[0], op.inputs[1:sequence_len_max + 1],
+      op.inputs[sequence_len_max + 1], op.inputs[sequence_len_max + 2],
+      op.outputs[0:sequence_len_max],
+      op.outputs[sequence_len_max:sequence_len_max * 2],
+      grad[0:sequence_len_max], cell_size=cell_size)
+
+  return [None] + lstm_block_grads[0] + [lstm_block_grads[1]] + [lstm_block_grads[2]]
 
 
 # pylint: enable=invalid-name
