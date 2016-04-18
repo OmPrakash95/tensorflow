@@ -33,6 +33,7 @@ from tensorflow.python.ops import gru_ops
 from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import nn_ops
+from tensorflow.python.ops import gen_nn_ops
 from tensorflow.python.ops import variable_scope as vs
 
 from tensorflow.python.ops.math_ops import sigmoid
@@ -228,6 +229,35 @@ class BasicLSTMCell(RNNCell):
       new_h = tanh(new_c) * sigmoid(o)
 
       return new_h, array_ops.concat(1, [new_c, new_h])
+
+
+class LSTMCellBlock(RNNCell):
+  """LSTMCellBlock.
+  """
+
+  def __init__(self, num_units, forget_bias=1.0):
+    self._num_units = num_units
+    self._forget_bias = forget_bias
+
+  @property
+  def output_size(self):
+    return self._num_units
+
+  @property
+  def state_size(self):
+    return self._num_units * 7
+
+  def __call__(self, x, states_prev, scope=None):
+    with vs.variable_scope(scope or type(self).__name__):
+      w_m = x.get_shape()[1] + self._num_units
+      w_n = self._num_units * 4
+      w = vs.get_variable("W", [w_m, w_n])
+      b = vs.get_variable("b", [w.get_shape()[1]],
+                          initializer=init_ops.constant_initializer(0.0))
+      h, states = gen_nn_ops.lstm_cell_block(
+          x, states_prev, w, b, cell_size=self._num_units,
+          forget_bias=self._forget_bias)
+      return h, states
 
 
 def _get_concat_variable(name, shape, dtype, num_shards):

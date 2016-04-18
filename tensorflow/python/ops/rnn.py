@@ -25,6 +25,8 @@ from tensorflow.python.framework import tensor_shape
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
+from tensorflow.python.ops import gen_nn_ops
+from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import logging_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import rnn_cell
@@ -598,3 +600,25 @@ def _dynamic_rnn_loop(
       const_time_steps, const_batch_size, cell.output_size])
 
   return (final_outputs, final_state)
+
+
+def lstm_block(inputs, cell_size, sequence_length=None, initial_state=None,
+               forget_bias=1.0, scope=None):
+  with vs.variable_scope(scope or "LSTM"):
+    batch_size = inputs[0].get_shape()[0].value
+    input_size = inputs[0].get_shape()[1].value
+    w = vs.get_variable("W", [input_size + cell_size, cell_size * 4])
+    b = vs.get_variable("b", [w.get_shape()[1]],
+                        initializer=init_ops.constant_initializer(0.0))
+
+    if sequence_length is None:
+      sequence_length = array_ops.constant(
+          len(inputs), dtype=dtypes.int64, shape=[batch_size])
+
+    if initial_state is None:
+      initial_state = array_ops.constant(
+          0.0, dtype=dtypes.float32, shape=[batch_size, cell_size * 7])
+
+    return gen_nn_ops.lstm_block(
+        sequence_length, initial_state, inputs, w, b, cell_size=cell_size,
+        forget_bias=forget_bias)

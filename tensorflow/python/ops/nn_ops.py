@@ -711,4 +711,85 @@ def top_k(input, k=1, sorted=True, name=None):
   return gen_nn_ops._top_kv2(input, k=k, sorted=sorted, name=name)
 
 
+@ops.RegisterShape("LSTMCellBlock")
+def _LSTMCellBlockShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  cell_size = op.get_attr("cell_size")
+
+  return [tensor_shape.TensorShape([batch_size, cell_size]),
+          tensor_shape.TensorShape([batch_size, cell_size * 7])]
+
+
+@ops.RegisterShape("LSTMCellBlockGrad")
+def _LSTMCellBlockGradShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  input_size = op.inputs[0].get_shape()[1].value
+  cell_size = op.get_attr("cell_size")
+
+  return [tensor_shape.TensorShape([batch_size, input_size]),
+          tensor_shape.TensorShape([batch_size, cell_size * 7]),
+          tensor_shape.TensorShape([input_size + cell_size, cell_size * 4]),
+          tensor_shape.TensorShape([cell_size * 4])]
+
+
+@ops.RegisterGradient("LSTMCellBlock")
+def _LSTMCellBlockGrad(op, *grad):
+  x = op.inputs[0]
+  states_prev = op.inputs[1]
+  w = op.inputs[2]
+  b = op.inputs[3]
+  states = op.outputs[1]
+  x_grad = grad[0]
+  states_grad = grad[1]
+
+  return gen_nn_ops.lstm_cell_block_grad(
+      x, states_prev, w, b, states, x_grad, states_grad,
+      cell_size=op.get_attr("cell_size"))
+
+
+@ops.RegisterShape("LSTMBlock")
+def _LSTMBlockShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  cell_size = op.get_attr("cell_size")
+  sequence_len_max = op.get_attr("sequence_len_max")
+
+  return [tensor_shape.TensorShape([batch_size, cell_size])] * sequence_len_max + [
+          tensor_shape.TensorShape([batch_size, cell_size * 7])] * sequence_len_max
+
+
+@ops.RegisterShape("LSTMBlockGrad")
+def _LSTMBlockGradShape(op):
+  batch_size = op.inputs[0].get_shape()[0].value
+  input_size = op.inputs[2].get_shape()[1].value
+  cell_size = op.get_attr("cell_size")
+  sequence_len_max = op.get_attr("sequence_len_max")
+
+  return [tensor_shape.TensorShape([batch_size, input_size])] * sequence_len_max + [
+          tensor_shape.TensorShape([input_size + cell_size, cell_size * 4])] + [
+          tensor_shape.TensorShape([cell_size * 4])]
+
+
+@ops.RegisterGradient("LSTMBlock")
+def _LSTMBlockGrad(op, *grad):
+  cell_size = op.get_attr("cell_size")
+  sequence_len_max = op.get_attr("sequence_len_max")
+
+  assert len(op.inputs) == sequence_len_max + 4
+  assert len(op.outputs) == sequence_len_max * 2
+  assert len(grad) == sequence_len_max * 2
+
+  sequence_len = op.inputs[0]
+  initial_state = op.inputs[1]
+  x = op.inputs[2:sequence_len_max + 2]
+  w = op.inputs[sequence_len_max + 2]
+  b = op.inputs[sequence_len_max + 3]
+  states = op.outputs[sequence_len_max:sequence_len_max * 2]
+  h_grad = grad[0:sequence_len_max]
+
+  lstm_block_grads = gen_nn_ops.lstm_block_grad(
+      sequence_len, initial_state, x, w, b, states, h_grad, cell_size=cell_size)
+
+  return [None] + [None] + lstm_block_grads[0] + [lstm_block_grads[1]] + [lstm_block_grads[2]]
+
+
 # pylint: enable=invalid-name

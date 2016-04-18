@@ -872,4 +872,62 @@ values: The `k` largest elements along each last dimensional slice.
 indices: The indices of `values` within the last dimension of `input`.
 )doc");
 
+REGISTER_OP("LSTMCellBlock")
+    .Attr("cell_size: int")
+    .Attr("forget_bias: float = 1.0")
+    .Input("x: float")
+    .Input("states_prev: float")
+    .Input("w: float")
+    .Input("b: float")
+    .Output("h: float")
+    .Output("states: float")
+    .Doc(R"doc(
+)doc");
+
+REGISTER_OP("LSTMCellBlockGrad")
+    .Attr("cell_size: int")
+    .Input("x: float")
+    .Input("states_prev: float")
+    .Input("w: float")
+    .Input("b: float")
+    .Input("states: float")
+    .Input("h_grad: float")
+    .Input("states_grad: float")
+    .Output("x_grad: float")
+    .Output("states_prev_grad: float")
+    .Output("w_grad: float")
+    .Output("b_grad: float")
+    .Doc(R"doc(
+)doc");
+
+REGISTER_OP("LSTMBlock")
+    .Attr("cell_size: int")
+    .Attr("forget_bias: float = 1.0")
+    .Attr("sequence_len_max: int")
+    .Input("sequence_len: int64")
+    .Input("initial_state: float")
+    .Input("x: sequence_len_max * float")
+    .Input("w: float")
+    .Input("b: float")
+    .Output("h: sequence_len_max * float")
+    .Output("states: sequence_len_max * float")
+    .Doc(R"doc(
+)doc");
+
+REGISTER_OP("LSTMBlockGrad")
+    .Attr("cell_size: int")
+    .Attr("sequence_len_max: int")
+    .Input("sequence_len: int64")
+    .Input("initial_state: float")
+    .Input("x: sequence_len_max * float")
+    .Input("w: float")
+    .Input("b: float")
+    .Input("states: sequence_len_max * float")
+    .Input("h_grad: sequence_len_max * float")
+    .Output("x_grad: sequence_len_max * float")
+    .Output("w_grad: float")
+    .Output("b_grad: float")
+    .Doc(R"doc(
+)doc");
+
 }  // namespace tensorflow
