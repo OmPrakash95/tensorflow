@@ -80,6 +80,8 @@ message ModelParamsProto {
   int64 frame_stack = 20;
   int64 frame_skip = 21;
 
+  string rnn_cell_type = 40;
+
   string encoder_prefix = 100;
   repeated string encoder_layer = 101;
   string encoder_embedding = 102;

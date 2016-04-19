@@ -245,13 +245,15 @@ class SpeechModel(object):
 
     assert self.model_params.features_width
     assert self.model_params.frame_stack
-    self.features, self.alignment, self.alignment_weight, _, self.features_len, _, _, self.text, self.tokens, self.tokens_pinyin, self.tokens_len, self.tokens_weights, self.tokens_pinyin_weights, self.uttid = s4_parse_utterance(
+    self.features, self.alignment, self.alignment_weight, _, self.features_len, _, _, self.s_min, self.s_max, self.text, self.tokens, self.tokens_pinyin, self.tokens_len, self.tokens_weights, self.tokens_pinyin_weights, self.uttid = s4_parse_utterance(
         serialized, features_len_max=self.model_params.features_len_max,
         alignment_len_max=self.model_params.features_len_max / 4,
         tokens_len_max=self.model_params.tokens_len_max + 1,
         frame_stack=self.model_params.frame_stack,
         frame_skip=self.model_params.frame_skip)
 
+    self.s_min.set_shape([self.batch_size])
+    self.s_max.set_shape([self.batch_size])
     for feature in self.features:
       feature.set_shape([self.batch_size, self.model_params.features_width * self.model_params.frame_stack])
     for token in self.tokens:
@@ -305,10 +307,14 @@ class SpeechModel(object):
   def create_decoder_cctc(self, mode):
     print("creating decoder...")
     with vs.variable_scope("decoder"):
-      self.decoder_cell = tf.nn.rnn_cell.GRUCell(
-          self.model_params.decoder_cell_size)
-      self.decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(
-          self.model_params.decoder_cell_size)
+      if self.model_params.rnn_cell_type == "gru":
+        self.decoder_cell = tf.nn.rnn_cell.GRUCell(
+            self.model_params.decoder_cell_size)
+      else:
+        self.decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(
+            self.model_params.decoder_cell_size)
+        self.decoder_cell = tf.nn.rnn_cell.LSTMCellBlock(
+            self.model_params.decoder_cell_size)
 
       if self.model_params.cctc.xent:
         self.labels = self.alignment
@@ -365,11 +371,13 @@ class SpeechModel(object):
 
           inp = embedding_ops.embedding_lookup(embedding_matrix, inp)
 
-        inp = rnn_cell.linear(
-            [inp] + [self.encoder_states[-1][0][decoder_time_idx]],
-            self.decoder_cell.input_size, True, scope="Input")
+        # inp = rnn_cell.linear(
+        #     [inp] + [self.encoder_states[-1][0][decoder_time_idx]],
+        #     self.decoder_cell.input_size, True, scope="Input")
+        inp = array_ops.concat(1, [inp] + [self.encoder_states[-1][0][decoder_time_idx]])
         if decoder_time_idx == 0:
-          state = array_ops.zeros([self.batch_size, self.decoder_cell.state_size])
+          # state = array_ops.zeros([self.batch_size, self.decoder_cell.state_size])
+          state = self.decoder_cell.zero_state(self.batch_size, tf.float32)
         output, state = self.decoder_cell(inp, state)
         logit = rnn_cell.linear([output], self.model_params.vocab_size, True, scope="Logit")
         prob = nn_ops.softmax(logit)
@@ -401,14 +409,11 @@ class SpeechModel(object):
             self.labels_weight.append(tf.constant(1.0, shape=[self.batch_size], dtype=tf.float32))
         elif self.model_params.cctc.wsj_greedy_supervised:
           if mode == "train":
-            if self.model_params.encoder_bidirectional:
-              lpad = 20
-              rpad = 10
-            else:
-              lpad = 30
-              rpad = 10
+            lpad = 8
+            rpad = -4
             label, label_weight = gen_gru_ops.cctc_wsj_greedy_supervised_alignment(
-                self.tokens, self.tokens_len, conditioned_path, self.encoder_states[-1][1], prob,
+                self.s_min, self.s_max, self.tokens, self.tokens_len,
+                conditioned_path, self.encoder_states[-1][1], prob,
                 seed=decoder_time_idx + 2016, seed2=decoder_time_idx + 43110,
                 lpad=lpad, rpad=rpad, vowel_pad=2, word_pad=4)
             #label, label_weight = gen_gru_ops.cctc_weakly_supervised_alignment_label(
@@ -459,19 +464,33 @@ class SpeechModel(object):
     #  xs.append(self.encoder_states[-1][0][idx])
     if bidirectional:
       with vs.variable_scope("fwd"):
-        fwd = gru_ops.gru(
-            cell_size=self.model_params.encoder_cell_size,
-            sequence_len=sequence_len, xs=xs)[-1]
+        if self.model_params.rnn_cell_type == "gru":
+          fwd = gru_ops.gru(
+              cell_size=self.model_params.encoder_cell_size,
+              sequence_len=sequence_len, xs=xs)[-1]
+        else:
+          fwd, _ = rnn.lstm_block(
+              xs, cell_size=self.model_params.encoder_cell_size,
+              sequence_length=sequence_len, xs=xs)
       with vs.variable_scope("bwd"):
-        bwd = rnn._reverse_seq(gru_ops.gru(
-            cell_size=self.model_params.encoder_cell_size,
-            sequence_len=sequence_len, xs=rnn._reverse_seq(xs, sequence_len))[-1], sequence_len)
+        if self.model_params.rnn_cell_type == "gru":
+          bwd = rnn._reverse_seq(gru_ops.gru(
+              cell_size=self.model_params.encoder_cell_size,
+              sequence_len=sequence_len, xs=rnn._reverse_seq(xs, sequence_len))[-1], sequence_len)
+        else:
+          raise Exception("finish me")
       self.encoder_states.append([[array_ops.concat(1, [fw, bw])
                                    for fw, bw in zip(fwd, bwd)], sequence_len])
     else:
-      self.encoder_states.append([gru_ops.gru(
-          cell_size=self.model_params.encoder_cell_size,
-          sequence_len=sequence_len, xs=xs)[-1], sequence_len])
+      if self.model_params.rnn_cell_type == "gru":
+        self.encoder_states.append([gru_ops.gru(
+            cell_size=self.model_params.encoder_cell_size,
+            sequence_len=sequence_len, xs=xs)[-1], sequence_len])
+      else:
+        outputs, _ = rnn.lstm_block(
+            xs, cell_size=self.model_params.encoder_cell_size,
+            sequence_length=sequence_len)
+        self.encoder_states.append([outputs, sequence_len])
 
   def create_dynamic_encoder(self):
     print("creating dynamic encoder...")
@@ -1106,27 +1125,27 @@ class SpeechModel(object):
 
   def compute_edit_distance_ctcc(self, fetches, edit_distance_proto):
     assert "edit_distance" in fetches
+    time_factor = len(self.features) / len(self.encoder_states[-1][0])
+    assert time_factor > 0
 
     decode_results_filepath = os.path.join(FLAGS.logdir, "decode_results_%s_%d.txt" % (self.mode, self.epoch))
     with open(decode_results_filepath, "a") as decode_results_file:
+      uttids = fetches["uttid"]
       refs = np.stack(fetches["tokens"])
       hyps = np.stack(fetches["hyp"])
       labs = np.stack(fetches["labels"])
 
       #feats = np.stack(fetches["features"])
-      #feats_len = fetches["features_len"]
+      feats_len = fetches["features_len"]
       for b in range(self.batch_size):
-        ref = filter(lambda a: a != 0, [x[b] for x in refs])
-        hyp = filter(lambda a: a != 4, [x[b] for x in hyps])
-        hyp_b = [x[b] for x in hyps]
-        lab_b = [x[b] for x in labs]
+        uttid = uttids[b]
+        ref_b = filter(lambda a: a != 0, [x[b] for x in refs])
+        hyp_uncollapsed_b = [x[b] for x in hyps[:(feats_len[b] / time_factor)]]
+        hyp_b = filter(lambda a: a != 4, hyp_uncollapsed_b)
+        lab_b = [x[b] for x in labs[:(feats_len[b] / time_factor)]]
 
         #feats_b = np.array([x[b] for x in feats[:feats_len[b]]])
         #feats_b = feats_b.transpose()[:40,:]
-        while hyp_b and hyp_b[-1] == 4:
-          hyp_b.pop()
-        while lab_b and lab_b[-1] == 4:
-          lab_b.pop()
 
         if FLAGS.dataset == "timit":
           # Remap our phones before distance comparison.
@@ -1135,21 +1154,23 @@ class SpeechModel(object):
           hyp = self.timit.remap(hyp)
           hyp = [x[0] for x in itertools.groupby(hyp)]
 
-          decode_results_file.write("ref:   %s\n" % self.timit.to_string(ref))
-          decode_results_file.write("hyp:   %s\n" % self.timit.to_string(hyp))
+          decode_results_file.write("ref:   [%s]\n" % self.timit.to_string(ref))
+          decode_results_file.write("hyp:   [%s]\n" % self.timit.to_string(hyp))
           #decode_results_file.write("hyp_b: %s\n" % self.timit.to_string(hyp_b))
         elif FLAGS.dataset == "wsj":
-          decode_results_file.write("ref:   %s\n" % self.wsj.to_string(ref))
-          decode_results_file.write("hyp:   %s\n" % self.wsj.to_string(hyp))
+          decode_results_file.write("uttid: [%s]\n" % uttid)
+          decode_results_file.write("ref:   [%s]\n" % self.wsj.to_string(ref_b))
+          decode_results_file.write("hyp:   [%s]\n" % self.wsj.to_string(hyp_b))
+          decode_results_file.write("hyp:   [%s]\n" % self.wsj.to_string(hyp_uncollapsed_b))
           alignment_b = self.wsj.to_string(lab_b)
-          decode_results_file.write("lab_b: %s\n" % alignment_b)
+          decode_results_file.write("lab_b: [%s]\n" % alignment_b)
 
           #self.visualize_feats_alignment(feats_b, alignment_b)
 
-        edit_distance = las_utils.LevensteinDistance(ref, hyp)
+        edit_distance = las_utils.LevensteinDistance(ref_b, hyp_b)
 
         edit_distance_proto.edit_distance += edit_distance
-        edit_distance_proto.ref_length += len(ref)
+        edit_distance_proto.ref_length += len(ref_b)
     # raise Exception("DONE!")
 
   def print_labels_ctcc(self, fetches):

@@ -198,7 +198,7 @@ class CCTCWsjGreedySupervisedAlignmentOp : public OpKernel {
     : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, generator_.Init(ctx));
 
-    OP_REQUIRES_OK(ctx, ctx->GetAttr("eow_token", &blank_token_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("eow_token", &eow_token_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("blank_token", &blank_token_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("lpad", &lpad_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("rpad", &rpad_));
@@ -224,7 +224,7 @@ class CCTCWsjGreedySupervisedAlignmentOp : public OpKernel {
   int32 CountEOW(int32 eow_token, const std::vector<int32>& tokens) const {
     int32 count = 0;
     for (int32 token : tokens) {
-      count += token == eow_token;
+      count += (token == eow_token);
     }
     return count;
   }
@@ -271,6 +271,12 @@ class CCTCWsjGreedySupervisedAlignmentOp : public OpKernel {
   }
 
   void Compute(OpKernelContext* ctx) override {
+    const Tensor* s_min_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("s_min", &s_min_tensor));
+
+    const Tensor* s_max_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("s_max", &s_max_tensor));
+
     OpInputList ref_list;
     OP_REQUIRES_OK(ctx, ctx->input_list("ref", &ref_list));
 
@@ -347,21 +353,24 @@ class CCTCWsjGreedySupervisedAlignmentOp : public OpKernel {
       const int32 ref_size = ref.size();
 
       // Compute the maximum lpad.
-      const int32 lpad = std::min(lpad_, ali_len - ref_size);
+      const int32 s_min = s_min_tensor->flat<int32>().data()[b] / 2;
+      const int32 lpad = std::min(s_min + lpad_, ali_len - ref_size);
 
       // Compute the maximum rpad.
-      const int32 rpad = std::min(rpad_, ali_len - ref_size - lpad);
+      const int32 s_max = s_max_tensor->flat<int32>().data()[b] / 2;
+      CHECK_LE(s_max, ali_len);
+      const int32 rpad = std::max(std::min(ali_len - s_max + rpad_, ali_len - ref_size - lpad), 0);
       CHECK_GE(lpad, 0);
       CHECK_GE(rpad, 0);
 
       int32 wpad = count_eow == 0
           ? 0
-          : std::min((ali_len - lpad_ - rpad_ - static_cast<int32>(ref.size()) - 1) / count_eow,
+          : std::min((s_max - s_min - static_cast<int32>(ref.size())) / count_eow,
                      word_pad_);
       wpad = std::max(wpad, 0);
       int32 vpad = count_vowels == 0
           ? 0
-          : std::min((ali_len - lpad_ - rpad_ - static_cast<int32>(ref.size()) - wpad * count_eow - 1) / count_vowels,
+          : std::min((s_max - s_min - static_cast<int32>(ref.size()) - wpad * count_eow) / count_vowels,
                      vowel_pad_);
       vpad = std::max(vpad, 0);
 
@@ -373,31 +382,6 @@ class CCTCWsjGreedySupervisedAlignmentOp : public OpKernel {
           // LOG(INFO) << VectorToString(hyps[b]);
           w_t = 0.0f;
         } else {
-          // Number of tokens (including blank) we still have to emit.
-          const int32 c_t = ali_len - tlen_ - rpad;
-          CHECK_GE(c_t, 0);
-
-          // Number of tokens (excluding blank) we still have to emit.
-          const int32 d_t = ref.size() - hyp.size();
-          CHECK_GE(d_t, 0);
-
-          // Number of blanks we still have to emit.
-          const int32 b_t = c_t - d_t;
-          if (b_t < 0) {
-            LOG(INFO) << VectorToString(ref);
-            LOG(INFO) << VectorToString(hyp);
-            LOG(INFO) << VectorToString(hyp_uncollapsed);
-            LOG(INFO) << "wpad: " << wpad;
-            LOG(INFO) << "vpad: " << vpad;
-            LOG(INFO) << tlen_;
-            LOG(INFO) << count_vowels;
-            LOG(INFO) << lpad;
-            LOG(INFO) << ali_len;
-            LOG(INFO) << ref.size();
-            LOG(INFO) << ali_len - lpad_ - rpad_ - static_cast<int32>(ref.size());
-          }
-          CHECK_GE(b_t, 0);
-
           // token_next is the correct token we want to emit.
           int32 token_next = ref[hyp.size()];
           const float token_next_prob = hyp_prob->matrix<float>()(b, token_next);
@@ -407,28 +391,26 @@ class CCTCWsjGreedySupervisedAlignmentOp : public OpKernel {
             // Our model predicted (partially) correctly!
             l_t = token_next;
           } else if (token_next == eow_token_) {
-            // Forced EOW padding.
             if (!HasPadding(hyp_uncollapsed, blank_token_, wpad)) {
               token_next = blank_token_;
-              l_t = token_next;
+              l_t = blank_token_;
             }
           } else if (IsVowel(token_next)) {
-            // Forced Vowel padding.
             if (!HasPadding(hyp_uncollapsed, blank_token_, vpad)) {
               token_next = blank_token_;
-              l_t = token_next;
+              l_t = blank_token_;
             }
           }
           
           // Check if we are behind or ahead, if we are behind we force the
           // model to emit a token (rather than blank).
-          const int32 frames = ali_len - lpad - rpad;
+          const int32 frames = s_max - s_min;
           CHECK_GE(frames, 0);
           const float f_per_t =
               static_cast<float>(frames) / static_cast<float>(ref_size + count_eow * wpad + count_vowels * vpad);
           const int32 tokens =
               (hyp.size() + CountEOW(eow_token_, hyp) * wpad + CountVowel(hyp) * vpad);
-          if (tokens <= (tlen_ - lpad) / f_per_t) {
+          if (tokens < (tlen_ - lpad) / f_per_t) {
             l_t = token_next;
           }
         }

@@ -27,6 +27,8 @@ REGISTER_OP("S4ParseUtterance")
     .Output("features_len: int64")
     .Output("features_width: int64")
     .Output("features_weight: features_len_max* float")
+    .Output("s_min: int32")
+    .Output("s_max: int32")
     .Output("text: string")
     .Output("tokens: tokens_len_max * int32")
     .Output("tokens_pinyin: tokens_len_max * int32")
@@ -72,6 +74,8 @@ class S4ParseUtterance : public OpKernel {
     Tensor* output_tensor_features_len = nullptr;
     Tensor* output_tensor_features_width = nullptr;
     OpOutputList output_list_features_weight;
+    Tensor* output_tensor_s_min = nullptr;
+    Tensor* output_tensor_s_max = nullptr;
     Tensor* output_tensor_text = nullptr;
     OpOutputList output_list_tokens;
     Tensor* output_tensor_tokens_len = nullptr;
@@ -151,6 +155,12 @@ class S4ParseUtterance : public OpKernel {
             ctx, ctx->allocate_output("features_width", TensorShape(), &output_tensor_features_width));
         output_tensor_features_width->flat<int64>().data()[0] = features_width;
 
+        OP_REQUIRES_OK(
+            ctx, ctx->allocate_output("s_min", TensorShape({batch_size}), &output_tensor_s_min));
+        std::fill_n(output_tensor_s_min->flat<int32>().data(), batch_size, 0);
+        OP_REQUIRES_OK(
+            ctx, ctx->allocate_output("s_max", TensorShape({batch_size}), &output_tensor_s_max));
+        std::fill_n(output_tensor_s_max->flat<int32>().data(), batch_size, 0);
         OP_REQUIRES_OK(
             ctx, ctx->allocate_output("text", TensorShape({batch_size}), &output_tensor_text));
 
@@ -292,6 +302,15 @@ class S4ParseUtterance : public OpKernel {
           }
         }
       }  // else it is pre-zeroed.
+
+      // s_min / s_max
+      if (feature_dict.find("s_min") != feature_dict.end()) {
+        const auto& s_min_iter = feature_dict.find("s_min");
+        const auto& s_max_iter = feature_dict.find("s_max");
+
+        output_tensor_s_min->flat<int>().data()[b] = s_min_iter->second.int64_list().value(0);
+        output_tensor_s_max->flat<int>().data()[b] = s_max_iter->second.int64_list().value(0);
+      }
 
       // Copy the uttid across.
       const auto& uttid_iter = feature_dict.find("uttid");

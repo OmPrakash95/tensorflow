@@ -246,8 +246,21 @@ def convert(
     tokens_len_max = max(tokens_len_max, tokens_len)
     tokens_len_total += tokens_len
 
+    feats_max = feats.max(1)
+    s_min = 0 
+    s_max = len(feats_max) - 1 
+    for idx in range(len(feats_max)):
+      if feats_max[idx] > 1.0:
+        s_min = idx 
+        break
+    for idx in range(len(feats_max) - 1, 0, -1):
+      if feats_max[idx] > 1.0:
+        s_max = idx 
+        break
+    assert tokens_len < (s_max - s_min) / 2 
+
     if tokens_len:
-      feature_token_ratio_min = min(feature_token_ratio_min, feats.shape[0] / tokens_len)
+      feature_token_ratio_min = min(feature_token_ratio_min, (s_max - s_min) / tokens_len)
 
     vowel_count = count_vowels(text)
     word_count = count_words(text)
@@ -270,6 +283,8 @@ def convert(
           'features': tf.train.Feature(float_list=tf.train.FloatList(value=feats.flatten('C').tolist())),
           'tokens': tf.train.Feature(int64_list=tf.train.Int64List(value=tokens)),
           'uttid': tf.train.Feature(bytes_list=tf.train.BytesList(value=[str(uttid)])),
+          's_min': tf.train.Feature(int64_list=tf.train.Int64List(value=[s_min])),
+          's_max': tf.train.Feature(int64_list=tf.train.Int64List(value=[s_max])),
           'text': tf.train.Feature(bytes_list=tf.train.BytesList(value=[text]))}))
     tf_record_writer.write(example.SerializeToString())
 
