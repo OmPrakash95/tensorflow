@@ -713,7 +713,7 @@ def top_k(input, k=1, sorted=True, name=None):
 
 @ops.RegisterShape("LSTMCellBlock")
 def _LSTMCellBlockShape(op):
-  batch_size = op.inputs[0].get_shape()[0].value
+  batch_size = op.inputs[0].get_shape().with_rank(2)[0].value
   cell_size = op.get_attr("cell_size")
 
   return [tensor_shape.TensorShape([batch_size, cell_size]),
@@ -722,8 +722,8 @@ def _LSTMCellBlockShape(op):
 
 @ops.RegisterShape("LSTMCellBlockGrad")
 def _LSTMCellBlockGradShape(op):
-  batch_size = op.inputs[0].get_shape()[0].value
-  input_size = op.inputs[0].get_shape()[1].value
+  batch_size = op.inputs[0].get_shape().with_rank(2)[0].value
+  input_size = op.inputs[0].get_shape().with_rank(2)[1].value
   cell_size = op.get_attr("cell_size")
 
   return [tensor_shape.TensorShape([batch_size, input_size]),
@@ -749,7 +749,7 @@ def _LSTMCellBlockGrad(op, *grad):
 
 @ops.RegisterShape("LSTMBlock")
 def _LSTMBlockShape(op):
-  batch_size = op.inputs[0].get_shape()[0].value
+  batch_size = op.inputs[0].get_shape().with_rank(1)[0].value
   cell_size = op.get_attr("cell_size")
   sequence_len_max = op.get_attr("sequence_len_max")
 
@@ -759,8 +759,8 @@ def _LSTMBlockShape(op):
 
 @ops.RegisterShape("LSTMBlockGrad")
 def _LSTMBlockGradShape(op):
-  batch_size = op.inputs[0].get_shape()[0].value
-  input_size = op.inputs[2].get_shape()[1].value
+  batch_size = op.inputs[0].get_shape().with_rank(1)[0].value
+  input_size = op.inputs[2].get_shape().with_rank(2)[1].value
   cell_size = op.get_attr("cell_size")
   sequence_len_max = op.get_attr("sequence_len_max")
 
