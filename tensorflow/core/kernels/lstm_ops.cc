@@ -68,18 +68,34 @@ class LSTMCellBlockOp : public OpKernel {
 
     const int64 batch_size = x_tensor->dim_size(0);
     const int64 input_size = x_tensor->dim_size(1);
+    const int64 state_size = cell_size_ * 7;
 
     perftools::gputools::Stream* stream =
         ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
 
     // Sanity checks for our input shapes.
-    CHECK_EQ(states_prev_tensor->dim_size(0), batch_size);
-    CHECK_EQ(states_prev_tensor->dim_size(1), cell_size_ * 7);
+    OP_REQUIRES(ctx, states_prev_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("states_prev.dims(0) != batch_size: ",
+                                        states_prev_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, states_prev_tensor->dim_size(1) == state_size,
+                errors::InvalidArgument("states_prev.dims(1) != state_size: ",
+                                        states_prev_tensor->dim_size(1),
+                                        " vs. ", state_size));
 
-    // CHECK_EQ(w_tensor->dim_size(0), input_size + cell_size_);
-    // CHECK_EQ(w_tensor->dim_size(1), cell_size_ * 4);
+    OP_REQUIRES(ctx, w_tensor->dim_size(0) == input_size + cell_size_,
+                errors::InvalidArgument("w.dim_size(0) != input_size + cell_size: ",
+                                        w_tensor->dim_size(0),
+                                        " vs. ", input_size + cell_size_));
+    OP_REQUIRES(ctx, w_tensor->dim_size(1) == cell_size_ * 4,
+                errors::InvalidArgument("w.dim_size(1) != cell_size * 4: ",
+                                        w_tensor->dim_size(1),
+                                        " vs. ", cell_size_ * 4));
 
-    CHECK_EQ(b_tensor->dim_size(0), cell_size_ * 4);
+    OP_REQUIRES(ctx, b_tensor->dim_size(0) == cell_size_ * 4,
+                errors::InvalidArgument("b.dim_size(0) != cell_size * 4: ",
+                                        b_tensor->dim_size(0),
+                                        " vs. ", cell_size_ * 4));
 
     Tensor* h_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("h",
@@ -88,7 +104,7 @@ class LSTMCellBlockOp : public OpKernel {
     // Allocate our output matrices.
     Tensor* states_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("states",
-        TensorShape({batch_size, cell_size_ * 7}), &states_tensor));
+        TensorShape({batch_size, state_size}), &states_tensor));
 
     Tensor xh_tensor;
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
@@ -164,27 +180,61 @@ class LSTMCellBlockGradOp : public OpKernel {
 
     const int64 batch_size = x_tensor->dim_size(0);
     const int64 input_size = x_tensor->dim_size(1);
+    const int64 state_size = cell_size_ * 7;
 
     perftools::gputools::Stream* stream =
         ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
 
     // Sanity checks for our input shapes.
-    CHECK_EQ(states_prev_tensor->dim_size(0), batch_size);
-    CHECK_EQ(states_prev_tensor->dim_size(1), cell_size_ * 7);
+    OP_REQUIRES(ctx, states_prev_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("states_prev.dims(0) != batch_size: ",
+                                        states_prev_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, states_prev_tensor->dim_size(1) == state_size,
+                errors::InvalidArgument("states_prev.dims(1) != state_size: ",
+                                        states_prev_tensor->dim_size(1),
+                                        " vs. ", state_size));
 
-    // CHECK_EQ(w_tensor->dim_size(0), input_size + cell_size_);
-    // CHECK_EQ(w_tensor->dim_size(1), cell_size_ * 4);
+    OP_REQUIRES(ctx, w_tensor->dim_size(0) == input_size + cell_size_,
+                errors::InvalidArgument("w.dim_size(0) != input_size + cell_size: ",
+                                        w_tensor->dim_size(0),
+                                        " vs. ", input_size + cell_size_));
+    OP_REQUIRES(ctx, w_tensor->dim_size(1) == cell_size_ * 4,
+                errors::InvalidArgument("w.dim_size(1) != cell_size * 4: ",
+                                        w_tensor->dim_size(1),
+                                        " vs. ", cell_size_ * 4));
 
-    CHECK_EQ(b_tensor->dim_size(0), cell_size_ * 4);
+    OP_REQUIRES(ctx, b_tensor->dim_size(0) == cell_size_ * 4,
+                errors::InvalidArgument("b.dim_size(0) != cell_size * 4: ",
+                                        b_tensor->dim_size(0),
+                                        " vs. ", cell_size_ * 4));
 
-    CHECK_EQ(states_tensor->dim_size(0), batch_size);
-    CHECK_EQ(states_tensor->dim_size(1), cell_size_ * 7);
+    OP_REQUIRES(ctx, states_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("states.dims(0) != batch_size: ",
+                                        states_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, states_tensor->dim_size(1) == state_size,
+                errors::InvalidArgument("states.dims(1) != state_size: ",
+                                        states_tensor->dim_size(1),
+                                        " vs. ", state_size));
 
-    CHECK_EQ(h_grad_tensor->dim_size(0), batch_size);
-    CHECK_EQ(h_grad_tensor->dim_size(1), cell_size_);
+    OP_REQUIRES(ctx, h_grad_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("h_grad_tensor.dims(0) != batch_size: ",
+                                        h_grad_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, h_grad_tensor->dim_size(1) == cell_size_,
+                errors::InvalidArgument("h_grad_tensor.dims(1) != state_size: ",
+                                        h_grad_tensor->dim_size(1),
+                                        " vs. ", cell_size_));
 
-    CHECK_EQ(states_grad_tensor->dim_size(0), batch_size);
-    CHECK_EQ(states_grad_tensor->dim_size(1), cell_size_ * 7);
+    OP_REQUIRES(ctx, states_grad_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("states_grad.dims(0) != batch_size: ",
+                                        states_grad_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, states_grad_tensor->dim_size(1) == state_size,
+                errors::InvalidArgument("states_grad.dims(1) != state_size: ",
+                                        states_grad_tensor->dim_size(1),
+                                        " vs. ", state_size));
 
     Tensor* x_grad_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("x_grad",
@@ -299,17 +349,34 @@ class LSTMBlockOp : public OpKernel {
 
     const int64 batch_size = x_tensors[0].dim_size(0);
     const int64 input_size = x_tensors[0].dim_size(1);
+    const int64 state_size = cell_size_ * 7;
+
     const int64 sequence_len_max =
         *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
     CHECK_LE(sequence_len_max, sequence_len_max_);
 
-    CHECK_EQ(initial_state_tensor->dim_size(0), batch_size);
-    CHECK_EQ(initial_state_tensor->dim_size(1), cell_size_ * 7);
+    OP_REQUIRES(ctx, initial_state_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("initial_state_tensor.dims(0) == batch_size: ",
+                                        initial_state_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, initial_state_tensor->dim_size(1) == state_size,
+                errors::InvalidArgument("initial_state_tensor.dims(1) == state_size: ",
+                                        initial_state_tensor->dim_size(1),
+                                        " vs. ", state_size));
 
-    CHECK_EQ(w_tensor->dim_size(0), input_size + cell_size_);
-    CHECK_EQ(w_tensor->dim_size(1), cell_size_ * 4);
+    OP_REQUIRES(ctx, w_tensor->dim_size(0) == input_size + cell_size_,
+                errors::InvalidArgument("w.dim_size(0) != input_size + cell_size: ",
+                                        w_tensor->dim_size(0),
+                                        " vs. ", input_size + cell_size_));
+    OP_REQUIRES(ctx, w_tensor->dim_size(1) == cell_size_ * 4,
+                errors::InvalidArgument("w.dim_size(1) != cell_size * 4: ",
+                                        w_tensor->dim_size(1),
+                                        " vs. ", cell_size_ * 4));
 
-    CHECK_EQ(b_tensor->dim_size(0), cell_size_ * 4);
+    OP_REQUIRES(ctx, b_tensor->dim_size(0) == cell_size_ * 4,
+                errors::InvalidArgument("b.dim_size(0) != cell_size * 4: ",
+                                        b_tensor->dim_size(0),
+                                        " vs. ", cell_size_ * 4));
 
     perftools::gputools::Stream* stream =
         ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
@@ -322,7 +389,7 @@ class LSTMBlockOp : public OpKernel {
 
       Tensor* states_tensor = nullptr;
       states_tensors.allocate(
-          t, TensorShape({batch_size, cell_size_ * 7}), &states_tensor);
+          t, TensorShape({batch_size, state_size}), &states_tensor);
       TensorMemZero(states_tensor, stream);
     }
 
@@ -406,14 +473,25 @@ class LSTMBlockGradOp : public OpKernel {
 
     const int64 batch_size = x_tensors[0].dim_size(0);
     const int64 input_size = x_tensors[0].dim_size(1);
+    const int64 state_size = cell_size_ * 7;
+
     const int64 sequence_len_max =
         *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
     CHECK_LE(sequence_len_max, sequence_len_max_);
 
-    CHECK_EQ(w_tensor->dim_size(0), input_size + cell_size_);
-    CHECK_EQ(w_tensor->dim_size(1), cell_size_ * 4);
-    
-    CHECK_EQ(b_tensor->dim_size(0), cell_size_ * 4);
+    OP_REQUIRES(ctx, w_tensor->dim_size(0) == input_size + cell_size_,
+                errors::InvalidArgument("w.dim_size(0) != input_size + cell_size: ",
+                                        w_tensor->dim_size(0),
+                                        " vs. ", input_size + cell_size_));
+    OP_REQUIRES(ctx, w_tensor->dim_size(1) == cell_size_ * 4,
+                errors::InvalidArgument("w.dim_size(1) != cell_size * 4: ",
+                                        w_tensor->dim_size(1),
+                                        " vs. ", cell_size_ * 4));
+
+    OP_REQUIRES(ctx, b_tensor->dim_size(0) == cell_size_ * 4,
+                errors::InvalidArgument("b.dim_size(0) != cell_size * 4: ",
+                                        b_tensor->dim_size(0),
+                                        " vs. ", cell_size_ * 4));
 
     perftools::gputools::Stream* stream =
         ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
@@ -450,24 +528,19 @@ class LSTMBlockGradOp : public OpKernel {
 
     Tensor states_grad_tensor;
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
-        TensorShape({batch_size, cell_size_ * 7}), &states_grad_tensor));
+        TensorShape({batch_size, state_size}), &states_grad_tensor));
     TensorMemZero(&states_grad_tensor, stream);
 
     Tensor states_prev_grad_tensor;
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
-        TensorShape({batch_size, cell_size_ * 7}), &states_prev_grad_tensor));
+        TensorShape({batch_size, state_size}), &states_prev_grad_tensor));
 
     for (int64 t = sequence_len_max - 1; t >= 0; --t) {
       const Tensor& x_tensor = x_tensors[t];
       const Tensor& states_prev_tensor =
           t <= 0 ? *initial_state_tensor : states_tensors[t - 1];
       const Tensor& states_tensor = states_tensors[t];
-      CHECK_EQ(states_tensor.dim_size(0), batch_size);
-      CHECK_EQ(states_tensor.dim_size(1), cell_size_ * 7);
-
       const Tensor& h_grad_tensor = h_grad_tensors[t];
-      CHECK_EQ(h_grad_tensor.dim_size(0), batch_size);
-      CHECK_EQ(h_grad_tensor.dim_size(1), cell_size_);
 
       Tensor* x_grad_tensor = x_grad_tensors[t];
       const Tensor& states_grad_const_tensor = states_grad_tensor;
