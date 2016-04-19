@@ -211,18 +211,17 @@ class LSTMCellBlock(RNNCell):
     self._forget_bias = forget_bias
 
   @property
-  def output_size(self):
-    return self._num_units
-
-  @property
   def state_size(self):
     return self._num_units * 7
 
+  @property
+  def output_size(self):
+    return self._num_units
+
   def __call__(self, x, states_prev, scope=None):
     with vs.variable_scope(scope or type(self).__name__):
-      w_m = x.get_shape()[1] + self._num_units
-      w_n = self._num_units * 4
-      w = vs.get_variable("W", [w_m, w_n])
+      w = vs.get_variable("W", [x.get_shape()[1] + self._num_units,
+                                self._num_units * 4])
       b = vs.get_variable("b", [w.get_shape()[1]],
                           initializer=init_ops.constant_initializer(0.0))
       h, states = gen_nn_ops.lstm_cell_block(

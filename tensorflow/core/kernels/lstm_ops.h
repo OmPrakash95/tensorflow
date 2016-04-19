@@ -37,9 +37,9 @@ struct LSTMCellBlockFprop {
       typename TTypes<float>::Matrix states) {
     // Pointer offsets.
     Eigen::array<int, 2> i_offsets  = {0, cell_size * 0};
-    Eigen::array<int, 2> f_offsets  = {0, cell_size * 1};
-    Eigen::array<int, 2> o_offsets  = {0, cell_size * 2};
-    Eigen::array<int, 2> cs_offsets = {0, cell_size * 3};
+    Eigen::array<int, 2> cs_offsets = {0, cell_size * 1};
+    Eigen::array<int, 2> f_offsets  = {0, cell_size * 2};
+    Eigen::array<int, 2> o_offsets  = {0, cell_size * 3};
     Eigen::array<int, 2> ci_offsets = {0, cell_size * 4};
     Eigen::array<int, 2> co_offsets = {0, cell_size * 5};
     Eigen::array<int, 2> h_offsets  = {0, cell_size * 6};
@@ -90,30 +90,23 @@ struct LSTMCellBlockFprop {
           b.broadcast(Eigen::array<int, 2>({batch_size, 1}));
     }
 
-    // Forget gate bias.
-    auto f = states.slice(f_offsets, cell_extents);
-    f.device(d) += f.constant(forget_bias);
+    // Input gate.
+    auto i = states.slice(i_offsets, cell_extents);
+    i.device(d) = i.sigmoid();
 
-    // Apply activation functions to input, forget, output and cell input.
-    // i = sigmoid(states[0])
-    // f = sigmoid(states[1])
-    // o = sigmoid(states[2])
-    Eigen::array<int, 2> ifo_offsets = {0, 0};
-    Eigen::array<int, 2> ifo_extents = {batch_size, cell_size * 3};
-    states.slice(ifo_offsets, ifo_extents).device(d) =
-        states.slice(ifo_offsets, ifo_extents).sigmoid();
-
-    // ci = tanh(states[3])
+    // Cell input.
     auto ci = states.slice(ci_offsets, cell_extents);
     ci.device(d) =
         states.slice(cs_offsets, cell_extents).tanh();
 
+    // Forget gate (w/ bias).
+    auto f = states.slice(f_offsets, cell_extents);
+    f.device(d) = (f + f.constant(forget_bias)).sigmoid();
+
     // cs = ci .* i + f .* cs_prev
-    auto i = states.slice(i_offsets, cell_extents);
     auto cs_prev = states_prev.slice(cs_offsets, cell_extents);
     auto cs = states.slice(cs_offsets, cell_extents);
     cs.device(d) = i * ci + f * cs_prev;
-    // states = [i, f, o, cs]
 
     // co = tanh(cs)
     auto co = states.slice(co_offsets, cell_extents);
@@ -121,6 +114,7 @@ struct LSTMCellBlockFprop {
 
     // h = o .* co
     auto o = states.slice(o_offsets, cell_extents);
+    o.device(d) = o.sigmoid();
     states.slice(h_offsets, cell_extents).device(d) = o * co;
 
     h.device(d) = states.slice(h_offsets, cell_extents);
@@ -147,9 +141,9 @@ struct LSTMCellBlockBprop {
       typename TTypes<float>::Vec b_grad) {
     // Pointer offsets.
     Eigen::array<int, 2> i_offsets  = {0, cell_size * 0};
-    Eigen::array<int, 2> f_offsets  = {0, cell_size * 1};
-    Eigen::array<int, 2> o_offsets  = {0, cell_size * 2};
-    Eigen::array<int, 2> cs_offsets = {0, cell_size * 3};
+    Eigen::array<int, 2> cs_offsets = {0, cell_size * 1};
+    Eigen::array<int, 2> f_offsets  = {0, cell_size * 2};
+    Eigen::array<int, 2> o_offsets  = {0, cell_size * 3};
     Eigen::array<int, 2> ci_offsets = {0, cell_size * 4};
     Eigen::array<int, 2> co_offsets = {0, cell_size * 5};
     Eigen::array<int, 2> h_offsets  = {0, cell_size * 6};
@@ -176,7 +170,7 @@ struct LSTMCellBlockBprop {
     states_prev_grad.slice(o_offsets, cell_extents).device(d) =
         o * (o.constant(1.0f) - o) * dh * co;
 
-    // dcs[t] += tanh'(cs[t]) .* dh[t] .* o[t]
+    // dcs[t] += tanh'(cs[t]) .* dh[t] .* o[t] + dcs[t + 1] .* f[t + 1]
     auto dcs = states_prev_grad.slice(co_offsets, cell_extents);
     dcs.device(d) =
         (co.constant(1.0f) - co * co) * dh * o +
@@ -222,10 +216,9 @@ struct LSTMCellBlockBprop {
       auto b_ptr = AsDeviceMemory(w.data());
       auto c_ptr = AsDeviceMemory(xh_grad.data());
 
-      bool blas_launch_status = CHECK_NOTNULL(stream)->ThenBlasGemm(
+      CHECK(CHECK_NOTNULL(stream)->ThenBlasGemm(
           kTranspose, kNoTranspose, n, m, k, 1.0f, b_ptr,
-          k, a_ptr, cell_size * 7, 0.0f, &c_ptr, n).ok();
-      CHECK(blas_launch_status);
+          k, a_ptr, cell_size * 7, 0.0f, &c_ptr, n).ok());
     } else {
       xh_grad.device(d) =
           dstate4.contract(w, xh_grad_contract_pairs);
@@ -253,10 +246,9 @@ struct LSTMCellBlockBprop {
       auto b_ptr = AsDeviceMemory(states_prev_grad.data());
       auto c_ptr = AsDeviceMemory(w_grad.data());
 
-      bool blas_launch_status = CHECK_NOTNULL(stream)->ThenBlasGemm(
+      CHECK(CHECK_NOTNULL(stream)->ThenBlasGemm(
           kNoTranspose, kTranspose, n, m, k, 1.0f, b_ptr,
-          cell_size * 7, a_ptr, m, 1.0f, &c_ptr, n).ok();
-      CHECK(blas_launch_status);
+          cell_size * 7, a_ptr, m, 1.0f, &c_ptr, n).ok());
     } else {
       Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> w_grad_contract_pairs;
       w_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(0, 0);
