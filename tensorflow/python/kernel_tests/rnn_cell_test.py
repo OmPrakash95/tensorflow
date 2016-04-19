@@ -167,7 +167,7 @@ class RNNCellTest(tf.test.TestCase):
         basic_res = sess.run([g, out_m], {x.name: x_values,
                                           m.name: 0.1 * np.ones([1, 8])})
 
-      with tf.variable_scope("root", initializer=initializer):
+      with tf.variable_scope("block", initializer=initializer):
         m = tf.zeros([1, 8 * 7])
         g, out_m = tf.nn.rnn_cell.MultiRNNCell(
             [tf.nn.rnn_cell.LSTMCellBlock(2)] * 2)(x, m)
