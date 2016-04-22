@@ -128,20 +128,21 @@ class RNNCellTest(tf.test.TestCase):
                            res[1][0, 26:28]], 0)
         self.assertAllClose(res_ch.flatten(), expected_mem.flatten())
         # Test the entire state including gates.
-        expected_mem = np.array([[1.10000002, 1.10000002,
-                                  0.68967283, 0.68967283,
-                                  0.89090317, 0.89090317,
-                                  1.10000002, 1.10000002,
-                                  0.80049902, 0.80049902,
-                                  0.59777182, 0.59777182,
-                                  0.44848436, 0.44848436,
-                                  0.54848439, 0.54848439,
-                                  0.39897066, 0.39897066,
-                                  0.82469469, 0.82469469,
-                                  0.54848439, 0.54848439,
-                                  0.49938345, 0.49938345,
-                                  0.3790679 , 0.3790679,
-                                  0.24024715, 0.24024715]])
+        tf.logging.warn("%s" % str(res[1]))
+        expected_mem = np.array([[ 0.75026011, 0.75026011,
+                                   0.68967283, 0.68967283,
+                                   0.89090317, 0.89090317,
+                                   0.75026011, 0.75026011,
+                                   0.80049902, 0.80049902,
+                                   0.59777182, 0.59777182,
+                                   0.44848436, 0.44848436,
+                                   0.63378394, 0.63378394,
+                                   0.39897066, 0.39897066,
+                                   0.82469469, 0.82469469,
+                                   0.63378394, 0.63378394,
+                                   0.49938345, 0.49938345,
+                                   0.3790679, 0.3790679,
+                                   0.24024715, 0.24024715]])
         self.assertAllClose(res[1], expected_mem)
       with tf.variable_scope("other", initializer=tf.constant_initializer(0.5)):
         x = tf.zeros([1, 3])  # Test BasicLSTMCell with input_size != num_units.
@@ -151,6 +152,36 @@ class RNNCellTest(tf.test.TestCase):
         res = sess.run([g, out_m], {x.name: np.array([[1., 1., 1.]]),
                                     m.name: 0.1 * np.ones([1, 2 * 7])})
         self.assertEqual(len(res), 2)
+
+  def testLSTMBasicToBlockCell(self):
+    with self.test_session() as sess:
+      x = tf.zeros([1, 2])
+      x_values = np.random.randn(1, 2)
+
+      initializer = tf.random_uniform_initializer(-0.01, 0.01, seed=19890212)
+      with tf.variable_scope("basic", initializer=initializer):
+        m = tf.zeros([1, 8])
+        g, out_m = tf.nn.rnn_cell.MultiRNNCell(
+            [tf.nn.rnn_cell.BasicLSTMCell(2)] * 2)(x, m)
+        sess.run([tf.initialize_all_variables()])
+        basic_res = sess.run([g, out_m], {x.name: x_values,
+                                          m.name: 0.1 * np.ones([1, 8])})
+
+      with tf.variable_scope("block", initializer=initializer):
+        m = tf.zeros([1, 8 * 7])
+        g, out_m = tf.nn.rnn_cell.MultiRNNCell(
+            [tf.nn.rnn_cell.LSTMCellBlock(2)] * 2)(x, m)
+        sess.run([tf.initialize_all_variables()])
+        block_res = sess.run([g, out_m], {x.name: x_values,
+                                          m.name: 0.1 * np.ones([1, 8 * 7])})
+
+      self.assertAllClose(basic_res[0], block_res[0])
+
+      block_res_ch = np.stack([block_res[1][0, 2:4],
+                               block_res[1][0, 12:14],
+                               block_res[1][0, 16:18],
+                               block_res[1][0, 26:28]], 0)
+      self.assertAllClose(basic_res[1].flatten(), block_res_ch.flatten())
 
   def testLSTMCell(self):
     with self.test_session() as sess:

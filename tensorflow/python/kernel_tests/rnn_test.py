@@ -585,7 +585,6 @@ class LSTMTest(tf.test.TestCase):
          initializer=initializer)
 
     ########### Step 1: Run LSTMCellBlock
-    initializer = tf.random_uniform_initializer(-0.01, 0.01, seed=self._seed)
     lstm_cell_block_cell = tf.nn.rnn_cell.LSTMCellBlock(num_units)
 
     (values_block, state_value_block, block_grad_values,
