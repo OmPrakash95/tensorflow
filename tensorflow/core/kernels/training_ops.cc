@@ -218,6 +218,7 @@ class ApplyGradientDescentOp : public OpKernel {
  public:
   explicit ApplyGradientDescentOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("use_locking", &use_exclusive_lock_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("max_weight_col_norm", &max_weight_col_norm_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -243,11 +244,22 @@ class ApplyGradientDescentOp : public OpKernel {
     functor::ApplyGradientDescent<Device, T>()(
         device, var.flat<T>(), alpha.scalar<T>(), delta.flat<T>());
 
+    if (var.dims() == 2 && max_weight_col_norm_ > 0.0f) {
+      Tensor scale;
+      OP_REQUIRES_OK(ctx, ctx->allocate_temp(
+            var.dtype(), TensorShape({var.dim_size(1)}), &scale));
+
+      functor::ApplyMaxWeightColNorm<Device, T>()(
+          device, var.matrix<T>(), scale.vec<T>(),
+          max_weight_col_norm_);
+    }
+
     ctx->forward_ref_input_to_ref_output(0, 0);
   }
 
  private:
   bool use_exclusive_lock_;
+  float max_weight_col_norm_;
 };
 
 #define REGISTER_KERNELS(D, T)                                                \
