@@ -9,6 +9,8 @@ package(default_visibility = ["//visibility:public"])
 
 licenses(["notice"])  # Apache 2.0
 
+exports_files(["LICENSE"])
+
 load(
     "//tensorflow:tensorflow.bzl",
     "tf_cc_test",
@@ -192,6 +194,14 @@ tf_kernel_library(
         "//third_party/eigen3",
     ],
     alwayslink = 0,
+)
+
+cc_library(
+    name = "bucketed_typed_queue",
+    hdrs = ["bucketed_typed_queue.h"],
+    deps = [
+        ":typed_queue",
+    ],
 )
 
 cc_library(
@@ -554,6 +564,7 @@ tf_kernel_libraries(
     prefixes = [
         "dynamic_partition_op",
         "dynamic_stitch_op",
+        "fifo_bucketed_queue_op",
         "fifo_queue_op",
         "lookup_table_init_op",
         "lookup_table_op",
@@ -567,6 +578,7 @@ tf_kernel_libraries(
     deps = [
         ":bounds_check",
         ":concat_lib",
+        ":fifo_bucketed_queue",
         ":fifo_queue",
         ":initializable_lookup_table",
         ":lookup_util",
@@ -601,6 +613,19 @@ tf_cc_tests(
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
         "//tensorflow/core:testlib",
+    ],
+)
+
+cc_library(
+    name = "fifo_bucketed_queue",
+    srcs = ["fifo_bucketed_queue.cc"],
+    hdrs = ["fifo_bucketed_queue.h"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":bucketed_typed_queue",
+        ":queue_base",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
     ],
 )
 
@@ -918,13 +943,17 @@ tf_cc_test(
     ],
 )
 
-tf_cc_test(
-    name = "sparse_add_op_test",
+tf_cc_tests(
     size = "small",
+    tests = [
+        "sparse_add_op_test",
+        "sparse_reduce_sum_op_test",
+    ],
     deps = [
         ":ops_testutil",
         ":ops_util",
         ":sparse_add_op",
+        ":sparse_reduce_sum_op",
         "//tensorflow/core:core_cpu",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
@@ -939,6 +968,7 @@ tf_cc_test(
     name = "cwise_ops_test",
     size = "small",
     deps = [
+        ":bounds_check",
         ":cwise_op",
         ":ops_testutil",
         ":ops_util",
@@ -1268,8 +1298,10 @@ tf_kernel_libraries(
         "sparse_add_grad_op",
         "sparse_add_op",
         "sparse_concat_op",
+        "sparse_reduce_sum_op",
         "sparse_reorder_op",
         "sparse_split_op",
+        "sparse_tensor_dense_add_op",
         "sparse_tensor_dense_matmul_op",
         "sparse_to_dense_op",
         "sparse_xent_op",
@@ -1278,6 +1310,7 @@ tf_kernel_libraries(
     deps = [
         ":bounds_check",
         ":fill_functor",
+        ":scatter_op",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
         "//tensorflow/core:sparse_ops_op_lib",
