@@ -130,13 +130,13 @@ class LSTMCellBlockOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, input_size + cell_size_}), &xh_tensor));
 
-    functor::LSTMCellBlockFprop<Device, USE_CUBLAS>()(
-        ctx, stream, ctx->eigen_device<Device>(), batch_size, input_size,
-        cell_size_, forget_bias_, x_tensor->matrix<float>(),
-        xh_tensor.matrix<float>(), states_prev_tensor->matrix<float>(),
-        w_tensor->matrix<float>(), b_tensor->vec<float>(),
-        h_tensor->matrix<float>(), states_tensor->matrix<float>());
-  }
+    functor::LSTMCellBlockFprop<Device, USE_CUBLAS>(
+        batch_size, input_size, cell_size_)(
+        ctx, stream, ctx->eigen_device<Device>(), forget_bias_,
+        x_tensor->matrix<float>(), xh_tensor.matrix<float>(),
+        states_prev_tensor->matrix<float>(), w_tensor->matrix<float>(),
+        b_tensor->vec<float>(), h_tensor->matrix<float>(),
+        states_tensor->matrix<float>()); }
 
  private:
   int64 cell_size_;
@@ -160,16 +160,12 @@ namespace functor {
 
   template <>
   void LSTMCellBlockFprop<GPUDevice, true>::operator()(
-      OpKernelContext* ctx, perftools::gputools::Stream* stream,
-      const GPUDevice& d, const int batch_size, const int input_size,
-      const int cell_size, const float forget_bias,
-      typename TTypes<float>::ConstMatrix x,
-      typename TTypes<float>::Matrix xh,
-      typename TTypes<float>::ConstMatrix states_prev,
-      typename TTypes<float>::ConstMatrix w,
-      typename TTypes<float>::ConstVec b,
-      typename TTypes<float>::Matrix h,
-      typename TTypes<float>::Matrix states);
+      OpKernelContext* ctx, perftools::gputools::Stream* stream, const
+      GPUDevice& d, const float forget_bias, typename
+      TTypes<float>::ConstMatrix x, typename TTypes<float>::Matrix xh, typename
+      TTypes<float>::ConstMatrix states_prev, typename
+      TTypes<float>::ConstMatrix w, typename TTypes<float>::ConstVec b,
+      typename TTypes<float>::Matrix h, typename TTypes<float>::Matrix states);
 
   extern template struct TensorMemZero<GPUDevice, float>;
   extern template struct TensorMemCopy<GPUDevice, float>;
@@ -298,13 +294,14 @@ class LSTMCellBlockGradOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, input_size + cell_size_}), &xh_grad_tensor));
 
-    functor::LSTMCellBlockBprop<Device, USE_CUBLAS>()(
-        ctx, stream, device, batch_size, input_size, cell_size_,
-        x_tensor->matrix<float>(), xh_tensor.matrix<float>(),
-        states_prev_tensor->matrix<float>(), w_tensor->matrix<float>(),
-        b_tensor->vec<float>(), states_tensor->matrix<float>(),
-        h_grad_tensor->matrix<float>(), states_grad_tensor->matrix<float>(),
-        xh_grad_tensor.matrix<float>(), x_grad_tensor->matrix<float>(),
+    functor::LSTMCellBlockBprop<Device, USE_CUBLAS>(
+        batch_size, input_size, cell_size_)(
+        ctx, stream, device, x_tensor->matrix<float>(),
+        xh_tensor.matrix<float>(), states_prev_tensor->matrix<float>(),
+        w_tensor->matrix<float>(), b_tensor->vec<float>(),
+        states_tensor->matrix<float>(), h_grad_tensor->matrix<float>(),
+        states_grad_tensor->matrix<float>(), xh_grad_tensor.matrix<float>(),
+        x_grad_tensor->matrix<float>(),
         states_prev_grad_tensor->matrix<float>(),
         w_grad_tensor->matrix<float>(), b_grad_tensor->vec<float>()); }
 
@@ -321,8 +318,7 @@ namespace functor {
   template <>
   void LSTMCellBlockBprop<GPUDevice, true>::operator()(
       OpKernelContext* ctx, perftools::gputools::Stream* stream,
-      const GPUDevice& d, const int batch_size, const int input_size,
-      const int cell_size, typename TTypes<float>::ConstMatrix x,
+      const GPUDevice& d, typename TTypes<float>::ConstMatrix x,
       typename TTypes<float>::Matrix xh,
       typename TTypes<float>::ConstMatrix states_prev,
       typename TTypes<float>::ConstMatrix w,
@@ -445,14 +441,12 @@ class LSTMBlockOp : public OpKernel {
       Tensor* states_tensor = states_tensors[t];
       Tensor* h_tensor = h_tensors[t];
 
-      functor::LSTMCellBlockFprop<Device, USE_CUBLAS>()(
-          ctx, stream, device, batch_size, input_size, cell_size_,
-          forget_bias_, x_tensor.matrix<float>(), xh_tensor.matrix<float>(),
-          states_prev_tensor->matrix<float>(), w_tensor->matrix<float>(),
-          b_tensor->vec<float>(), h_tensor->matrix<float>(),
-          states_tensor->matrix<float>());
-    }
-  }
+      functor::LSTMCellBlockFprop<Device, USE_CUBLAS>(
+          batch_size, input_size, cell_size_)(
+          ctx, stream, device, forget_bias_, x_tensor.matrix<float>(),
+          xh_tensor.matrix<float>(), states_prev_tensor->matrix<float>(),
+          w_tensor->matrix<float>(), b_tensor->vec<float>(),
+          h_tensor->matrix<float>(), states_tensor->matrix<float>()); } }
 
  private:
   int64 sequence_len_max_;
@@ -589,12 +583,12 @@ class LSTMBlockGradOp : public OpKernel {
       Tensor* x_grad_tensor = x_grad_tensors[t];
       const Tensor& states_grad_const_tensor = states_grad_tensor;
 
-      functor::LSTMCellBlockBprop<Device, USE_CUBLAS>()(
-          ctx, stream, device, batch_size, input_size, cell_size_,
-          x_tensor.matrix<float>(), xh_tensor.matrix<float>(),
-          states_prev_tensor.matrix<float>(), w_tensor->matrix<float>(),
-          b_tensor->vec<float>(), states_tensor.matrix<float>(),
-          h_grad_tensor.matrix<float>(),
+      functor::LSTMCellBlockBprop<Device, USE_CUBLAS>(
+          batch_size, input_size, cell_size_)(
+          ctx, stream, device, x_tensor.matrix<float>(),
+          xh_tensor.matrix<float>(), states_prev_tensor.matrix<float>(),
+          w_tensor->matrix<float>(), b_tensor->vec<float>(),
+          states_tensor.matrix<float>(), h_grad_tensor.matrix<float>(),
           states_grad_const_tensor.matrix<float>(),
           xh_grad_tensor.matrix<float>(), x_grad_tensor->matrix<float>(),
           states_prev_grad_tensor.matrix<float>(),
