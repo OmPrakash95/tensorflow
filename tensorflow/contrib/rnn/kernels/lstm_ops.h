@@ -1,7 +1,10 @@
 #ifndef TENSORFLOW_KERNELS_LSTM_OPS_H_
 #define TENSORFLOW_KERNELS_LSTM_OPS_H_
 
+#include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor_types.h"
+#include "tensorflow/core/lib/core/blocking_counter.h"
+#include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/platform/types.h"
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 
@@ -252,9 +255,34 @@ struct LSTMCellBlockBprop : public LSTMCellBlock {
     dicfo.slice(icfo_f_offsets(), cell_extents()).device(d) = df;
     dicfo.slice(icfo_o_offsets(), cell_extents()).device(d) = do_;
 
+    // We can parallelize the bprop GEMMs on the CPU (on GPU doesn't make any
+    // difference).
+    BlockingCounter counter(2);
+    auto workers_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
+    auto workers = workers_threads.workers;
+
     // xh_grad = dstate4 * w^T
-    TensorBlasGemm<Device, USE_CUBLAS>()(
-        ctx, stream, d, false, true, 1.0f, dicfo, w, 0.0f, xh_grad);
+    workers->Schedule([ctx, stream, d, dicfo, w, xh_grad, &counter]() {
+      TensorBlasGemm<Device, USE_CUBLAS>()(
+          ctx, stream, d, false, true, 1.0f, dicfo, w, 0.0f, xh_grad);
+      counter.DecrementCount();
+    });
+
+    // Concat xh = [x, h].
+    auto h_prev = states_prev.slice(states_h_offsets(), cell_extents());
+    xh.slice(xh_x_offsets(), xh_x_extents()).device(d) = x;
+    xh.slice(xh_h_offsets(), xh_h_extents()).device(d) = h_prev;
+
+    // w_grad, b_grad.
+    workers->Schedule([ctx, stream, d, xh, dicfo, w_grad, &counter]() {
+      TensorBlasGemm<Device, USE_CUBLAS>()(
+          ctx, stream, d, true, false, 1.0f, xh, dicfo, 1.0f, w_grad);
+      counter.DecrementCount();
+    });
+    b_grad.device(d) += dicfo.sum(Eigen::array<int, 1>({0}));
+
+    // Need to make sure our GEMMs are done.
+    counter.Wait();
 
     // x_grad.
     x_grad.device(d) = xh_grad.slice(xh_x_offsets(), xh_x_extents());
@@ -263,16 +291,6 @@ struct LSTMCellBlockBprop : public LSTMCellBlock {
     states_prev_grad.slice(states_cs_offsets(), cell_extents()).device(d) = dcs * f;
     states_prev_grad.slice(states_h_offsets(), cell_extents()).device(d) =
         xh_grad.slice(xh_h_offsets(), xh_h_extents());
-
-    // Concat xh = [x, h].
-    auto h_prev = states_prev.slice(states_h_offsets(), cell_extents());
-    xh.slice(xh_x_offsets(), xh_x_extents()).device(d) = x;
-    xh.slice(xh_h_offsets(), xh_h_extents()).device(d) = h_prev;
-
-    // w_grad, b_grad.
-    TensorBlasGemm<Device, USE_CUBLAS>()(
-        ctx, stream, d, true, false, 1.0f, xh, dicfo, 1.0f, w_grad);
-    b_grad.device(d) += dicfo.sum(Eigen::array<int, 1>({0}));
   }
 };
 
