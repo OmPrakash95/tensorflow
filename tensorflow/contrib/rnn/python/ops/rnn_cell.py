@@ -49,8 +49,38 @@ def _LSTMCellBlockShape(op):
   batch_size = op.inputs[0].get_shape().with_rank(2)[0].value
   cell_size = op.get_attr("cell_size")
 
-  return [tensor_shape.TensorShape([batch_size, cell_size]),
-          tensor_shape.TensorShape([batch_size, cell_size * 7])]
+  return (tensor_shape.TensorShape([batch_size, cell_size]),
+          tensor_shape.TensorShape([batch_size, cell_size]),
+          tensor_shape.TensorShape([batch_size, cell_size]),
+          tensor_shape.TensorShape([batch_size, cell_size]),
+          tensor_shape.TensorShape([batch_size, cell_size]),
+          tensor_shape.TensorShape([batch_size, cell_size]),
+          tensor_shape.TensorShape([batch_size, cell_size * 2]),
+          tensor_shape.TensorShape([batch_size, cell_size]))
+
+
+@ops.RegisterGradient("LSTMCellBlock")
+def _LSTMCellBlockGrad(op, *grad):
+  x = op.inputs[0]
+  states_prev = op.inputs[1]
+  w = op.inputs[2]
+  b = op.inputs[3]
+
+  i = op.outputs[0]
+  cs = op.outputs[1]
+  f = op.outputs[2]
+  o = op.outputs[3]
+  ci = op.outputs[4]
+  co = op.outputs[5]
+  # states = op.outputs[6]
+  h = op.outputs[7]
+
+  states_grad = grad[6]
+  h_grad = grad[7]
+
+  return gen_lstm_ops._lstm_cell_block_grad(
+      x, states_prev, w, b, i, cs, f, o, ci, co, h, states_grad, h_grad,
+      cell_size=op.get_attr("cell_size"), bprop_dx=op.get_attr("bprop_dx"))
 
 
 @ops.RegisterShape("LSTMCellBlockGrad")
@@ -60,24 +90,9 @@ def _LSTMCellBlockGradShape(op):
   cell_size = op.get_attr("cell_size")
 
   return [tensor_shape.TensorShape([batch_size, input_size]),
-          tensor_shape.TensorShape([batch_size, cell_size * 7]),
+          tensor_shape.TensorShape([batch_size, cell_size * 2]),
           tensor_shape.TensorShape([input_size + cell_size, cell_size * 4]),
           tensor_shape.TensorShape([cell_size * 4])]
-
-
-@ops.RegisterGradient("LSTMCellBlock")
-def _LSTMCellBlockGrad(op, *grad):
-  x = op.inputs[0]
-  states_prev = op.inputs[1]
-  w = op.inputs[2]
-  b = op.inputs[3]
-  states = op.outputs[1]
-  x_grad = grad[0]
-  states_grad = grad[1]
-
-  return gen_lstm_ops.lstm_cell_block_grad(
-      x, states_prev, w, b, states, x_grad, states_grad,
-      cell_size=op.get_attr("cell_size"))
 
 
 def _get_concat_variable(name, shape, dtype, num_shards):
@@ -545,19 +560,22 @@ class LSTMCellBlock(rnn_cell.RNNCell):
   matches.
   """
 
-  def __init__(self, num_units, forget_bias=1.0):
+  def __init__(self, num_units, forget_bias=1.0, input_size=None, bprop_dx=True):
     """Initialize the basic LSTM cell.
 
     Args:
       num_units: int, The number of units in the LSTM cell.
       forget_bias: float, The bias added to forget gates (see above).
     """
+    if input_size is not None:
+      logging.warn("%s: The input_size parameter is deprecated." % self)
     self._num_units = num_units
     self._forget_bias = forget_bias
+    self._bprop_dx = bprop_dx
 
   @property
   def state_size(self):
-    return self._num_units * 7
+    return self._num_units * 2
 
   @property
   def output_size(self):
@@ -570,9 +588,10 @@ class LSTMCellBlock(rnn_cell.RNNCell):
                                 self._num_units * 4])
       b = vs.get_variable("b", [w.get_shape()[1]],
                           initializer=init_ops.constant_initializer(0.0))
-      h, states = gen_lstm_ops.lstm_cell_block(
+      _, _, _, _, _, _, states, h = gen_lstm_ops.lstm_cell_block(
           x, states_prev, w, b, cell_size=self._num_units,
-          forget_bias=self._forget_bias)
+          forget_bias=self._forget_bias, bprop_dx=self._bprop_dx)
+
       return h, states
 
 

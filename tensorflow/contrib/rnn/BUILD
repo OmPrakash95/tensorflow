@@ -33,6 +33,8 @@ tf_gen_op_libs(
 tf_gen_op_wrapper_py(
     name = "lstm_ops",
     deps = [":lstm_ops_op_lib"],
+    hidden = ["LSTMCellBlockGrad"],
+    require_shape_functions = True,
 )
 
 py_library(
@@ -51,6 +53,7 @@ cuda_py_tests(
         ":rnn_py",
         "//tensorflow/python:framework_test_lib",
         "//tensorflow/python:platform_test",
+        "//tensorflow/python:kernel_tests/rnn_test_lib",
     ],
 )
 

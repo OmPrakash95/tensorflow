@@ -88,7 +88,7 @@ class LSTMCellBlockOp : public OpKernel {
 
     const int64 batch_size = x_tensor->dim_size(0);
     const int64 input_size = x_tensor->dim_size(1);
-    const int64 state_size = cell_size_ * 7;
+    const int64 states_size = cell_size_ * 2;
 
     perftools::gputools::Stream* stream =
         ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
@@ -98,10 +98,10 @@ class LSTMCellBlockOp : public OpKernel {
                 errors::InvalidArgument("states_prev.dims(0) != batch_size: ",
                                         states_prev_tensor->dim_size(0),
                                         " vs. ", batch_size));
-    OP_REQUIRES(ctx, states_prev_tensor->dim_size(1) == state_size,
-                errors::InvalidArgument("states_prev.dims(1) != state_size: ",
+    OP_REQUIRES(ctx, states_prev_tensor->dim_size(1) == states_size,
+                errors::InvalidArgument("states_prev.dims(1) != cell_size * 7: ",
                                         states_prev_tensor->dim_size(1),
-                                        " vs. ", state_size));
+                                        " vs. ", states_size));
 
     OP_REQUIRES(ctx, w_tensor->dim_size(0) == input_size + cell_size_,
         errors::InvalidArgument("w.dim_size(0) != input_size + cell_size: ",
@@ -117,26 +117,69 @@ class LSTMCellBlockOp : public OpKernel {
                                         b_tensor->dim_size(0),
                                         " vs. ", cell_size_ * 4));
 
+    // Allocate our output tensors.
+    Tensor* i_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("i",
+          TensorShape({batch_size, cell_size_}), &i_tensor));
+
+    Tensor* cs_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("cs",
+          TensorShape({batch_size, cell_size_}), &cs_tensor));
+
+    Tensor* f_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("f",
+          TensorShape({batch_size, cell_size_}), &f_tensor));
+
+    Tensor* o_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("o",
+          TensorShape({batch_size, cell_size_}), &o_tensor));
+
+    Tensor* ci_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("ci",
+          TensorShape({batch_size, cell_size_}), &ci_tensor));
+
+    Tensor* co_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("co",
+          TensorShape({batch_size, cell_size_}), &co_tensor));
+
+    Tensor* states_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->allocate_output("states",
+        TensorShape({batch_size, states_size}), &states_tensor));
+
     Tensor* h_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("h",
           TensorShape({batch_size, cell_size_}), &h_tensor));
 
-    // Allocate our output matrices.
-    Tensor* states_tensor = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output("states",
-        TensorShape({batch_size, state_size}), &states_tensor));
-
+    // Allocate our temp tensors.
     Tensor xh_tensor;
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, input_size + cell_size_}), &xh_tensor));
 
+    Tensor cs_prev_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &cs_prev_tensor));
+
+    Tensor h_prev_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &h_prev_tensor));
+
+    Tensor icfo_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_ * 4}), &icfo_tensor));
+
     functor::LSTMCellBlockFprop<Device, USE_CUBLAS>(
         batch_size, input_size, cell_size_)(
         ctx, stream, ctx->eigen_device<Device>(), forget_bias_,
-        x_tensor->matrix<float>(), xh_tensor.matrix<float>(),
-        states_prev_tensor->matrix<float>(), w_tensor->matrix<float>(),
-        b_tensor->vec<float>(), h_tensor->matrix<float>(),
-        states_tensor->matrix<float>()); }
+        x_tensor->matrix<float>(), states_prev_tensor->matrix<float>(),
+        w_tensor->matrix<float>(), b_tensor->vec<float>(),
+        cs_prev_tensor.matrix<float>(), h_prev_tensor.matrix<float>(),
+        xh_tensor.matrix<float>(),
+        i_tensor->matrix<float>(), cs_tensor->matrix<float>(),
+        f_tensor->matrix<float>(), o_tensor->matrix<float>(),
+        ci_tensor->matrix<float>(), co_tensor->matrix<float>(),
+        icfo_tensor.matrix<float>(),
+        states_tensor->matrix<float>(), h_tensor->matrix<float>());
+  }
 
  private:
   int64 cell_size_;
@@ -160,12 +203,24 @@ namespace functor {
 
   template <>
   void LSTMCellBlockFprop<GPUDevice, true>::operator()(
-      OpKernelContext* ctx, perftools::gputools::Stream* stream, const
-      GPUDevice& d, const float forget_bias, typename
-      TTypes<float>::ConstMatrix x, typename TTypes<float>::Matrix xh, typename
-      TTypes<float>::ConstMatrix states_prev, typename
-      TTypes<float>::ConstMatrix w, typename TTypes<float>::ConstVec b,
-      typename TTypes<float>::Matrix h, typename TTypes<float>::Matrix states);
+      OpKernelContext* ctx, perftools::gputools::Stream* stream,
+      const GPUDevice& d, const float forget_bias,
+      typename TTypes<float>::ConstMatrix x,
+      typename TTypes<float>::ConstMatrix states_prev,
+      typename TTypes<float>::ConstMatrix w,
+      typename TTypes<float>::ConstVec b,
+      typename TTypes<float>::Matrix cs_prev,
+      typename TTypes<float>::Matrix h_prev,
+      typename TTypes<float>::Matrix xh,
+      typename TTypes<float>::Matrix i,
+      typename TTypes<float>::Matrix cs,
+      typename TTypes<float>::Matrix f,
+      typename TTypes<float>::Matrix o,
+      typename TTypes<float>::Matrix ci,
+      typename TTypes<float>::Matrix co,
+      typename TTypes<float>::Matrix icfo,
+      typename TTypes<float>::Matrix states,
+      typename TTypes<float>::Matrix h);
 
   extern template struct TensorMemZero<GPUDevice, float>;
   extern template struct TensorMemCopy<GPUDevice, float>;
@@ -182,6 +237,7 @@ class LSTMCellBlockGradOp : public OpKernel {
  public:
   explicit LSTMCellBlockGradOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("cell_size", &cell_size_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("bprop_dx", &bprop_dx_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -197,8 +253,26 @@ class LSTMCellBlockGradOp : public OpKernel {
     const Tensor* b_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("b", &b_tensor));
 
-    const Tensor* states_tensor = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->input("states", &states_tensor));
+    const Tensor* i_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("i", &i_tensor));
+
+    const Tensor* cs_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("cs", &cs_tensor));
+
+    const Tensor* f_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("f", &f_tensor));
+
+    const Tensor* o_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("o", &o_tensor));
+
+    const Tensor* ci_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("ci", &ci_tensor));
+
+    const Tensor* co_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("co", &co_tensor));
+
+    const Tensor* h_tensor = nullptr;
+    OP_REQUIRES_OK(ctx, ctx->input("h", &h_tensor));
 
     const Tensor* h_grad_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("h_grad", &h_grad_tensor));
@@ -208,7 +282,7 @@ class LSTMCellBlockGradOp : public OpKernel {
 
     const int64 batch_size = x_tensor->dim_size(0);
     const int64 input_size = x_tensor->dim_size(1);
-    const int64 state_size = cell_size_ * 7;
+    const int64 states_size = cell_size_ * 2;
 
     const Device& device = ctx->eigen_device<Device>();
     perftools::gputools::Stream* stream =
@@ -219,10 +293,10 @@ class LSTMCellBlockGradOp : public OpKernel {
                 errors::InvalidArgument("states_prev.dims(0) != batch_size: ",
                                         states_prev_tensor->dim_size(0),
                                         " vs. ", batch_size));
-    OP_REQUIRES(ctx, states_prev_tensor->dim_size(1) == state_size,
-                errors::InvalidArgument("states_prev.dims(1) != state_size: ",
-                                        states_prev_tensor->dim_size(1),
-                                        " vs. ", state_size));
+    OP_REQUIRES(ctx, states_prev_tensor->dim_size(1) == states_size,
+        errors::InvalidArgument("states_prev.dims(1) != cell_size * 2: ",
+                                states_prev_tensor->dim_size(1),
+                                " vs. ", states_size));
 
     OP_REQUIRES(ctx, w_tensor->dim_size(0) == input_size + cell_size_,
         errors::InvalidArgument("w.dim_size(0) != input_size + cell_size: ",
@@ -238,14 +312,68 @@ class LSTMCellBlockGradOp : public OpKernel {
                                         b_tensor->dim_size(0),
                                         " vs. ", cell_size_ * 4));
 
-    OP_REQUIRES(ctx, states_tensor->dim_size(0) == batch_size,
-                errors::InvalidArgument("states.dims(0) != batch_size: ",
-                                        states_tensor->dim_size(0),
+    OP_REQUIRES(ctx, i_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("i.dim_size(0) != batch_size: ",
+                                        i_tensor->dim_size(0),
                                         " vs. ", batch_size));
-    OP_REQUIRES(ctx, states_tensor->dim_size(1) == state_size,
-                errors::InvalidArgument("states.dims(1) != state_size: ",
-                                        states_tensor->dim_size(1),
-                                        " vs. ", state_size));
+    OP_REQUIRES(ctx, i_tensor->dim_size(1) == cell_size_,
+                errors::InvalidArgument("i.dim_size(1) != cell_size_: ",
+                                        i_tensor->dim_size(1),
+                                        " vs. ", cell_size_));
+
+    OP_REQUIRES(ctx, cs_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("cs.dim_size(0) != batch_size: ",
+                                        cs_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, cs_tensor->dim_size(1) == cell_size_,
+                errors::InvalidArgument("cs.dim_size(1) != cell_size_: ",
+                                        cs_tensor->dim_size(1),
+                                        " vs. ", cell_size_));
+
+    OP_REQUIRES(ctx, f_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("f.dim_size(0) != batch_size: ",
+                                        f_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, f_tensor->dim_size(1) == cell_size_,
+                errors::InvalidArgument("i.dim_size(1) != cell_size_: ",
+                                        f_tensor->dim_size(1),
+                                        " vs. ", cell_size_));
+
+    OP_REQUIRES(ctx, o_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("o.dim_size(0) != batch_size: ",
+                                        o_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, o_tensor->dim_size(1) == cell_size_,
+                errors::InvalidArgument("o.dim_size(1) != cell_size_: ",
+                                        o_tensor->dim_size(1),
+                                        " vs. ", cell_size_));
+
+    OP_REQUIRES(ctx, ci_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("ci.dim_size(0) != batch_size: ",
+                                        ci_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, ci_tensor->dim_size(1) == cell_size_,
+                errors::InvalidArgument("ci.dim_size(1) != cell_size_: ",
+                                        ci_tensor->dim_size(1),
+                                        " vs. ", cell_size_));
+
+    OP_REQUIRES(ctx, co_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("co.dim_size(0) != batch_size: ",
+                                        co_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, co_tensor->dim_size(1) == cell_size_,
+                errors::InvalidArgument("co.dim_size(1) != cell_size_: ",
+                                        co_tensor->dim_size(1),
+                                        " vs. ", cell_size_));
+
+    OP_REQUIRES(ctx, h_tensor->dim_size(0) == batch_size,
+                errors::InvalidArgument("h.dim_size(0) != batch_size: ",
+                                        h_tensor->dim_size(0),
+                                        " vs. ", batch_size));
+    OP_REQUIRES(ctx, h_tensor->dim_size(1) == cell_size_,
+                errors::InvalidArgument("h.dim_size(1) != cell_size_: ",
+                                        h_tensor->dim_size(1),
+                                        " vs. ", cell_size_));
 
     OP_REQUIRES(ctx, h_grad_tensor->dim_size(0) == batch_size,
                 errors::InvalidArgument("h_grad_tensor.dims(0) != batch_size: ",
@@ -260,23 +388,24 @@ class LSTMCellBlockGradOp : public OpKernel {
                 errors::InvalidArgument("states_grad.dims(0) != batch_size: ",
                                         states_grad_tensor->dim_size(0),
                                         " vs. ", batch_size));
-    OP_REQUIRES(ctx, states_grad_tensor->dim_size(1) == state_size,
-                errors::InvalidArgument("states_grad.dims(1) != state_size: ",
-                                        states_grad_tensor->dim_size(1),
-                                        " vs. ", state_size));
+    OP_REQUIRES(ctx, states_grad_tensor->dim_size(1) == states_size,
+        errors::InvalidArgument("states_grad.dims(1) != cell_size * 2: ",
+                                states_grad_tensor->dim_size(1),
+                                " vs. ", states_size));
 
+    // Allocate our output tensors.
     Tensor* x_grad_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("x_grad",
-          TensorShape({batch_size, input_size}), &x_grad_tensor));
+        TensorShape({batch_size, input_size}), &x_grad_tensor));
 
     Tensor* states_prev_grad_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("states_prev_grad",
-          TensorShape({batch_size, cell_size_ * 7}), &states_prev_grad_tensor));
+        TensorShape({batch_size, states_size}), &states_prev_grad_tensor));
 
     Tensor* w_grad_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("w_grad",
-          TensorShape({input_size + cell_size_, cell_size_ * 4}),
-          &w_grad_tensor));
+        TensorShape({input_size + cell_size_, cell_size_ * 4}),
+        &w_grad_tensor));
     functor::TensorMemZero<Device, float>()(
         device, w_grad_tensor->flat<float>());
 
@@ -286,6 +415,19 @@ class LSTMCellBlockGradOp : public OpKernel {
     functor::TensorMemZero<Device, float>()(
         device, b_grad_tensor->flat<float>());
 
+    // Allocate our temp tensors.
+    Tensor cs_prev_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &cs_prev_tensor));
+
+    Tensor states_c_grad_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &states_c_grad_tensor));
+
+    Tensor states_h_grad_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &states_h_grad_tensor));
+
     Tensor xh_tensor;
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, input_size + cell_size_}), &xh_tensor));
@@ -294,19 +436,56 @@ class LSTMCellBlockGradOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, input_size + cell_size_}), &xh_grad_tensor));
 
+    Tensor dh_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &dh_tensor));
+
+    Tensor do_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &do_tensor));
+
+    Tensor dcs_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &dcs_tensor));
+
+    Tensor dci_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &dci_tensor));
+
+    Tensor df_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &df_tensor));
+
+    Tensor di_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &di_tensor));
+
+    Tensor dicfo_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_ * 4}), &dicfo_tensor));
+
     functor::LSTMCellBlockBprop<Device, USE_CUBLAS>(
         batch_size, input_size, cell_size_)(
-        ctx, stream, device, x_tensor->matrix<float>(),
-        xh_tensor.matrix<float>(), states_prev_tensor->matrix<float>(),
-        w_tensor->matrix<float>(), b_tensor->vec<float>(),
-        states_tensor->matrix<float>(), h_grad_tensor->matrix<float>(),
-        states_grad_tensor->matrix<float>(), xh_grad_tensor.matrix<float>(),
-        x_grad_tensor->matrix<float>(),
-        states_prev_grad_tensor->matrix<float>(),
-        w_grad_tensor->matrix<float>(), b_grad_tensor->vec<float>()); }
+        ctx, stream, device, bprop_dx_, x_tensor->matrix<float>(),
+        states_prev_tensor->matrix<float>(), w_tensor->matrix<float>(),
+        b_tensor->vec<float>(), i_tensor->matrix<float>(),
+        cs_tensor->matrix<float>(), f_tensor->matrix<float>(),
+        o_tensor->matrix<float>(), ci_tensor->matrix<float>(),
+        co_tensor->matrix<float>(), h_tensor->matrix<float>(),
+        states_grad_tensor->matrix<float>(), h_grad_tensor->matrix<float>(),
+        cs_prev_tensor.matrix<float>(), states_c_grad_tensor.matrix<float>(),
+        states_h_grad_tensor.matrix<float>(), xh_tensor.matrix<float>(),
+        xh_grad_tensor.matrix<float>(), x_grad_tensor->matrix<float>(),
+        dh_tensor.matrix<float>(), do_tensor.matrix<float>(),
+        dcs_tensor.matrix<float>(), dci_tensor.matrix<float>(),
+        df_tensor.matrix<float>(), di_tensor.matrix<float>(),
+        dicfo_tensor.matrix<float>(), states_prev_grad_tensor->matrix<float>(),
+        w_grad_tensor->matrix<float>(), b_grad_tensor->vec<float>());
+  }
 
  protected:
   int64 cell_size_;
+  bool bprop_dx_;
 };
 
 REGISTER_KERNEL_BUILDER(Name("LSTMCellBlockGrad")    \
@@ -318,19 +497,30 @@ namespace functor {
   template <>
   void LSTMCellBlockBprop<GPUDevice, true>::operator()(
       OpKernelContext* ctx, perftools::gputools::Stream* stream,
-      const GPUDevice& d, typename TTypes<float>::ConstMatrix x,
-      typename TTypes<float>::Matrix xh,
+      const GPUDevice& d, bool bprop_dx, typename TTypes<float>::ConstMatrix x,
       typename TTypes<float>::ConstMatrix states_prev,
-      typename TTypes<float>::ConstMatrix w,
-      typename TTypes<float>::ConstVec b,
-      typename TTypes<float>::ConstMatrix states,
-      typename TTypes<float>::ConstMatrix h_grad,
+      typename TTypes<float>::ConstMatrix w, typename TTypes<float>::ConstVec b,
+      typename TTypes<float>::ConstMatrix i,
+      typename TTypes<float>::ConstMatrix cs,
+      typename TTypes<float>::ConstMatrix f,
+      typename TTypes<float>::ConstMatrix o,
+      typename TTypes<float>::ConstMatrix ci,
+      typename TTypes<float>::ConstMatrix co,
+      typename TTypes<float>::ConstMatrix h,
       typename TTypes<float>::ConstMatrix states_grad,
-      typename TTypes<float>::Matrix xh_grad,
-      typename TTypes<float>::Matrix x_grad,
+      typename TTypes<float>::ConstMatrix h_grad,
+      typename TTypes<float>::Matrix cs_prev,
+      typename TTypes<float>::Matrix states_c_grad,
+      typename TTypes<float>::Matrix states_h_grad,
+      typename TTypes<float>::Matrix xh, typename TTypes<float>::Matrix xh_grad,
+      typename TTypes<float>::Matrix x_grad, typename TTypes<float>::Matrix dh,
+      typename TTypes<float>::Matrix do_, typename TTypes<float>::Matrix dcs,
+      typename TTypes<float>::Matrix dci, typename TTypes<float>::Matrix df,
+      typename TTypes<float>::Matrix di, typename TTypes<float>::Matrix dicfo,
       typename TTypes<float>::Matrix states_prev_grad,
       typename TTypes<float>::Matrix w_grad,
       typename TTypes<float>::Vec b_grad);
+
   extern template struct LSTMCellBlockBprop<GPUDevice, true>;
 }  // namespace functor
 
@@ -364,6 +554,24 @@ class LSTMBlockOp : public OpKernel {
     const Tensor* b_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("b", &b_tensor));
 
+    OpOutputList i_tensors;
+    OP_REQUIRES_OK(ctx, ctx->output_list("i", &i_tensors));
+
+    OpOutputList cs_tensors;
+    OP_REQUIRES_OK(ctx, ctx->output_list("cs", &cs_tensors));
+
+    OpOutputList f_tensors;
+    OP_REQUIRES_OK(ctx, ctx->output_list("f", &f_tensors));
+
+    OpOutputList o_tensors;
+    OP_REQUIRES_OK(ctx, ctx->output_list("o", &o_tensors));
+
+    OpOutputList ci_tensors;
+    OP_REQUIRES_OK(ctx, ctx->output_list("ci", &ci_tensors));
+
+    OpOutputList co_tensors;
+    OP_REQUIRES_OK(ctx, ctx->output_list("co", &co_tensors));
+
     OpOutputList h_tensors;
     OP_REQUIRES_OK(ctx, ctx->output_list("h", &h_tensors));
 
@@ -380,7 +588,7 @@ class LSTMBlockOp : public OpKernel {
 
     const int64 batch_size = x_tensors[0].dim_size(0);
     const int64 input_size = x_tensors[0].dim_size(1);
-    const int64 state_size = cell_size_ * 7;
+    const int64 state_size = cell_size_ * 2;
 
     const int64 sequence_len_max =
         *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
@@ -390,18 +598,18 @@ class LSTMBlockOp : public OpKernel {
                                 sequence_len_max_, ")."));
 
     OP_REQUIRES(ctx, initial_state_tensor->dim_size(0) == batch_size,
-                errors::InvalidArgument("initial_state_tensor.dims(0) == batch_size: ",
-                                        initial_state_tensor->dim_size(0),
-                                        " vs. ", batch_size));
+        errors::InvalidArgument("initial_state_tensor.dims(0) == batch_size: ",
+                                initial_state_tensor->dim_size(0),
+                                " vs. ", batch_size));
     OP_REQUIRES(ctx, initial_state_tensor->dim_size(1) == state_size,
-                errors::InvalidArgument("initial_state_tensor.dims(1) == state_size: ",
-                                        initial_state_tensor->dim_size(1),
-                                        " vs. ", state_size));
+        errors::InvalidArgument("initial_state_tensor.dims(1) == state_size: ",
+                                initial_state_tensor->dim_size(1),
+                                " vs. ", state_size));
 
     OP_REQUIRES(ctx, w_tensor->dim_size(0) == input_size + cell_size_,
-                errors::InvalidArgument("w.dim_size(0) != input_size + cell_size: ",
-                                        w_tensor->dim_size(0),
-                                        " vs. ", input_size + cell_size_));
+        errors::InvalidArgument("w.dim_size(0) != input_size + cell_size: ",
+                                w_tensor->dim_size(0),
+                                " vs. ", input_size + cell_size_));
     OP_REQUIRES(ctx, w_tensor->dim_size(1) == cell_size_ * 4,
                 errors::InvalidArgument("w.dim_size(1) != cell_size * 4: ",
                                         w_tensor->dim_size(1),
@@ -426,27 +634,70 @@ class LSTMBlockOp : public OpKernel {
           t, TensorShape({batch_size, state_size}), &states_tensor);
       functor::TensorMemZero<Device, float>()(
           device, states_tensor->flat<float>());
+
+      Tensor* i_tensor = nullptr;
+      i_tensors.allocate(t, TensorShape({batch_size, cell_size_}), &i_tensor);
+      Tensor* cs_tensor = nullptr;
+      cs_tensors.allocate(t, TensorShape({batch_size, cell_size_}), &cs_tensor);
+      Tensor* f_tensor = nullptr;
+      f_tensors.allocate(t, TensorShape({batch_size, cell_size_}), &f_tensor);
+      Tensor* o_tensor = nullptr;
+      o_tensors.allocate(t, TensorShape({batch_size, cell_size_}), &o_tensor);
+      Tensor* ci_tensor = nullptr;
+      ci_tensors.allocate(t, TensorShape({batch_size, cell_size_}), &ci_tensor);
+      Tensor* co_tensor = nullptr;
+      co_tensors.allocate(t, TensorShape({batch_size, cell_size_}), &co_tensor);
     }
 
+    // Allocate our temp tensors.
     Tensor xh_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(
-          DT_FLOAT, TensorShape({batch_size, input_size + cell_size_}),
-          &xh_tensor));
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, input_size + cell_size_}), &xh_tensor));
+
+    Tensor cs_prev_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &cs_prev_tensor));
+
+    Tensor h_prev_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &h_prev_tensor));
+
+    Tensor co_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+          TensorShape({batch_size, cell_size_}), &co_tensor));
+
+    Tensor icfo_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_ * 4}), &icfo_tensor));
 
     for (int64 t = 0; t < sequence_len_max; ++t) {
       const Tensor x_tensor = x_tensors[t];
       const Tensor* states_prev_tensor =
           t <= 0 ? initial_state_tensor : states_tensors[t - 1];
 
+      Tensor* i_tensor = i_tensors[t];
+      Tensor* cs_tensor = cs_tensors[t];
+      Tensor* f_tensor = f_tensors[t];
+      Tensor* o_tensor = o_tensors[t];
+      Tensor* ci_tensor = ci_tensors[t];
+      Tensor* co_tensor = co_tensors[t];
       Tensor* states_tensor = states_tensors[t];
       Tensor* h_tensor = h_tensors[t];
 
       functor::LSTMCellBlockFprop<Device, USE_CUBLAS>(
           batch_size, input_size, cell_size_)(
-          ctx, stream, device, forget_bias_, x_tensor.matrix<float>(),
-          xh_tensor.matrix<float>(), states_prev_tensor->matrix<float>(),
+          ctx, stream, device, forget_bias_,
+          x_tensor.matrix<float>(), states_prev_tensor->matrix<float>(),
           w_tensor->matrix<float>(), b_tensor->vec<float>(),
-          h_tensor->matrix<float>(), states_tensor->matrix<float>()); } }
+          cs_prev_tensor.matrix<float>(), h_prev_tensor.matrix<float>(),
+          xh_tensor.matrix<float>(),
+          i_tensor->matrix<float>(), cs_tensor->matrix<float>(),
+          f_tensor->matrix<float>(), o_tensor->matrix<float>(),
+          ci_tensor->matrix<float>(), co_tensor->matrix<float>(),
+          icfo_tensor.matrix<float>(),
+          states_tensor->matrix<float>(), h_tensor->matrix<float>());
+    }
+  }
 
  private:
   int64 sequence_len_max_;
@@ -470,6 +721,7 @@ class LSTMBlockGradOp : public OpKernel {
   explicit LSTMBlockGradOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("sequence_len_max", &sequence_len_max_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("cell_size", &cell_size_));
+    OP_REQUIRES_OK(ctx, ctx->GetAttr("bprop_dx", &bprop_dx_));
   }
 
   void Compute(OpKernelContext* ctx) override {
@@ -488,8 +740,29 @@ class LSTMBlockGradOp : public OpKernel {
     const Tensor* b_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->input("b", &b_tensor));
 
+    OpInputList i_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("i", &i_tensors));
+
+    OpInputList cs_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("cs", &cs_tensors));
+
+    OpInputList f_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("f", &f_tensors));
+
+    OpInputList o_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("o", &o_tensors));
+
+    OpInputList ci_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("ci", &ci_tensors));
+
+    OpInputList co_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("co", &co_tensors));
+
     OpInputList states_tensors;
     OP_REQUIRES_OK(ctx, ctx->input_list("states", &states_tensors));
+
+    OpInputList h_tensors;
+    OP_REQUIRES_OK(ctx, ctx->input_list("h", &h_tensors));
 
     OpInputList h_grad_tensors;
     OP_REQUIRES_OK(ctx, ctx->input_list("h_grad", &h_grad_tensors));
@@ -504,7 +777,7 @@ class LSTMBlockGradOp : public OpKernel {
 
     const int64 batch_size = x_tensors[0].dim_size(0);
     const int64 input_size = x_tensors[0].dim_size(1);
-    const int64 state_size = cell_size_ * 7;
+    const int64 state_size = cell_size_ * 2;
 
     const int64 sequence_len_max =
         *std::max_element(seq_lens_vector.begin(), seq_lens_vector.end());
@@ -554,30 +827,76 @@ class LSTMBlockGradOp : public OpKernel {
           device, x_grad_tensor->flat<float>());
     }
 
+    // Allocate our temp tensors.
+    Tensor cs_prev_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &cs_prev_tensor));
+
+    Tensor states_c_grad_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &states_c_grad_tensor));
+
+    Tensor states_h_grad_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &states_h_grad_tensor));
+
     Tensor xh_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(
-          DT_FLOAT, TensorShape({batch_size, input_size + cell_size_}),
-          &xh_tensor));
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, input_size + cell_size_}), &xh_tensor));
 
     Tensor xh_grad_tensor;
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, input_size + cell_size_}), &xh_grad_tensor));
 
+    Tensor dh_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &dh_tensor));
+
+    Tensor do_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &do_tensor));
+
+    Tensor dcs_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &dcs_tensor));
+
+    Tensor dci_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &dci_tensor));
+
+    Tensor df_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &df_tensor));
+
+    Tensor di_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_}), &di_tensor));
+
+    Tensor dicfo_tensor;
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+        TensorShape({batch_size, cell_size_ * 4}), &dicfo_tensor));
+
     Tensor states_grad_tensor;
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, state_size}), &states_grad_tensor));
-    functor::TensorMemZero<Device, float>()(
-        device, states_grad_tensor.flat<float>());
 
     Tensor states_prev_grad_tensor;
     OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
         TensorShape({batch_size, state_size}), &states_prev_grad_tensor));
+    functor::TensorMemZero<Device, float>()(
+        device, states_grad_tensor.flat<float>());
 
     for (int64 t = sequence_len_max - 1; t >= 0; --t) {
       const Tensor& x_tensor = x_tensors[t];
+      const Tensor& i_tensor = i_tensors[t];
+      const Tensor& cs_tensor = cs_tensors[t];
+      const Tensor& f_tensor = f_tensors[t];
+      const Tensor& o_tensor = o_tensors[t];
+      const Tensor& ci_tensor = ci_tensors[t];
+      const Tensor& co_tensor = co_tensors[t];
+      const Tensor& h_tensor = h_tensors[t];
       const Tensor& states_prev_tensor =
           t <= 0 ? *initial_state_tensor : states_tensors[t - 1];
-      const Tensor& states_tensor = states_tensors[t];
       const Tensor& h_grad_tensor = h_grad_tensors[t];
 
       Tensor* x_grad_tensor = x_grad_tensors[t];
@@ -585,12 +904,21 @@ class LSTMBlockGradOp : public OpKernel {
 
       functor::LSTMCellBlockBprop<Device, USE_CUBLAS>(
           batch_size, input_size, cell_size_)(
-          ctx, stream, device, x_tensor.matrix<float>(),
-          xh_tensor.matrix<float>(), states_prev_tensor.matrix<float>(),
-          w_tensor->matrix<float>(), b_tensor->vec<float>(),
-          states_tensor.matrix<float>(), h_grad_tensor.matrix<float>(),
+          ctx, stream, device, bprop_dx_, x_tensor.matrix<float>(),
+          states_prev_tensor.matrix<float>(), w_tensor->matrix<float>(),
+          b_tensor->vec<float>(), i_tensor.matrix<float>(),
+          cs_tensor.matrix<float>(), f_tensor.matrix<float>(),
+          o_tensor.matrix<float>(), ci_tensor.matrix<float>(),
+          co_tensor.matrix<float>(), h_tensor.matrix<float>(),
           states_grad_const_tensor.matrix<float>(),
+          h_grad_tensor.matrix<float>(), cs_prev_tensor.matrix<float>(),
+          states_c_grad_tensor.matrix<float>(),
+          states_h_grad_tensor.matrix<float>(), xh_tensor.matrix<float>(),
           xh_grad_tensor.matrix<float>(), x_grad_tensor->matrix<float>(),
+          dh_tensor.matrix<float>(), do_tensor.matrix<float>(),
+          dcs_tensor.matrix<float>(), dci_tensor.matrix<float>(),
+          df_tensor.matrix<float>(), di_tensor.matrix<float>(),
+          dicfo_tensor.matrix<float>(),
           states_prev_grad_tensor.matrix<float>(),
           w_grad_tensor->matrix<float>(), b_grad_tensor->vec<float>());
 
@@ -604,6 +932,7 @@ class LSTMBlockGradOp : public OpKernel {
  private:
   int64 sequence_len_max_;
   int64 cell_size_;
+  bool bprop_dx_;
 };
 
 REGISTER_KERNEL_BUILDER(Name("LSTMBlockGrad")     \

@@ -501,7 +501,7 @@ def tf_custom_op_library(name, srcs=[], gpu_srcs=[], hdrs=[], deps=[]):
   native.cc_binary(name=name,
                    srcs=srcs,
                    deps=deps + if_cuda(cuda_deps),
-                   copts = if_cuda(["-DGOOGLE_CUDA=1"]),
+                   copts = if_cuda(["-DGOOGLE_CUDA=1"]) + tf_copts(),
                    linkshared=1,
                    linkopts = select({
                        "//conditions:default": [

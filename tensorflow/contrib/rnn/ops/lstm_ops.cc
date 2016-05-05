@@ -5,12 +5,19 @@ namespace tensorflow {
 REGISTER_OP("LSTMCellBlock")
     .Attr("cell_size: int")
     .Attr("forget_bias: float = 1.0")
+    .Attr("bprop_dx: bool = true")
     .Input("x: float")
     .Input("states_prev: float")
     .Input("w: float")
     .Input("b: float")
-    .Output("h: float")
+    .Output("i: float")
+    .Output("cs: float")
+    .Output("f: float")
+    .Output("o: float")
+    .Output("ci: float")
+    .Output("co: float")
     .Output("states: float")
+    .Output("h: float")
     .Doc(R"doc(
 Computes the LSTM cell forward propagation for 1 time step.
 
@@ -19,7 +26,7 @@ diagonal peephole connection.
 
 This kernel op implements the following mathematical equations:
 
-  [_, cs_prev, _, _, _, _, h_prev] = states_prev
+  [_, cs_prev, _, _, _, _, h_prev] = states
 
   xh = [x, h_prev]
   [i, f, ci, o] = xh * w + b
@@ -40,23 +47,29 @@ This kernel op implements the following mathematical equations:
 cell_size: The LSTM cell size.
 forget_bias: The forget gate bias.
 x: The input to the LSTM cell.
-states_prev: The previous LSTM state (it is a concatenated vector of c[t - 1]
-  and h[t - 1].
+states_prev: The previous LSTM state of i, cs, f, o, ci, co, h.
 w: The weight matrix.
 b: The bias vector.
-h: The output h[t] vector.
-states: The state vector (it is the concatenated vector of c[t] and h[t]).
+states: The LSTM state of i, cs, f, o, ci, co, h.
+h: The output h vector.
 )doc");
 
 REGISTER_OP("LSTMCellBlockGrad")
     .Attr("cell_size: int")
+    .Attr("bprop_dx: bool")
     .Input("x: float")
     .Input("states_prev: float")
     .Input("w: float")
     .Input("b: float")
-    .Input("states: float")
-    .Input("h_grad: float")
+    .Input("i: float")
+    .Input("cs: float")
+    .Input("f: float")
+    .Input("o: float")
+    .Input("ci: float")
+    .Input("co: float")
+    .Input("h: float")
     .Input("states_grad: float")
+    .Input("h_grad: float")
     .Output("x_grad: float")
     .Output("states_prev_grad: float")
     .Output("w_grad: float")
@@ -85,13 +98,20 @@ REGISTER_OP("LSTMBlock")
     .Attr("cell_size: int")
     .Attr("forget_bias: float = 1.0")
     .Attr("sequence_len_max: int")
+    .Attr("bprop_dx: bool = true")
     .Input("sequence_len: int64")
     .Input("initial_state: float")
     .Input("x: sequence_len_max * float")
     .Input("w: float")
     .Input("b: float")
-    .Output("h: sequence_len_max * float")
+    .Output("i: sequence_len_max * float")
+    .Output("cs: sequence_len_max * float")
+    .Output("f: sequence_len_max * float")
+    .Output("o: sequence_len_max * float")
+    .Output("ci: sequence_len_max * float")
+    .Output("co: sequence_len_max * float")
     .Output("states: sequence_len_max * float")
+    .Output("h: sequence_len_max * float")
     .Doc(R"doc(
 Computes the LSTM forward propagation for N time steps.
 
@@ -113,12 +133,20 @@ states: The list of states (it is the concatenated vector of c an h).
 REGISTER_OP("LSTMBlockGrad")
     .Attr("cell_size: int")
     .Attr("sequence_len_max: int")
+    .Attr("bprop_dx: bool = true")
     .Input("sequence_len: int64")
     .Input("initial_state: float")
     .Input("x: sequence_len_max * float")
     .Input("w: float")
     .Input("b: float")
+    .Input("i: sequence_len_max * float")
+    .Input("cs: sequence_len_max * float")
+    .Input("f: sequence_len_max * float")
+    .Input("o: sequence_len_max * float")
+    .Input("ci: sequence_len_max * float")
+    .Input("co: sequence_len_max * float")
     .Input("states: sequence_len_max * float")
+    .Input("h: sequence_len_max * float")
     .Input("h_grad: sequence_len_max * float")
     .Output("x_grad: sequence_len_max * float")
     .Output("w_grad: float")

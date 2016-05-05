@@ -17,7 +17,7 @@ class OpKernelContext;
 void CuBlasGemm(
     OpKernelContext* ctx, perftools::gputools::Stream* stream, bool transa,
     bool transb, uint64 m, uint64 n, uint64 k, float alpha, const float* a,
-    int lda, const float* b, int ldb, float beta, float *c, int ldc);
+    int lda, const float* b, int ldb, float beta, float* c, int ldc);
 
 namespace functor {
 
@@ -36,36 +36,62 @@ struct TensorMemCopy {
   }
 };
 
+template <typename Device, bool USE_CUBLAS>
+struct TensorBlasGemm {
+  template <typename A_T, typename B_T>
+  void operator()(
+      OpKernelContext* ctx, perftools::gputools::Stream* stream,
+      const Device& d, bool transa, bool transb, float alpha,
+      A_T a, B_T b, float beta, typename TTypes<float>::Matrix c) {
+    if (USE_CUBLAS) {
+      int64 m = c.dimensions()[0];
+      int64 n = c.dimensions()[1];
+      int64 k = transa ? a.dimensions()[0] : a.dimensions()[1];
+
+      CuBlasGemm(ctx, stream, transb, transa, n, m, k, alpha, b.data(),
+                 transb ? k : n, a.data(), transa ? m : k, beta, c.data(), n);
+    } else {
+      Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> contract_pairs;
+      contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(
+          transa == false, transb == true);
+      if (alpha == 1.0f && beta == 0.0f) {
+        c.device(d) = a.contract(b, contract_pairs);
+      } else if (alpha == 1.0f && beta == 1.0f) {
+        c.device(d) += a.contract(b, contract_pairs);
+      } else {
+        c.device(d) = c.constant(alpha) * a.contract(b, contract_pairs) +
+                      c.constant(beta) * c;
+      }
+    }
+  }
+};
+
 struct LSTMCellBlock {
   LSTMCellBlock(const int batch_size, const int input_size, const int cell_size)
     : batch_size_(batch_size), input_size_(input_size), cell_size_(cell_size) {}
 
-  Eigen::array<int, 2> i_offsets() const {
+  Eigen::array<int, 2> icfo_i_offsets() const {
     return {0, cell_size_ * 0};
   }
 
-  Eigen::array<int, 2> cs_offsets() const {
+  Eigen::array<int, 2> icfo_c_offsets() const {
     return {0, cell_size_ * 1};
   }
 
-  Eigen::array<int, 2> f_offsets() const {
+  Eigen::array<int, 2> icfo_f_offsets() const {
     return {0, cell_size_ * 2};
   }
 
-  Eigen::array<int, 2> o_offsets() const {
+  Eigen::array<int, 2> icfo_o_offsets() const {
     return {0, cell_size_ * 3};
   }
 
-  Eigen::array<int, 2> ci_offsets() const {
-    return {0, cell_size_ * 4};
+  Eigen::array<int, 2> states_cs_offsets() const {
+    return {0, 0};
   }
 
-  Eigen::array<int, 2> co_offsets() const {
-    return {0, cell_size_ * 5};
-  }
-
-  Eigen::array<int, 2> h_offsets() const {
-    return {0, cell_size_ * 6};
+  Eigen::array<int, 2> states_h_offsets() const {
+    return {0, cell_size_};
   }
 
   Eigen::array<int, 2> cell_extents() const {
@@ -88,14 +114,6 @@ struct LSTMCellBlock {
     return {batch_size_, cell_size_};
   }
 
-  Eigen::array<int, 2> states_offsets() const {
-    return {0, 0};
-  }
-
-  Eigen::array<int, 2> states_extents() const {
-    return {batch_size_, cell_size_ * 4};
-  }
-
  protected:
   const int batch_size_;
   const int input_size_;
@@ -112,70 +130,63 @@ struct LSTMCellBlockFprop : public LSTMCellBlock {
       OpKernelContext* ctx, perftools::gputools::Stream* stream,
       const Device& d, const float forget_bias,
       typename TTypes<float>::ConstMatrix x,
-      typename TTypes<float>::Matrix xh,
       typename TTypes<float>::ConstMatrix states_prev,
       typename TTypes<float>::ConstMatrix w,
       typename TTypes<float>::ConstVec b,
-      typename TTypes<float>::Matrix h,
-      typename TTypes<float>::Matrix states) {
-    auto h_prev =
-        states_prev.slice(h_offsets(), cell_extents());
+      typename TTypes<float>::Matrix cs_prev,
+      typename TTypes<float>::Matrix h_prev,
+      typename TTypes<float>::Matrix xh,
+      typename TTypes<float>::Matrix i,
+      typename TTypes<float>::Matrix cs,
+      typename TTypes<float>::Matrix f,
+      typename TTypes<float>::Matrix o,
+      typename TTypes<float>::Matrix ci,
+      typename TTypes<float>::Matrix co,
+      typename TTypes<float>::Matrix icfo,
+      typename TTypes<float>::Matrix states,
+      typename TTypes<float>::Matrix h) {
+    // [cs, h] = states_prev
+    cs_prev.device(d) =
+        states_prev.slice(states_cs_offsets(), cell_extents());
 
+    h_prev.device(d) =
+        states_prev.slice(states_h_offsets(), cell_extents());
+
+    // Concat xh = [x, h].
     xh.slice(xh_x_offsets(), xh_x_extents()).device(d) = x;
     xh.slice(xh_h_offsets(), xh_h_extents()).device(d) = h_prev;
 
-    // states = xh * w + b
-    if (USE_CUBLAS) {
-      states.slice(states_offsets(), states_extents()).device(d) =
-          b.broadcast(Eigen::array<int, 2>({batch_size_, 1}));
-
-      const uint64 m = batch_size_;
-      const uint64 k = input_size_ + cell_size_;
-      const uint64 n = cell_size_ * 4;
-
-      const float* a_ptr = xh.data();
-      const float* b_ptr = w.data();
-      float* c_ptr = states.data();
-
-      CuBlasGemm(ctx, stream, false, false, n, m, k, 1.0, b_ptr, n, a_ptr, k,
-                 1.0f, c_ptr, cell_size_ * 7);
-    } else {
-      Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> contract_pairs;
-      contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(1, 0);
-
-      states.slice(states_offsets(), states_extents()).device(d) =
-          xh.contract(w, contract_pairs) +
-          b.broadcast(Eigen::array<int, 2>({batch_size_, 1}));
-    }
+    // states1 = xh * w + b
+    TensorBlasGemm<Device, USE_CUBLAS>()(
+        ctx, stream, d, false, false, 1.0f, xh, w, 0.0f, icfo);
+    icfo.device(d) +=
+        b.broadcast(Eigen::array<int, 2>({batch_size_, 1}));
 
     // Input gate.
-    auto i = states.slice(i_offsets(), cell_extents());
-    i.device(d) = i.sigmoid();
+    i.device(d) = icfo.slice(icfo_i_offsets(), cell_extents()).sigmoid();
 
     // Cell input.
-    auto ci = states.slice(ci_offsets(), cell_extents());
-    ci.device(d) =
-        states.slice(cs_offsets(), cell_extents()).tanh();
+    ci.device(d) = icfo.slice(icfo_c_offsets(), cell_extents()).tanh();
 
     // Forget gate (w/ bias).
-    auto f = states.slice(f_offsets(), cell_extents());
-    f.device(d) = (f + f.constant(forget_bias)).sigmoid();
+    f.device(d) =
+        (icfo.slice(icfo_f_offsets(), cell_extents()) + f.constant(forget_bias))
+        .sigmoid();
 
     // cs = ci .* i + f .* cs_prev
-    auto cs_prev = states_prev.slice(cs_offsets(), cell_extents());
-    auto cs = states.slice(cs_offsets(), cell_extents());
     cs.device(d) = i * ci + f * cs_prev;
 
     // co = tanh(cs)
-    auto co = states.slice(co_offsets(), cell_extents());
     co.device(d) = cs.tanh();
 
-    // h = o .* co
-    auto o = states.slice(o_offsets(), cell_extents());
-    o.device(d) = o.sigmoid();
-    states.slice(h_offsets(), cell_extents()).device(d) = o * co;
+    // Output gate.
+    o.device(d) = icfo.slice(icfo_o_offsets(), cell_extents()).sigmoid();
 
-    h.device(d) = states.slice(h_offsets(), cell_extents());
+    // h = o .* co
+    h.device(d) = o * co;
+
+    states.slice(states_cs_offsets(), cell_extents()).device(d) = cs;
+    states.slice(states_h_offsets(), cell_extents()).device(d) = h;
   }
 };
 
@@ -187,105 +198,81 @@ struct LSTMCellBlockBprop : public LSTMCellBlock {
 
   void operator()(
       OpKernelContext* ctx, perftools::gputools::Stream* stream,
-      const Device& d, typename TTypes<float>::ConstMatrix x,
-      typename TTypes<float>::Matrix xh,
+      const Device& d, bool bprop_dx, typename TTypes<float>::ConstMatrix x,
       typename TTypes<float>::ConstMatrix states_prev,
-      typename TTypes<float>::ConstMatrix w,
-      typename TTypes<float>::ConstVec b,
-      typename TTypes<float>::ConstMatrix states,
-      typename TTypes<float>::ConstMatrix h_grad,
+      typename TTypes<float>::ConstMatrix w, typename TTypes<float>::ConstVec b,
+      typename TTypes<float>::ConstMatrix i,
+      typename TTypes<float>::ConstMatrix cs,
+      typename TTypes<float>::ConstMatrix f,
+      typename TTypes<float>::ConstMatrix o,
+      typename TTypes<float>::ConstMatrix ci,
+      typename TTypes<float>::ConstMatrix co,
+      typename TTypes<float>::ConstMatrix h,
       typename TTypes<float>::ConstMatrix states_grad,
-      typename TTypes<float>::Matrix xh_grad,
-      typename TTypes<float>::Matrix x_grad,
+      typename TTypes<float>::ConstMatrix h_grad,
+      typename TTypes<float>::Matrix cs_prev,
+      typename TTypes<float>::Matrix states_c_grad,
+      typename TTypes<float>::Matrix states_h_grad,
+      typename TTypes<float>::Matrix xh, typename TTypes<float>::Matrix xh_grad,
+      typename TTypes<float>::Matrix x_grad, typename TTypes<float>::Matrix dh,
+      typename TTypes<float>::Matrix do_, typename TTypes<float>::Matrix dcs,
+      typename TTypes<float>::Matrix dci, typename TTypes<float>::Matrix df,
+      typename TTypes<float>::Matrix di, typename TTypes<float>::Matrix dicfo,
       typename TTypes<float>::Matrix states_prev_grad,
       typename TTypes<float>::Matrix w_grad,
       typename TTypes<float>::Vec b_grad) {
-    xh.slice(xh_x_offsets(), xh_x_extents()).device(d) = x;
-    auto h_prev = states_prev.slice(h_offsets(), cell_extents());
-    xh.slice(xh_h_offsets(), xh_h_extents()).device(d) = h_prev;
+    // [c_grad, h_grad] = states_grad.
+    states_c_grad.device(d) =
+        states_grad.slice(states_cs_offsets(), cell_extents());
+    states_h_grad.device(d) =
+        states_grad.slice(states_h_offsets(), cell_extents());
 
     // dh.
-    auto dh = states_prev_grad.slice(h_offsets(), cell_extents());
-    dh.device(d) =
-        h_grad + states_grad.slice(h_offsets(), cell_extents());
+    dh.device(d) = h_grad + states_h_grad;
 
     // do[t] = sigm'(o[t]) .* dh[t] .* co[t]
-    auto co = states.slice(co_offsets(), cell_extents());
-    auto o = states.slice(o_offsets(), cell_extents());
-    states_prev_grad.slice(o_offsets(), cell_extents()).device(d) =
-        o * (o.constant(1.0f) - o) * dh * co;
+    do_.device(d) = o * (o.constant(1.0f) - o) * dh * co;
 
     // dcs[t] += tanh'(cs[t]) .* dh[t] .* o[t] + dcs[t + 1] .* f[t + 1]
-    auto dcs = states_prev_grad.slice(co_offsets(), cell_extents());
     dcs.device(d) =
-        (co.constant(1.0f) - co * co) * dh * o +
-        states_grad.slice(ci_offsets(), cell_extents());
+          (co.constant(1.0f) - co * co) * dh * o + states_c_grad;
 
     // dci[t] = tanh'(ci[t]) dcs[t] i[t]
-    auto ci = states.slice(ci_offsets(), cell_extents());
-    auto i = states.slice(i_offsets(), cell_extents());
-    states_prev_grad.slice(cs_offsets(), cell_extents()).device(d) =
-        (ci.constant(1.0f) - ci * ci) * dcs * i;
+    dci.device(d) = (ci.constant(1.0f) - ci * ci) * dcs * i;
 
     // df[t] = sigm'(f[t]) dcs[t] cs[t - 1]
-    auto f = states.slice(f_offsets(), cell_extents());
-    auto cs_prev = states_prev.slice(cs_offsets(), cell_extents());
-    states_prev_grad.slice(f_offsets(), cell_extents()).device(d) =
-        f * (f.constant(1.0f) - f) * dcs * cs_prev;
+    cs_prev.device(d) = states_prev.slice(states_cs_offsets(), cell_extents());
+    df.device(d) = f * (f.constant(1.0f) - f) * dcs * cs_prev;
 
     // di[t] = sigm'(i[t]) dcs[t] ci[t]
-    states_prev_grad.slice(i_offsets(), cell_extents()).device(d) =
-        i * (i.constant(1.0f) - i) * dcs * ci;
+    di.device(d) = i * (i.constant(1.0f) - i) * dcs * ci;
 
-    // xh_grad.
-    auto dstate4 = states_prev_grad.slice(states_offsets(), states_extents());
-
-    Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> xh_grad_contract_pairs;
-    xh_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(1, 1);
+    dicfo.slice(icfo_i_offsets(), cell_extents()).device(d) = di;
+    dicfo.slice(icfo_c_offsets(), cell_extents()).device(d) = dci;
+    dicfo.slice(icfo_f_offsets(), cell_extents()).device(d) = df;
+    dicfo.slice(icfo_o_offsets(), cell_extents()).device(d) = do_;
 
     // xh_grad = dstate4 * w^T
-    if (USE_CUBLAS) {
-      const uint64 m = batch_size_;
-      const uint64 k = cell_size_ * 4;
-      const uint64 n = input_size_ + cell_size_;
- 
-      const float* a_ptr = states_prev_grad.data();
-      const float* b_ptr = w.data();
-      float* c_ptr = xh_grad.data();
+    TensorBlasGemm<Device, USE_CUBLAS>()(
+        ctx, stream, d, false, true, 1.0f, dicfo, w, 0.0f, xh_grad);
 
-      CuBlasGemm(ctx, stream, true, false, n, m, k, 1.0f, b_ptr, k, a_ptr,
-                 cell_size_ * 7, 0.0f, c_ptr, n);
-    } else {
-      xh_grad.device(d) =
-          dstate4.contract(w, xh_grad_contract_pairs);
-    }
-
+    // x_grad.
     x_grad.device(d) = xh_grad.slice(xh_x_offsets(), xh_x_extents());
-    states_prev_grad.slice(h_offsets(), cell_extents()).device(d) =
+
+    // states_prev_grad = [dcs, dh]
+    states_prev_grad.slice(states_cs_offsets(), cell_extents()).device(d) = dcs * f;
+    states_prev_grad.slice(states_h_offsets(), cell_extents()).device(d) =
         xh_grad.slice(xh_h_offsets(), xh_h_extents());
 
-    // dcs.
-    states_prev_grad.slice(ci_offsets(), cell_extents()).device(d) = dcs * f;
+    // Concat xh = [x, h].
+    auto h_prev = states_prev.slice(states_h_offsets(), cell_extents());
+    xh.slice(xh_x_offsets(), xh_x_extents()).device(d) = x;
+    xh.slice(xh_h_offsets(), xh_h_extents()).device(d) = h_prev;
 
     // w_grad, b_grad.
-    if (USE_CUBLAS) {
-       const uint64 m = input_size_ + cell_size_;
-       const uint64 k = batch_size_;
-       const uint64 n = cell_size_ * 4;
-
-       const float* a_ptr = xh.data();
-       const float* b_ptr = states_prev_grad.data();
-       float* c_ptr = w_grad.data();
-
-      CuBlasGemm(ctx, stream, false, true, n, m, k, 1.0f, b_ptr, cell_size_ * 7,
-                 a_ptr, m, 1.0f, c_ptr, n);
-    } else {
-      Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> w_grad_contract_pairs;
-      w_grad_contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(0, 0);
-
-      w_grad.device(d) += xh.contract(dstate4, w_grad_contract_pairs);
-    }
-    b_grad.device(d) += dstate4.sum(Eigen::array<int, 1>({0}));
+    TensorBlasGemm<Device, USE_CUBLAS>()(
+        ctx, stream, d, true, false, 1.0f, xh, dicfo, 1.0f, w_grad);
+    b_grad.device(d) += dicfo.sum(Eigen::array<int, 1>({0}));
   }
 };
 

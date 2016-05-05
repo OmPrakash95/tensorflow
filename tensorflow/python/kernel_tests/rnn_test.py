@@ -846,12 +846,8 @@ class BidirectionalRNNTest(tf.test.TestCase):
 
 ######### Benchmarking RNN code
 
-def _static_vs_dynamic_rnn_benchmark_static(inputs_list_t, sequence_length):
+def _rnn_benchmark_static(inputs_list_t, sequence_length, cell):
   (_, input_size) = inputs_list_t[0].get_shape().as_list()
-  initializer = tf.random_uniform_initializer(-0.01, 0.01, seed=127)
-  cell = tf.nn.rnn_cell.LSTMCell(
-      num_units=input_size, input_size=input_size, use_peepholes=True,
-      initializer=initializer)
   outputs, final_state = tf.nn.rnn(
       cell, inputs_list_t, sequence_length=sequence_length, dtype=tf.float32)
 
@@ -861,12 +857,8 @@ def _static_vs_dynamic_rnn_benchmark_static(inputs_list_t, sequence_length):
   return tf.group(final_state, *(gradients + outputs))
 
 
-def _static_vs_dynamic_rnn_benchmark_dynamic(inputs_t, sequence_length):
+def _rnn_benchmark_dynamic(inputs_t, sequence_length, cell):
   (unused_0, unused_1, input_size) = inputs_t.get_shape().as_list()
-  initializer = tf.random_uniform_initializer(-0.01, 0.01, seed=127)
-  cell = tf.nn.rnn_cell.LSTMCell(
-      num_units=input_size, input_size=input_size, use_peepholes=True,
-      initializer=initializer)
   outputs, final_state = tf.nn.dynamic_rnn(
       cell, inputs_t, sequence_length=sequence_length, dtype=tf.float32)
 
@@ -892,18 +884,22 @@ def graph_creation_static_vs_dynamic_rnn_benchmark(max_time):
       for _ in range(max_time)]
   inputs = np.dstack(inputs_list).transpose([0, 2, 1])  # batch x time x depth
 
+  initializer = tf.random_uniform_initializer(-0.01, 0.01, seed=127)
+  cell = tf.nn.rnn_cell.LSTMCell(
+      num_units=num_units, use_peepholes=True, initializer=initializer)
+
   def _create_static_rnn():
     with tf.Session(config=config, graph=tf.Graph()) as sess:
       inputs_list_t = [
           tf.Variable(x, trainable=False).value() for x in inputs_list]
-      ops = _static_vs_dynamic_rnn_benchmark_static(
-          inputs_list_t, sequence_length)
+      ops = _rnn_benchmark_static(
+          inputs_list_t, sequence_length, cell)
 
   def _create_dynamic_rnn():
     with tf.Session(config=config, graph=tf.Graph()) as sess:
       inputs_t = tf.Variable(inputs, trainable=False).value()
-      ops = _static_vs_dynamic_rnn_benchmark_dynamic(
-          inputs_t, sequence_length)
+      ops = _rnn_benchmark_dynamic(
+          inputs_t, sequence_length, cell)
 
   delta_static = timeit.timeit(_create_static_rnn, number=5)
   delta_dynamic = timeit.timeit(_create_dynamic_rnn, number=5)
@@ -1014,13 +1010,17 @@ def static_vs_dynamic_rnn_benchmark(batch_size, max_time, num_units, use_gpu):
       for _ in range(max_time)]
   inputs = np.dstack(inputs_list).transpose([0, 2, 1])  # batch x time x depth
 
+  initializer = tf.random_uniform_initializer(-0.01, 0.01, seed=127)
+  cell = tf.nn.rnn_cell.LSTMCell(
+      num_units=num_units, use_peepholes=True, initializer=initializer)
+
   # Using rnn()
   with tf.Session(config=config, graph=tf.Graph()) as sess:
     with tf.device("/cpu:0" if not use_gpu else None):
       inputs_list_t = [
           tf.Variable(x, trainable=False).value() for x in inputs_list]
-      ops = _static_vs_dynamic_rnn_benchmark_static(
-          inputs_list_t, sequence_length)
+      ops = _rnn_benchmark_static(
+          inputs_list_t, sequence_length, cell)
     tf.initialize_all_variables().run()
     delta_static = _timer(sess, ops)
 
@@ -1028,8 +1028,8 @@ def static_vs_dynamic_rnn_benchmark(batch_size, max_time, num_units, use_gpu):
   with tf.Session(config=config, graph=tf.Graph()) as sess:
     with tf.device("/cpu:0" if not use_gpu else None):
       inputs_t = tf.Variable(inputs, trainable=False).value()
-      ops = _static_vs_dynamic_rnn_benchmark_dynamic(
-          inputs_t, sequence_length)
+      ops = _rnn_benchmark_dynamic(
+          inputs_t, sequence_length, cell)
     tf.initialize_all_variables().run()
     delta_dynamic = _timer(sess, ops)
 
@@ -1156,6 +1156,10 @@ def rnn_long_sequence_benchmark(batch_size, seqlen, num_units,
       for _ in range(seqlen)]
   inputs = np.dstack(inputs_list).transpose([0, 2, 1])  # batch x time x depth
 
+  initializer = tf.random_uniform_initializer(-0.01, 0.01, seed=127)
+  cell = tf.nn.rnn_cell.LSTMCell(
+      num_units=num_units, use_peepholes=True, initializer=initializer)
+
   for _ in range(5):
     if dynamic:
       with tf.Session(config=config, graph=tf.Graph()) as sess:
@@ -1168,8 +1172,8 @@ def rnn_long_sequence_benchmark(batch_size, seqlen, num_units,
       with tf.Session(config=config, graph=tf.Graph()) as sess:
         inputs_list_t = [
             tf.Variable(x, trainable=False).value() for x in inputs_list]
-        ops = _static_vs_dynamic_rnn_benchmark_static(
-            inputs_list_t, sequence_length)
+        ops = _rnn_benchmark_static(
+            inputs_list_t, sequence_length, cell)
         tf.initialize_all_variables().run()
         elapsed = _timer(sess, ops)
 

@@ -4,7 +4,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from tensorflow.contrib.rnn.core.ops import rnn_cell
+from tensorflow.contrib.rnn import rnn_cell
+from tensorflow.contrib.rnn.ops import gen_lstm_ops
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_shape
@@ -22,8 +23,8 @@ def _LSTMBlockShape(op):
   cell_size = op.get_attr("cell_size")
   sequence_len_max = op.get_attr("sequence_len_max")
 
-  return [tensor_shape.TensorShape([batch_size, cell_size])] * sequence_len_max + [
-          tensor_shape.TensorShape([batch_size, cell_size * 7])] * sequence_len_max
+  return [tensor_shape.TensorShape([batch_size, cell_size])] * sequence_len_max * 7 + [
+          tensor_shape.TensorShape([batch_size, cell_size * 2])] * sequence_len_max
 
 
 @ops.RegisterShape("LSTMBlockGrad")
@@ -43,25 +44,32 @@ def _LSTMBlockGrad(op, *grad):
   cell_size = op.get_attr("cell_size")
   sequence_len_max = op.get_attr("sequence_len_max")
 
-  assert len(op.inputs) == sequence_len_max + 4
-  assert len(op.outputs) == sequence_len_max * 2
-  assert len(grad) == sequence_len_max * 2
-
   sequence_len = op.inputs[0]
   initial_state = op.inputs[1]
   x = op.inputs[2:sequence_len_max + 2]
   w = op.inputs[sequence_len_max + 2]
   b = op.inputs[sequence_len_max + 3]
-  states = op.outputs[sequence_len_max:sequence_len_max * 2]
-  h_grad = grad[0:sequence_len_max]
 
-  lstm_block_grads = gen_nn_ops.lstm_block_grad(
-      sequence_len, initial_state, x, w, b, states, h_grad, cell_size=cell_size)
+  i = op.outputs[sequence_len_max * 0:sequence_len_max * 1]
+  cs = op.outputs[sequence_len_max * 1:sequence_len_max * 2]
+  f = op.outputs[sequence_len_max * 2:sequence_len_max * 3]
+  o = op.outputs[sequence_len_max * 3:sequence_len_max * 4]
+  ci = op.outputs[sequence_len_max * 4:sequence_len_max * 5]
+  co = op.outputs[sequence_len_max * 5:sequence_len_max * 6]
+  states = op.outputs[sequence_len_max * 6:sequence_len_max * 7]
+  h = op.outputs[sequence_len_max * 7:sequence_len_max * 8]
 
-  return [None] + [None] + lstm_block_grads[0] + [lstm_block_grads[1]] + [lstm_block_grads[2]]
+  h_grad = grad[sequence_len_max * 7:sequence_len_max * 8]
+
+  x_grads, w_grad, b_grad = gen_lstm_ops.lstm_block_grad(
+      sequence_len=sequence_len, initial_state=initial_state, x=x, w=w, b=b,
+      i=i, cs=cs, f=f, o=o, ci=ci, co=co, states=states, h=h, h_grad=h_grad,
+      cell_size=cell_size)
+
+  return [None] + [None] + x_grads + [w_grad] + [b_grad]
 
 
-def lstm_block(inputs, cell_size, sequence_length=None, initial_state=None,
+def lstm_block(inputs, cell_size, sequence_len=None, initial_state=None,
                forget_bias=1.0, scope=None):
   r"""Computes the LSTM forward propagation for N time steps.
 
@@ -94,14 +102,15 @@ def lstm_block(inputs, cell_size, sequence_length=None, initial_state=None,
     b = vs.get_variable("b", [w.get_shape()[1]],
                         initializer=init_ops.constant_initializer(0.0))
 
-    if sequence_length is None:
-      sequence_length = array_ops.constant(
+    if sequence_len is None:
+      sequence_len = array_ops.constant(
           len(inputs), dtype=dtypes.int64, shape=[batch_size])
 
     if initial_state is None:
       initial_state = array_ops.constant(
-          0.0, dtype=dtypes.float32, shape=[batch_size, cell_size * 7])
+          0.0, dtype=dtypes.float32, shape=[batch_size, cell_size * 2])
 
-    return gen_nn_ops.lstm_block(
-        sequence_length, initial_state, inputs, w, b, cell_size=cell_size,
-        forget_bias=forget_bias)
+    _, _, _, _, _, _, states, h =  gen_lstm_ops.lstm_block(
+        sequence_len=sequence_len, initial_state=initial_state, x=inputs, w=w,
+        b=b, cell_size=cell_size, forget_bias=forget_bias)
+    return h, states
