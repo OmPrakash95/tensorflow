@@ -78,9 +78,16 @@ def _LSTMCellBlockGrad(op, *grad):
   states_grad = grad[6]
   h_grad = grad[7]
 
-  return gen_lstm_ops._lstm_cell_block_grad(
+  parallel_dw = op.get_attr("parallel_dw")
+
+  (x_grad, states_prev_grad, w_grad, b_grad, dicfo, xh) = gen_lstm_ops._lstm_cell_block_grad(
       x, states_prev, w, b, i, cs, f, o, ci, co, h, states_grad, h_grad,
-      cell_size=op.get_attr("cell_size"), bprop_dx=op.get_attr("bprop_dx"))
+      cell_size=op.get_attr("cell_size"), bprop_dx=op.get_attr("bprop_dx"),
+      parallel_dw=parallel_dw)
+
+  if parallel_dw:
+    w_grad = math_ops.matmul(xh, dicfo, transpose_a=True)
+  return (x_grad, states_prev_grad, w_grad, b_grad)
 
 
 @ops.RegisterShape("LSTMCellBlockGrad")
@@ -92,7 +99,9 @@ def _LSTMCellBlockGradShape(op):
   return [tensor_shape.TensorShape([batch_size, input_size]),
           tensor_shape.TensorShape([batch_size, cell_size * 2]),
           tensor_shape.TensorShape([input_size + cell_size, cell_size * 4]),
-          tensor_shape.TensorShape([cell_size * 4])]
+          tensor_shape.TensorShape([cell_size * 4]),
+          tensor_shape.TensorShape([batch_size, cell_size * 4]),
+          tensor_shape.TensorShape([batch_size, input_size + cell_size])]
 
 
 def _get_concat_variable(name, shape, dtype, num_shards):
@@ -560,7 +569,8 @@ class LSTMCellBlock(rnn_cell.RNNCell):
   matches.
   """
 
-  def __init__(self, num_units, forget_bias=1.0, input_size=None, bprop_dx=True):
+  def __init__(self, num_units, forget_bias=1.0, input_size=None, bprop_dx=True,
+               parallel_dw=True):
     """Initialize the basic LSTM cell.
 
     Args:
@@ -572,6 +582,7 @@ class LSTMCellBlock(rnn_cell.RNNCell):
     self._num_units = num_units
     self._forget_bias = forget_bias
     self._bprop_dx = bprop_dx
+    self._parallel_dw = parallel_dw
 
   @property
   def state_size(self):
@@ -590,7 +601,8 @@ class LSTMCellBlock(rnn_cell.RNNCell):
                           initializer=init_ops.constant_initializer(0.0))
       _, _, _, _, _, _, states, h = gen_lstm_ops.lstm_cell_block(
           x, states_prev, w, b, cell_size=self._num_units,
-          forget_bias=self._forget_bias, bprop_dx=self._bprop_dx)
+          forget_bias=self._forget_bias, bprop_dx=self._bprop_dx,
+          parallel_dw=self._parallel_dw)
 
       return h, states
 

@@ -26,7 +26,7 @@ class LSTMTest(tf.test.TestCase):
     self._seed = 23489
     np.random.seed(self._seed)
 
-  def _testLSTMBasicToCellBlockRNN(self, use_gpu, use_sequence_length):
+  def _testLSTMBasicToCellBlockRNN(self, use_gpu, use_sequence_length, parallel_dw):
     time_steps = 8
     num_units = 3
     num_proj = 4
@@ -51,7 +51,8 @@ class LSTMTest(tf.test.TestCase):
          sequence_length, input_values, use_gpu, initializer=initializer)
 
     ########### Step 2: Run LSTMCellBlock
-    lstm_cell_block_cell = tf.contrib.rnn.LSTMCellBlock(num_units)
+    lstm_cell_block_cell = tf.contrib.rnn.LSTMCellBlock(num_units,
+                                                        parallel_dw=parallel_dw)
 
     (values_block, state_value_block, block_grad_values,
      block_individual_grad_values,
@@ -139,10 +140,12 @@ class LSTMTest(tf.test.TestCase):
       self.assertAllClose(a, b)
 
   def testLSTMBasicToCellBlockRNN(self):
-    self._testLSTMBasicToCellBlockRNN(use_gpu=False, use_sequence_length=False)
-    self._testLSTMBasicToCellBlockRNN(use_gpu=False, use_sequence_length=True)
-    self._testLSTMBasicToCellBlockRNN(use_gpu=True, use_sequence_length=False)
-    self._testLSTMBasicToCellBlockRNN(use_gpu=True, use_sequence_length=True)
+    for use_gpu in (True, False):
+      for use_sequence_length in (True, False):
+        for parallel_dw in (True, False):
+          self._testLSTMBasicToCellBlockRNN(
+              use_gpu=use_gpu, use_sequence_length=use_sequence_length,
+              parallel_dw=parallel_dw)
 
   def testLSTMBasicToBlockRNN(self):
     self._testLSTMBasicToBlockRNN(use_gpu=False, use_sequence_length=False)
@@ -162,22 +165,23 @@ class BenchmarkLSTM(tf.test.Benchmark):
 
   def benchmarkBasicVsBlockLSTM(self):
     print("Calculation: Static Unroll with Basic LSTM vs. Block LSTM")
-    print("batch \t max_t \t units \t gpu \t dt(basic) \t dt(block) "
+    print("batch \t max_t \t units \t gpu \t parallel_dw \t dt(basic) \t dt(block) "
           "\t dt(basic)/dt(block)")
-    for batch_size in (512, 32):
+    for batch_size in (512, 256, 128, 64, 32, 16):
       for max_time in (50,):
         for num_units in (512, 256, 128):
           for use_gpu in (False, True):
-            s_dt, d_dt = basic_vs_block_rnn_benchmark(
-                batch_size, max_time, num_units, use_gpu)
-            self.report_benchmark(
-                name="basic_unroll_time_T%02d_B%03d_N%03d_gpu_%s"
-                % (max_time, batch_size, num_units, use_gpu),
-                iters=20, wall_time=s_dt)
-            self.report_benchmark(
-                name="block_unroll_time_T%02d_B%03d_N%03d_gpu_%s"
-                % (max_time, batch_size, num_units, use_gpu),
-                iters=20, wall_time=d_dt)
+            for parallel_dw in (True, False):
+              s_dt, d_dt = basic_vs_block_rnn_benchmark(
+                  batch_size, max_time, num_units, use_gpu, parallel_dw)
+              self.report_benchmark(
+                  name="basic_unroll_time_T%02d_B%03d_N%03d_gpu_%s_pdw_%s"
+                  % (max_time, batch_size, num_units, use_gpu, parallel_dw),
+                  iters=20, wall_time=s_dt)
+              self.report_benchmark(
+                  name="block_unroll_time_T%02d_B%03d_N%03d_gpu_%s_pdw_%s"
+                  % (max_time, batch_size, num_units, use_gpu, parallel_dw),
+                  iters=20, wall_time=d_dt)
 
 
 def run_block_lstm(test, time_steps, batch_size, cell_size, input_size,
@@ -291,7 +295,7 @@ def graph_creation_basic_vs_block_rnn_benchmark(max_time):
   return delta_basic, delta_block
 
 
-def basic_vs_block_rnn_benchmark(batch_size, max_time, num_units, use_gpu):
+def basic_vs_block_rnn_benchmark(batch_size, max_time, num_units, use_gpu, parallel_dw):
   config = tf.ConfigProto()
   config.allow_soft_placement = True
 
@@ -318,7 +322,7 @@ def basic_vs_block_rnn_benchmark(batch_size, max_time, num_units, use_gpu):
   # Using block.
   with tf.Session(config=config, graph=tf.Graph()) as sess:
     with tf.device("/cpu:0" if not use_gpu else None):
-      cell = tf.contrib.rnn.LSTMCellBlock(num_units=num_units, bprop_dx=False)
+      cell = tf.contrib.rnn.LSTMCellBlock(num_units=num_units, bprop_dx=False, parallel_dw=parallel_dw)
       inputs_list_t = [
           tf.Variable(x, trainable=False).value() for x in inputs_list]
       ops = rnn_test._rnn_benchmark_static(
@@ -326,9 +330,9 @@ def basic_vs_block_rnn_benchmark(batch_size, max_time, num_units, use_gpu):
     tf.initialize_all_variables().run()
     delta_block = _timer(sess, ops)
 
-  print("%d \t %d \t %d \t %s \t %f \t %f \t %f" %
-        (batch_size, max_time, num_units, use_gpu, delta_basic, delta_block,
-         delta_block/delta_basic))
+  print("%d \t %d \t %d \t %s \t %s \t %f \t %f \t %f" %
+        (batch_size, max_time, num_units, use_gpu, parallel_dw, delta_basic,
+         delta_block, delta_block/delta_basic))
 
   return delta_basic, delta_block
 
