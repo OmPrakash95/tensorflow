@@ -201,7 +201,7 @@ struct LSTMCellBlockBprop : public LSTMCellBlock {
 
   void operator()(
       OpKernelContext* ctx, perftools::gputools::Stream* stream,
-      const Device& d, bool bprop_dx, bool parallel_dw,
+      const Device& d, bool parallel_dw,
       typename TTypes<float>::ConstMatrix x,
       typename TTypes<float>::ConstMatrix states_prev,
       typename TTypes<float>::ConstMatrix w, typename TTypes<float>::ConstVec b,
