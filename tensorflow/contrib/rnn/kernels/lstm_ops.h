@@ -274,16 +274,15 @@ struct LSTMCellBlockBprop : public LSTMCellBlock {
     xh.slice(xh_x_offsets(), xh_x_extents()).device(d) = x;
     xh.slice(xh_h_offsets(), xh_h_extents()).device(d) = h_prev;
 
-    // w_grad.
+    // w_grad, b_grad.
     if (!parallel_dw) {
-      workers->Schedule([ctx, stream, d, xh, dicfo, w_grad, &counter]() {
+      workers->Schedule([ctx, stream, &d, &xh, &dicfo, &w_grad, &counter]() {
         TensorBlasGemm<Device, USE_CUBLAS>()(
             ctx, stream, d, true, false, 1.0f, xh, dicfo, 1.0f, w_grad);
         counter.DecrementCount();
       });
+      b_grad.device(d) += dicfo.sum(Eigen::array<int, 1>({0}));
     }
-    // b_grad.
-    b_grad.device(d) += dicfo.sum(Eigen::array<int, 1>({0}));
 
     // Need to make sure our GEMMs are done.
     counter.Wait();

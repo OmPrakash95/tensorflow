@@ -87,6 +87,7 @@ def _LSTMCellBlockGrad(op, *grad):
 
   if parallel_dw:
     w_grad = math_ops.matmul(xh, dicfo, transpose_a=True)
+    b_grad = nn_ops.bias_add_grad(dicfo)
   return (x_grad, states_prev_grad, w_grad, b_grad)
 
 
