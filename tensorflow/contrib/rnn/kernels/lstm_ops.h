@@ -168,7 +168,7 @@ struct LSTMCellBlockFprop : public LSTMCellBlock {
     // states1 = xh * w + b
     typename TTypes<T>::ConstMatrix const_xh(xh.data(), xh.dimensions());
     TensorBlasGemm<Device, T, USE_CUBLAS>::compute(
-        ctx, stream, d, false, false, 1.0f, const_xh, w, 0.0f, icfo);
+        ctx, stream, d, false, false, T(1), const_xh, w, T(0), icfo);
     icfo.device(d) +=
         b.broadcast(Eigen::array<int, 2>({batch_size_, 1}));
 
@@ -237,21 +237,20 @@ struct LSTMCellBlockBprop : public LSTMCellBlock {
     dh.device(d) = h_grad + states_h_grad;
 
     // do[t] = sigm'(o[t]) .* dh[t] .* co[t]
-    do_.device(d) = o * (o.constant(1.0f) - o) * dh * co;
+    do_.device(d) = o * (o.constant(T(1)) - o) * dh * co;
 
     // dcs[t] += tanh'(cs[t]) .* dh[t] .* o[t] + dcs[t + 1] .* f[t + 1]
-    dcs.device(d) =
-          (co.constant(1.0f) - co * co) * dh * o + states_c_grad;
+    dcs.device(d) = (co.constant(T(1)) - co * co) * dh * o + states_c_grad;
 
     // dci[t] = tanh'(ci[t]) dcs[t] i[t]
-    dci.device(d) = (ci.constant(1.0f) - ci * ci) * dcs * i;
+    dci.device(d) = (ci.constant(T(1)) - ci * ci) * dcs * i;
 
     // df[t] = sigm'(f[t]) dcs[t] cs[t - 1]
     cs_prev.device(d) = states_prev.slice(states_cs_offsets(), cell_extents());
-    df.device(d) = f * (f.constant(1.0f) - f) * dcs * cs_prev;
+    df.device(d) = f * (f.constant(T(1)) - f) * dcs * cs_prev;
 
     // di[t] = sigm'(i[t]) dcs[t] ci[t]
-    di.device(d) = i * (i.constant(1.0f) - i) * dcs * ci;
+    di.device(d) = i * (i.constant(T(1)) - i) * dcs * ci;
 
     dicfo.slice(icfo_i_offsets(), cell_extents()).device(d) = di;
     dicfo.slice(icfo_c_offsets(), cell_extents()).device(d) = dci;
@@ -269,7 +268,7 @@ struct LSTMCellBlockBprop : public LSTMCellBlock {
           dicfo.data(), dicfo.dimensions());
     workers->Schedule([ctx, stream, d, const_dicfo, w, xh_grad, &counter]() {
       TensorBlasGemm<Device, T, USE_CUBLAS>::compute(
-          ctx, stream, d, false, true, 1.0f, const_dicfo, w, 0.0f, xh_grad);
+          ctx, stream, d, false, true, T(1), const_dicfo, w, T(0), xh_grad);
       counter.DecrementCount();
     });
 
@@ -280,14 +279,15 @@ struct LSTMCellBlockBprop : public LSTMCellBlock {
 
     // w_grad, b_grad.
     if (!parallel_dw) {
-      workers->Schedule([ctx, stream, &d, &xh, &const_dicfo, &w_grad, &counter]() {
-        typename TTypes<T>::ConstMatrix const_xh(
-            xh.data(), xh.dimensions());
-        TensorBlasGemm<Device, T, USE_CUBLAS>::compute(
-            ctx, stream, d, true, false, 1.0f, const_xh, const_dicfo, 1.0f,
-            w_grad);
-        counter.DecrementCount();
-      });
+      workers->Schedule(
+          [ctx, stream, &d, &xh, &const_dicfo, &w_grad, &counter]() {
+            typename TTypes<T>::ConstMatrix const_xh(
+                xh.data(), xh.dimensions());
+            TensorBlasGemm<Device, T, USE_CUBLAS>::compute(
+                ctx, stream, d, true, false, T(1), const_xh, const_dicfo, T(1),
+                w_grad);
+            counter.DecrementCount();
+          });
       b_grad.device(d) += dicfo.sum(Eigen::array<int, 1>({0}));
     }
 
