@@ -42,11 +42,12 @@ perftools::gputools::DeviceMemory<T> AsDeviceMemory(const T* cuda_memory) {
 
 #endif  // GOOGLE_CUDA
 
-void CuBlasGemm(
+namespace functor {
+template <typename T>
+void TensorCuBlasGemm<T>::operator()(
     OpKernelContext* ctx, perftools::gputools::Stream* stream,
-    bool transa, bool transb, uint64 m, uint64 n, uint64 k, float alpha,
-    const float* a, int lda, const float* b, int ldb, float beta, float *c,
-    int ldc) {
+    bool transa, bool transb, uint64 m, uint64 n, uint64 k, T alpha,
+    const T* a, int lda, const T* b, int ldb, T beta, T *c, int ldc) {
 #if GOOGLE_CUDA
   perftools::gputools::blas::Transpose trans[] = {
       perftools::gputools::blas::Transpose::kNoTranspose,
@@ -65,7 +66,11 @@ void CuBlasGemm(
 #endif
 }
 
-template <typename Device, bool USE_CUBLAS>
+template struct TensorCuBlasGemm<float>;
+template struct TensorCuBlasGemm<double>;
+}  // end namespace functor
+
+template <typename Device, typename T, bool USE_CUBLAS>
 class LSTMCellBlockOp : public OpKernel {
  public:
   explicit LSTMCellBlockOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -99,7 +104,7 @@ class LSTMCellBlockOp : public OpKernel {
                                         states_prev_tensor->dim_size(0),
                                         " vs. ", batch_size));
     OP_REQUIRES(ctx, states_prev_tensor->dim_size(1) == states_size,
-                errors::InvalidArgument("states_prev.dims(1) != cell_size * 7: ",
+                errors::InvalidArgument("states_prev.dims(1) != cell_size * 2: ",
                                         states_prev_tensor->dim_size(1),
                                         " vs. ", states_size));
 
@@ -152,33 +157,31 @@ class LSTMCellBlockOp : public OpKernel {
 
     // Allocate our temp tensors.
     Tensor xh_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, input_size + cell_size_}), &xh_tensor));
 
     Tensor cs_prev_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &cs_prev_tensor));
 
     Tensor h_prev_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &h_prev_tensor));
 
     Tensor icfo_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_ * 4}), &icfo_tensor));
 
-    functor::LSTMCellBlockFprop<Device, USE_CUBLAS>(
+    functor::LSTMCellBlockFprop<Device, T, USE_CUBLAS>(
         batch_size, input_size, cell_size_)(
         ctx, stream, ctx->eigen_device<Device>(), forget_bias_,
-        x_tensor->matrix<float>(), states_prev_tensor->matrix<float>(),
-        w_tensor->matrix<float>(), b_tensor->vec<float>(),
-        cs_prev_tensor.matrix<float>(), h_prev_tensor.matrix<float>(),
-        xh_tensor.matrix<float>(),
-        i_tensor->matrix<float>(), cs_tensor->matrix<float>(),
-        f_tensor->matrix<float>(), o_tensor->matrix<float>(),
-        ci_tensor->matrix<float>(), co_tensor->matrix<float>(),
-        icfo_tensor.matrix<float>(),
-        states_tensor->matrix<float>(), h_tensor->matrix<float>());
+        x_tensor->matrix<T>(), states_prev_tensor->matrix<T>(),
+        w_tensor->matrix<T>(), b_tensor->vec<T>(), cs_prev_tensor.matrix<T>(),
+        h_prev_tensor.matrix<T>(), xh_tensor.matrix<T>(),
+        i_tensor->matrix<T>(), cs_tensor->matrix<T>(), f_tensor->matrix<T>(),
+        o_tensor->matrix<T>(), ci_tensor->matrix<T>(), co_tensor->matrix<T>(),
+        icfo_tensor.matrix<T>(), states_tensor->matrix<T>(),
+        h_tensor->matrix<T>());
   }
 
  private:
@@ -186,53 +189,69 @@ class LSTMCellBlockOp : public OpKernel {
   float forget_bias_;
 };
 
-REGISTER_KERNEL_BUILDER(Name("LSTMCellBlock")     \
-                            .Device(DEVICE_CPU),  \
-                        LSTMCellBlockOp<CPUDevice, false>);
+#define REGISTER_KERNEL(T)                              \
+  REGISTER_KERNEL_BUILDER(Name("LSTMCellBlock")         \
+                              .Device(DEVICE_CPU)       \
+                              .TypeConstraint<T>("T"),  \
+                          LSTMCellBlockOp<CPUDevice, T, false>);
+REGISTER_KERNEL(float);
+REGISTER_KERNEL(double);
+#undef REGISTER_KERNEL
 
 #if GOOGLE_CUDA
 namespace functor {
-  template <>
-  void TensorMemZero<GPUDevice, float>::operator()(
-      const GPUDevice& d, typename TTypes<float>::Vec x);
+#define DECLARE_GPU_SPEC(T)                                       \
+  template <>                                                     \
+  void TensorMemZero<GPUDevice, T>::operator()(                   \
+      const GPUDevice& d, typename TTypes<T>::Vec x);             \
+                                                                  \
+  template <>                                                     \
+  void TensorMemCopy<GPUDevice, T>::operator()(                   \
+      const GPUDevice& d, typename TTypes<T>::ConstVec in,        \
+      typename TTypes<T>::Vec out);                               \
+                                                                  \
+  template <>                                                     \
+  void LSTMCellBlockFprop<GPUDevice, T, true>::operator()(        \
+      OpKernelContext* ctx, perftools::gputools::Stream* stream,  \
+      const GPUDevice& d, const T forget_bias,                    \
+      typename TTypes<T>::ConstMatrix x,                          \
+      typename TTypes<T>::ConstMatrix states_prev,                \
+      typename TTypes<T>::ConstMatrix w,                          \
+      typename TTypes<T>::ConstVec b,                             \
+      typename TTypes<T>::Matrix cs_prev,                         \
+      typename TTypes<T>::Matrix h_prev,                          \
+      typename TTypes<T>::Matrix xh,                              \
+      typename TTypes<T>::Matrix i,                               \
+      typename TTypes<T>::Matrix cs,                              \
+      typename TTypes<T>::Matrix f,                               \
+      typename TTypes<T>::Matrix o,                               \
+      typename TTypes<T>::Matrix ci,                              \
+      typename TTypes<T>::Matrix co,                              \
+      typename TTypes<T>::Matrix icfo,                            \
+      typename TTypes<T>::Matrix states,                          \
+      typename TTypes<T>::Matrix h);                              \
+                                                                  \
+  extern template struct TensorMemZero<GPUDevice, T>;             \
+  extern template struct TensorMemCopy<GPUDevice, T>;             \
+  extern template struct LSTMCellBlockFprop<GPUDevice, T, true>;
 
-  template <>
-  void TensorMemCopy<GPUDevice, float>::operator()(
-      const GPUDevice& d, typename TTypes<float>::ConstVec in,
-      typename TTypes<float>::Vec out);
-
-  template <>
-  void LSTMCellBlockFprop<GPUDevice, true>::operator()(
-      OpKernelContext* ctx, perftools::gputools::Stream* stream,
-      const GPUDevice& d, const float forget_bias,
-      typename TTypes<float>::ConstMatrix x,
-      typename TTypes<float>::ConstMatrix states_prev,
-      typename TTypes<float>::ConstMatrix w,
-      typename TTypes<float>::ConstVec b,
-      typename TTypes<float>::Matrix cs_prev,
-      typename TTypes<float>::Matrix h_prev,
-      typename TTypes<float>::Matrix xh,
-      typename TTypes<float>::Matrix i,
-      typename TTypes<float>::Matrix cs,
-      typename TTypes<float>::Matrix f,
-      typename TTypes<float>::Matrix o,
-      typename TTypes<float>::Matrix ci,
-      typename TTypes<float>::Matrix co,
-      typename TTypes<float>::Matrix icfo,
-      typename TTypes<float>::Matrix states,
-      typename TTypes<float>::Matrix h);
-
-  extern template struct TensorMemZero<GPUDevice, float>;
-  extern template struct TensorMemCopy<GPUDevice, float>;
-  extern template struct LSTMCellBlockFprop<GPUDevice, true>;
+DECLARE_GPU_SPEC(float);
+DECLARE_GPU_SPEC(double);
+#undef DECLARE_GPU_SPEC
 }  // end namespace functor
 
-REGISTER_KERNEL_BUILDER(Name("LSTMCellBlock")     \
-                            .Device(DEVICE_GPU),  \
-                        LSTMCellBlockOp<GPUDevice, true>);
+#define REGISTER_GPU_KERNEL(T)                          \
+  REGISTER_KERNEL_BUILDER(Name("LSTMCellBlock")         \
+                              .Device(DEVICE_GPU)       \
+                              .TypeConstraint<T>("T"),  \
+                          LSTMCellBlockOp<GPUDevice, T, true>);
+
+REGISTER_GPU_KERNEL(float);
+REGISTER_GPU_KERNEL(double);
+#undef REGISTER_GPU_KERNEL
 #endif  // GOOGLE_CUDA
 
-template <typename Device, bool USE_CUBLAS>
+template <typename Device, typename T, bool USE_CUBLAS>
 class LSTMCellBlockGradOp : public OpKernel {
  public:
   explicit LSTMCellBlockGradOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -411,119 +430,128 @@ class LSTMCellBlockGradOp : public OpKernel {
 
     // Allocate our temp tensors.
     Tensor cs_prev_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &cs_prev_tensor));
 
     Tensor states_c_grad_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &states_c_grad_tensor));
 
     Tensor states_h_grad_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &states_h_grad_tensor));
 
     Tensor xh_grad_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, input_size + cell_size_}), &xh_grad_tensor));
 
     Tensor dh_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &dh_tensor));
 
     Tensor do_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &do_tensor));
 
     Tensor dcs_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &dcs_tensor));
 
     Tensor dci_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &dci_tensor));
 
     Tensor df_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &df_tensor));
 
     Tensor di_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &di_tensor));
 
     Tensor w_grad_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({0, 0}), &w_grad_tensor));
 
     Tensor b_grad_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({0}), &b_grad_tensor));
 
-    functor::LSTMCellBlockBprop<Device, USE_CUBLAS>(
+    functor::LSTMCellBlockBprop<Device, T, USE_CUBLAS>(
         batch_size, input_size, cell_size_)(
-        ctx, stream, device, true, x_tensor->matrix<float>(),
-        states_prev_tensor->matrix<float>(), w_tensor->matrix<float>(),
-        b_tensor->vec<float>(), i_tensor->matrix<float>(),
-        cs_tensor->matrix<float>(), f_tensor->matrix<float>(),
-        o_tensor->matrix<float>(), ci_tensor->matrix<float>(),
-        co_tensor->matrix<float>(), h_tensor->matrix<float>(),
-        states_grad_tensor->matrix<float>(), h_grad_tensor->matrix<float>(),
-        cs_prev_tensor.matrix<float>(), states_c_grad_tensor.matrix<float>(),
-        states_h_grad_tensor.matrix<float>(), xh_tensor->matrix<float>(),
-        xh_grad_tensor.matrix<float>(), x_grad_tensor->matrix<float>(),
-        dh_tensor.matrix<float>(), do_tensor.matrix<float>(),
-        dcs_tensor.matrix<float>(), dci_tensor.matrix<float>(),
-        df_tensor.matrix<float>(), di_tensor.matrix<float>(),
-        dicfo_tensor->matrix<float>(), states_prev_grad_tensor->matrix<float>(),
-        w_grad_tensor.matrix<float>(), b_grad_tensor.vec<float>());
+        ctx, stream, device, true, x_tensor->matrix<T>(),
+        states_prev_tensor->matrix<T>(), w_tensor->matrix<T>(),
+        b_tensor->vec<T>(), i_tensor->matrix<T>(), cs_tensor->matrix<T>(),
+        f_tensor->matrix<T>(), o_tensor->matrix<T>(), ci_tensor->matrix<T>(),
+        co_tensor->matrix<T>(), h_tensor->matrix<T>(),
+        states_grad_tensor->matrix<T>(), h_grad_tensor->matrix<T>(),
+        cs_prev_tensor.matrix<T>(), states_c_grad_tensor.matrix<T>(),
+        states_h_grad_tensor.matrix<T>(), xh_tensor->matrix<T>(),
+        xh_grad_tensor.matrix<T>(), x_grad_tensor->matrix<T>(),
+        dh_tensor.matrix<T>(), do_tensor.matrix<T>(), dcs_tensor.matrix<T>(),
+        dci_tensor.matrix<T>(), df_tensor.matrix<T>(), di_tensor.matrix<T>(),
+        dicfo_tensor->matrix<T>(), states_prev_grad_tensor->matrix<T>(),
+        w_grad_tensor.matrix<T>(), b_grad_tensor.vec<T>());
   }
 
  protected:
   int64 cell_size_;
 };
 
-REGISTER_KERNEL_BUILDER(Name("LSTMCellBlockGrad")    \
-                            .Device(DEVICE_CPU),
-                        LSTMCellBlockGradOp<CPUDevice, false>);
+#define REGISTER_KERNEL(T)                              \
+  REGISTER_KERNEL_BUILDER(Name("LSTMCellBlockGrad")     \
+                              .Device(DEVICE_CPU)       \
+                              .TypeConstraint<T>("T"),  \
+                          LSTMCellBlockGradOp<CPUDevice, T, false>);
+REGISTER_KERNEL(float);
+REGISTER_KERNEL(double);
+#undef REGISTER_KERNEL
 
 #if GOOGLE_CUDA
 namespace functor {
-  template <>
-  void LSTMCellBlockBprop<GPUDevice, true>::operator()(
-      OpKernelContext* ctx, perftools::gputools::Stream* stream,
-      const GPUDevice& d, bool parallel_dw,
-      typename TTypes<float>::ConstMatrix x,
-      typename TTypes<float>::ConstMatrix states_prev,
-      typename TTypes<float>::ConstMatrix w, typename TTypes<float>::ConstVec b,
-      typename TTypes<float>::ConstMatrix i,
-      typename TTypes<float>::ConstMatrix cs,
-      typename TTypes<float>::ConstMatrix f,
-      typename TTypes<float>::ConstMatrix o,
-      typename TTypes<float>::ConstMatrix ci,
-      typename TTypes<float>::ConstMatrix co,
-      typename TTypes<float>::ConstMatrix h,
-      typename TTypes<float>::ConstMatrix states_grad,
-      typename TTypes<float>::ConstMatrix h_grad,
-      typename TTypes<float>::Matrix cs_prev,
-      typename TTypes<float>::Matrix states_c_grad,
-      typename TTypes<float>::Matrix states_h_grad,
-      typename TTypes<float>::Matrix xh, typename TTypes<float>::Matrix xh_grad,
-      typename TTypes<float>::Matrix x_grad, typename TTypes<float>::Matrix dh,
-      typename TTypes<float>::Matrix do_, typename TTypes<float>::Matrix dcs,
-      typename TTypes<float>::Matrix dci, typename TTypes<float>::Matrix df,
-      typename TTypes<float>::Matrix di, typename TTypes<float>::Matrix dicfo,
-      typename TTypes<float>::Matrix states_prev_grad,
-      typename TTypes<float>::Matrix w_grad,
-      typename TTypes<float>::Vec b_grad);
+#define DECLARE_GPU_SPEC(T)                                                       \
+  template <>                                                                     \
+  void LSTMCellBlockBprop<GPUDevice, T, true>::operator()(                        \
+      OpKernelContext* ctx, perftools::gputools::Stream* stream,                  \
+      const GPUDevice& d, bool parallel_dw, typename TTypes<T>::ConstMatrix x,    \
+      typename TTypes<T>::ConstMatrix states_prev,                                \
+      typename TTypes<T>::ConstMatrix w, typename TTypes<T>::ConstVec b,          \
+      typename TTypes<T>::ConstMatrix i, typename TTypes<T>::ConstMatrix cs,      \
+      typename TTypes<T>::ConstMatrix f, typename TTypes<T>::ConstMatrix o,       \
+      typename TTypes<T>::ConstMatrix ci, typename TTypes<T>::ConstMatrix co,     \
+      typename TTypes<T>::ConstMatrix h,                                          \
+      typename TTypes<T>::ConstMatrix states_grad,                                \
+      typename TTypes<T>::ConstMatrix h_grad,                                     \
+      typename TTypes<T>::Matrix cs_prev,                                         \
+      typename TTypes<T>::Matrix states_c_grad,                                   \
+      typename TTypes<T>::Matrix states_h_grad,                                   \
+      typename TTypes<T>::Matrix xh, typename TTypes<T>::Matrix xh_grad,          \
+      typename TTypes<T>::Matrix x_grad, typename TTypes<T>::Matrix dh,           \
+      typename TTypes<T>::Matrix do_, typename TTypes<T>::Matrix dcs,             \
+      typename TTypes<T>::Matrix dci, typename TTypes<T>::Matrix df,              \
+      typename TTypes<T>::Matrix di, typename TTypes<T>::Matrix dicfo,            \
+      typename TTypes<T>::Matrix states_prev_grad,                                \
+      typename TTypes<T>::Matrix w_grad, typename TTypes<T>::Vec b_grad);         \
+                                                                                  \
+  extern template struct LSTMCellBlockBprop<GPUDevice, T, true>;
 
-  extern template struct LSTMCellBlockBprop<GPUDevice, true>;
+DECLARE_GPU_SPEC(float);
+DECLARE_GPU_SPEC(double);
+#undef DECLARE_GPU_SPEC
 }  // namespace functor
 
-REGISTER_KERNEL_BUILDER(Name("LSTMCellBlockGrad")  \
-                            .Device(DEVICE_GPU),   \
-                        LSTMCellBlockGradOp<GPUDevice, true>);
+#define REGISTER_GPU_KERNEL(T)                          \
+  REGISTER_KERNEL_BUILDER(Name("LSTMCellBlockGrad")     \
+                              .Device(DEVICE_GPU)       \
+                              .TypeConstraint<T>("T"),  \
+                          LSTMCellBlockGradOp<GPUDevice, T, true>);
+
+REGISTER_GPU_KERNEL(float);
+REGISTER_GPU_KERNEL(double);
+#undef REGISTER_GPU_KERNEL
 #endif  // GOOGLE_CUDA
 
-template <typename Device, bool USE_CUBLAS>
+template <typename Device, typename T, bool USE_CUBLAS>
 class LSTMBlockOp : public OpKernel {
  public:
   explicit LSTMBlockOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -621,13 +649,12 @@ class LSTMBlockOp : public OpKernel {
       Tensor* h_tensor = nullptr;
       h_tensors.allocate(
           t, TensorShape({batch_size, cell_size_}), &h_tensor);
-      functor::TensorMemZero<Device, float>()(device, h_tensor->flat<float>());
+      functor::TensorMemZero<Device, T>()(device, h_tensor->flat<T>());
 
       Tensor* states_tensor = nullptr;
       states_tensors.allocate(
           t, TensorShape({batch_size, state_size}), &states_tensor);
-      functor::TensorMemZero<Device, float>()(
-          device, states_tensor->flat<float>());
+      functor::TensorMemZero<Device, T>()(device, states_tensor->flat<T>());
 
       Tensor* i_tensor = nullptr;
       i_tensors.allocate(t, TensorShape({batch_size, cell_size_}), &i_tensor);
@@ -645,23 +672,23 @@ class LSTMBlockOp : public OpKernel {
 
     // Allocate our temp tensors.
     Tensor xh_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, input_size + cell_size_}), &xh_tensor));
 
     Tensor cs_prev_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &cs_prev_tensor));
 
     Tensor h_prev_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &h_prev_tensor));
 
     Tensor co_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
           TensorShape({batch_size, cell_size_}), &co_tensor));
 
     Tensor icfo_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_ * 4}), &icfo_tensor));
 
     for (int64 t = 0; t < sequence_len_max; ++t) {
@@ -678,18 +705,16 @@ class LSTMBlockOp : public OpKernel {
       Tensor* states_tensor = states_tensors[t];
       Tensor* h_tensor = h_tensors[t];
 
-      functor::LSTMCellBlockFprop<Device, USE_CUBLAS>(
+      functor::LSTMCellBlockFprop<Device, T, USE_CUBLAS>(
           batch_size, input_size, cell_size_)(
-          ctx, stream, device, forget_bias_,
-          x_tensor.matrix<float>(), states_prev_tensor->matrix<float>(),
-          w_tensor->matrix<float>(), b_tensor->vec<float>(),
-          cs_prev_tensor.matrix<float>(), h_prev_tensor.matrix<float>(),
-          xh_tensor.matrix<float>(),
-          i_tensor->matrix<float>(), cs_tensor->matrix<float>(),
-          f_tensor->matrix<float>(), o_tensor->matrix<float>(),
-          ci_tensor->matrix<float>(), co_tensor->matrix<float>(),
-          icfo_tensor.matrix<float>(),
-          states_tensor->matrix<float>(), h_tensor->matrix<float>());
+          ctx, stream, device, forget_bias_, x_tensor.matrix<T>(),
+          states_prev_tensor->matrix<T>(), w_tensor->matrix<T>(),
+          b_tensor->vec<T>(), cs_prev_tensor.matrix<T>(),
+          h_prev_tensor.matrix<T>(), xh_tensor.matrix<T>(),
+          i_tensor->matrix<T>(), cs_tensor->matrix<T>(), f_tensor->matrix<T>(),
+          o_tensor->matrix<T>(), ci_tensor->matrix<T>(),
+          co_tensor->matrix<T>(), icfo_tensor.matrix<T>(),
+          states_tensor->matrix<T>(), h_tensor->matrix<T>());
     }
   }
 
@@ -699,17 +724,29 @@ class LSTMBlockOp : public OpKernel {
   float forget_bias_;
 };
 
-REGISTER_KERNEL_BUILDER(Name("LSTMBlock")         \
-                            .Device(DEVICE_CPU),  \
-                        LSTMBlockOp<CPUDevice, false>);
+#define REGISTER_KERNEL(T)                              \
+  REGISTER_KERNEL_BUILDER(Name("LSTMBlock")             \
+                              .Device(DEVICE_CPU)       \
+                              .TypeConstraint<T>("T"),  \
+                          LSTMBlockOp<CPUDevice, T, false>);
+
+REGISTER_KERNEL(float);
+REGISTER_KERNEL(double);
+#undef REGISTER_KERNEL
 
 #ifdef GOOGLE_CUDA
-REGISTER_KERNEL_BUILDER(Name("LSTMBlock")         \
-                            .Device(DEVICE_GPU),  \
-                        LSTMBlockOp<GPUDevice, true>);
+#define REGISTER_GPU_KERNEL(T)                          \
+  REGISTER_KERNEL_BUILDER(Name("LSTMBlock")             \
+                              .Device(DEVICE_GPU)       \
+                              .TypeConstraint<T>("T"),  \
+                          LSTMBlockOp<GPUDevice, T, true>);
+
+REGISTER_GPU_KERNEL(float);
+REGISTER_GPU_KERNEL(double);
+#undef REGISTER_GPU_KERNEL
 #endif  // GOOGLE_CUDA
 
-template <typename Device, bool USE_CUBLAS>
+template <typename Device, typename T, bool USE_CUBLAS>
 class LSTMBlockGradOp : public OpKernel {
  public:
   explicit LSTMBlockGradOp(OpKernelConstruction* ctx) : OpKernel(ctx) {
@@ -803,81 +840,77 @@ class LSTMBlockGradOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->allocate_output("w_grad",
           TensorShape({input_size + cell_size_, cell_size_ * 4}),
           &w_grad_tensor));
-    functor::TensorMemZero<Device, float>()(
-        device, w_grad_tensor->flat<float>());
+    functor::TensorMemZero<Device, T>()(device, w_grad_tensor->flat<T>());
 
     Tensor* b_grad_tensor = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output("b_grad",
           TensorShape({cell_size_ * 4}), &b_grad_tensor));
-    functor::TensorMemZero<Device, float>()(
-        device, b_grad_tensor->flat<float>());
+    functor::TensorMemZero<Device, T>()(device, b_grad_tensor->flat<T>());
 
     for (int64 t = 0; t < sequence_len_max_; ++t) {
       Tensor* x_grad_tensor = nullptr;
       x_grad_tensors.allocate(
           t, TensorShape({batch_size, input_size}), &x_grad_tensor);
-      functor::TensorMemZero<Device, float>()(
-          device, x_grad_tensor->flat<float>());
+      functor::TensorMemZero<Device, T>()(device, x_grad_tensor->flat<T>());
     }
 
     // Allocate our temp tensors.
     Tensor cs_prev_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &cs_prev_tensor));
 
     Tensor states_c_grad_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &states_c_grad_tensor));
 
     Tensor states_h_grad_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &states_h_grad_tensor));
 
     Tensor xh_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, input_size + cell_size_}), &xh_tensor));
 
     Tensor xh_grad_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, input_size + cell_size_}), &xh_grad_tensor));
 
     Tensor dh_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &dh_tensor));
 
     Tensor do_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &do_tensor));
 
     Tensor dcs_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &dcs_tensor));
 
     Tensor dci_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &dci_tensor));
 
     Tensor df_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &df_tensor));
 
     Tensor di_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_}), &di_tensor));
 
     Tensor dicfo_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, cell_size_ * 4}), &dicfo_tensor));
 
     Tensor states_grad_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, state_size}), &states_grad_tensor));
 
     Tensor states_prev_grad_tensor;
-    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DT_FLOAT,
+    OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::v(),
         TensorShape({batch_size, state_size}), &states_prev_grad_tensor));
-    functor::TensorMemZero<Device, float>()(
-        device, states_grad_tensor.flat<float>());
+    functor::TensorMemZero<Device, T>()(device, states_grad_tensor.flat<T>());
 
     for (int64 t = sequence_len_max - 1; t >= 0; --t) {
       const Tensor& x_tensor = x_tensors[t];
@@ -895,30 +928,30 @@ class LSTMBlockGradOp : public OpKernel {
       Tensor* x_grad_tensor = x_grad_tensors[t];
       const Tensor& states_grad_const_tensor = states_grad_tensor;
 
-      functor::LSTMCellBlockBprop<Device, USE_CUBLAS>(
+      functor::LSTMCellBlockBprop<Device, T, USE_CUBLAS>(
           batch_size, input_size, cell_size_)(
-          ctx, stream, device, false, x_tensor.matrix<float>(),
-          states_prev_tensor.matrix<float>(), w_tensor->matrix<float>(),
-          b_tensor->vec<float>(), i_tensor.matrix<float>(),
-          cs_tensor.matrix<float>(), f_tensor.matrix<float>(),
-          o_tensor.matrix<float>(), ci_tensor.matrix<float>(),
-          co_tensor.matrix<float>(), h_tensor.matrix<float>(),
-          states_grad_const_tensor.matrix<float>(),
-          h_grad_tensor.matrix<float>(), cs_prev_tensor.matrix<float>(),
-          states_c_grad_tensor.matrix<float>(),
-          states_h_grad_tensor.matrix<float>(), xh_tensor.matrix<float>(),
-          xh_grad_tensor.matrix<float>(), x_grad_tensor->matrix<float>(),
-          dh_tensor.matrix<float>(), do_tensor.matrix<float>(),
-          dcs_tensor.matrix<float>(), dci_tensor.matrix<float>(),
-          df_tensor.matrix<float>(), di_tensor.matrix<float>(),
-          dicfo_tensor.matrix<float>(),
-          states_prev_grad_tensor.matrix<float>(),
-          w_grad_tensor->matrix<float>(), b_grad_tensor->vec<float>());
+          ctx, stream, device, false, x_tensor.matrix<T>(),
+          states_prev_tensor.matrix<T>(), w_tensor->matrix<T>(),
+          b_tensor->vec<T>(), i_tensor.matrix<T>(),
+          cs_tensor.matrix<T>(), f_tensor.matrix<T>(),
+          o_tensor.matrix<T>(), ci_tensor.matrix<T>(),
+          co_tensor.matrix<T>(), h_tensor.matrix<T>(),
+          states_grad_const_tensor.matrix<T>(),
+          h_grad_tensor.matrix<T>(), cs_prev_tensor.matrix<T>(),
+          states_c_grad_tensor.matrix<T>(),
+          states_h_grad_tensor.matrix<T>(), xh_tensor.matrix<T>(),
+          xh_grad_tensor.matrix<T>(), x_grad_tensor->matrix<T>(),
+          dh_tensor.matrix<T>(), do_tensor.matrix<T>(),
+          dcs_tensor.matrix<T>(), dci_tensor.matrix<T>(),
+          df_tensor.matrix<T>(), di_tensor.matrix<T>(),
+          dicfo_tensor.matrix<T>(),
+          states_prev_grad_tensor.matrix<T>(),
+          w_grad_tensor->matrix<T>(), b_grad_tensor->vec<T>());
 
       const Tensor& const_states_prev_grad_tensor = states_prev_grad_tensor;
-      functor::TensorMemCopy<Device, float>()(
-          device, const_states_prev_grad_tensor.flat<float>(),
-          states_grad_tensor.flat<float>());
+      functor::TensorMemCopy<Device, T>()(
+          device, const_states_prev_grad_tensor.flat<T>(),
+          states_grad_tensor.flat<T>());
     }
   }
 
@@ -927,13 +960,25 @@ class LSTMBlockGradOp : public OpKernel {
   int64 cell_size_;
 };
 
-REGISTER_KERNEL_BUILDER(Name("LSTMBlockGrad")     \
-                            .Device(DEVICE_CPU),  \
-                        LSTMBlockGradOp<CPUDevice, false>);
+#define REGISTER_KERNEL(T)                              \
+  REGISTER_KERNEL_BUILDER(Name("LSTMBlockGrad")         \
+                              .Device(DEVICE_CPU)       \
+                              .TypeConstraint<T>("T"),  \
+                          LSTMBlockGradOp<CPUDevice, T, false>);
+
+REGISTER_KERNEL(float);
+REGISTER_KERNEL(double);
+#undef REGISTER_KERNEL
 
 #ifdef GOOGLE_CUDA
-REGISTER_KERNEL_BUILDER(Name("LSTMBlockGrad")     \
-                            .Device(DEVICE_GPU),  \
-                        LSTMBlockGradOp<GPUDevice, true>);
+#define REGISTER_GPU_KERNEL(T)                          \
+  REGISTER_KERNEL_BUILDER(Name("LSTMBlockGrad")         \
+                              .Device(DEVICE_GPU)       \
+                              .TypeConstraint<T>("T"),  \
+                          LSTMBlockGradOp<GPUDevice, T, true>);
+
+REGISTER_GPU_KERNEL(float);
+REGISTER_GPU_KERNEL(double);
+#undef REGISTER_GPU_KERNEL
 #endif  // GOOGLE_CUDA
 }  // end namespace tensorflow

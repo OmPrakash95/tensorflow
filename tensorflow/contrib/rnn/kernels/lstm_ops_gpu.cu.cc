@@ -10,10 +10,15 @@ namespace functor {
 
 typedef Eigen::GpuDevice GPUDevice;
 
-template struct TensorMemZero<GPUDevice, float>;
-template struct TensorMemCopy<GPUDevice, float>;
-template struct LSTMCellBlockFprop<GPUDevice, true>;
-template struct LSTMCellBlockBprop<GPUDevice, true>;
+#define DEFINE_GPU_SPECS(T)                                \
+  template struct TensorMemZero<GPUDevice, T>;             \
+  template struct TensorMemCopy<GPUDevice, T>;             \
+  template struct LSTMCellBlockFprop<GPUDevice, T, true>;  \
+  template struct LSTMCellBlockBprop<GPUDevice, T, true>;
+
+DEFINE_GPU_SPECS(float);
+DEFINE_GPU_SPECS(double);
+#undef DEFINE_GPU_SPECS
 
 }  // end namespace functor
 }  // end namespace tensorflow

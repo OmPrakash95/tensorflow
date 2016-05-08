@@ -17,11 +17,6 @@ class Stream;
 namespace tensorflow {
 class OpKernelContext;
 
-void CuBlasGemm(
-    OpKernelContext* ctx, perftools::gputools::Stream* stream, bool transa,
-    bool transb, uint64 m, uint64 n, uint64 k, float alpha, const float* a,
-    int lda, const float* b, int ldb, float beta, float* c, int ldc);
-
 namespace functor {
 
 template <typename Device, typename T>
@@ -39,32 +34,51 @@ struct TensorMemCopy {
   }
 };
 
-template <typename Device, bool USE_CUBLAS>
-struct TensorBlasGemm {
-  template <typename A_T, typename B_T>
+template <typename T>
+struct TensorCuBlasGemm {
   void operator()(
       OpKernelContext* ctx, perftools::gputools::Stream* stream,
-      const Device& d, bool transa, bool transb, float alpha,
-      A_T a, B_T b, float beta, typename TTypes<float>::Matrix c) {
-    if (USE_CUBLAS) {
-      int64 m = c.dimensions()[0];
-      int64 n = c.dimensions()[1];
-      int64 k = transa ? a.dimensions()[0] : a.dimensions()[1];
+      bool transa, bool transb, uint64 m, uint64 n, uint64 k, T alpha,
+      const T* a, int lda, const T* b, int ldb, T beta, T *c, int ldc);
+};
 
-      CuBlasGemm(ctx, stream, transb, transa, n, m, k, alpha, b.data(),
-                 transb ? k : n, a.data(), transa ? m : k, beta, c.data(), n);
+template <typename Device, typename T, bool USE_CUBLAS>
+struct TensorBlasGemm;
+
+template <typename Device, typename T>
+struct TensorBlasGemm<Device, T, true /* USE_CUBLAS */> {
+  static void compute(
+      OpKernelContext* ctx, perftools::gputools::Stream* stream,
+      const Device& d, bool transa, bool transb, T alpha,
+      typename TTypes<T>::ConstMatrix a, typename TTypes<T>::ConstMatrix b,
+      T beta, typename TTypes<T>::Matrix c) {
+    int64 m = c.dimensions()[0];
+    int64 n = c.dimensions()[1];
+    int64 k = transa ? a.dimensions()[0] : a.dimensions()[1];
+
+    TensorCuBlasGemm<T>()(
+        ctx, stream, transb, transa, n, m, k, alpha, b.data(),
+        transb ? k : n, a.data(), transa ? m : k, beta, c.data(), n);
+  }
+};
+
+template <typename Device, typename T>
+struct TensorBlasGemm<Device, T, false /* USE_CUBLAS */ > {
+  static void compute(
+      OpKernelContext* ctx, perftools::gputools::Stream* stream,
+      const Device& d, bool transa, bool transb, T alpha,
+      typename TTypes<T>::ConstMatrix a, typename TTypes<T>::ConstMatrix b,
+      T beta, typename TTypes<T>::Matrix c) {
+    Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> contract_pairs;
+    contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(
+        transa == false, transb == true);
+    if (alpha == 1.0f && beta == 0.0f) {
+      c.device(d) = a.contract(b, contract_pairs);
+    } else if (alpha == 1.0f && beta == 1.0f) {
+      c.device(d) += a.contract(b, contract_pairs);
     } else {
-      Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> contract_pairs;
-      contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(
-          transa == false, transb == true);
-      if (alpha == 1.0f && beta == 0.0f) {
-        c.device(d) = a.contract(b, contract_pairs);
-      } else if (alpha == 1.0f && beta == 1.0f) {
-        c.device(d) += a.contract(b, contract_pairs);
-      } else {
-        c.device(d) = c.constant(alpha) * a.contract(b, contract_pairs) +
-                      c.constant(beta) * c;
-      }
+      c.device(d) = c.constant(alpha) * a.contract(b, contract_pairs) +
+                    c.constant(beta) * c;
     }
   }
 };
@@ -123,7 +137,7 @@ struct LSTMCellBlock {
   const int cell_size_;
 };
 
-template <typename Device, bool USE_CUBLAS>
+template <typename Device, typename T, bool USE_CUBLAS>
 struct LSTMCellBlockFprop : public LSTMCellBlock {
   LSTMCellBlockFprop(const int batch_size, const int input_size,
                      const int cell_size)
@@ -131,23 +145,15 @@ struct LSTMCellBlockFprop : public LSTMCellBlock {
 
   void operator()(
       OpKernelContext* ctx, perftools::gputools::Stream* stream,
-      const Device& d, const float forget_bias,
-      typename TTypes<float>::ConstMatrix x,
-      typename TTypes<float>::ConstMatrix states_prev,
-      typename TTypes<float>::ConstMatrix w,
-      typename TTypes<float>::ConstVec b,
-      typename TTypes<float>::Matrix cs_prev,
-      typename TTypes<float>::Matrix h_prev,
-      typename TTypes<float>::Matrix xh,
-      typename TTypes<float>::Matrix i,
-      typename TTypes<float>::Matrix cs,
-      typename TTypes<float>::Matrix f,
-      typename TTypes<float>::Matrix o,
-      typename TTypes<float>::Matrix ci,
-      typename TTypes<float>::Matrix co,
-      typename TTypes<float>::Matrix icfo,
-      typename TTypes<float>::Matrix states,
-      typename TTypes<float>::Matrix h) {
+      const Device& d, const T forget_bias, typename TTypes<T>::ConstMatrix x,
+      typename TTypes<T>::ConstMatrix states_prev,
+      typename TTypes<T>::ConstMatrix w, typename TTypes<T>::ConstVec b,
+      typename TTypes<T>::Matrix cs_prev, typename TTypes<T>::Matrix h_prev,
+      typename TTypes<T>::Matrix xh, typename TTypes<T>::Matrix i,
+      typename TTypes<T>::Matrix cs, typename TTypes<T>::Matrix f,
+      typename TTypes<T>::Matrix o, typename TTypes<T>::Matrix ci,
+      typename TTypes<T>::Matrix co, typename TTypes<T>::Matrix icfo,
+      typename TTypes<T>::Matrix states, typename TTypes<T>::Matrix h) {
     // [cs, h] = states_prev
     cs_prev.device(d) =
         states_prev.slice(states_cs_offsets(), cell_extents());
@@ -160,8 +166,9 @@ struct LSTMCellBlockFprop : public LSTMCellBlock {
     xh.slice(xh_h_offsets(), xh_h_extents()).device(d) = h_prev;
 
     // states1 = xh * w + b
-    TensorBlasGemm<Device, USE_CUBLAS>()(
-        ctx, stream, d, false, false, 1.0f, xh, w, 0.0f, icfo);
+    typename TTypes<T>::ConstMatrix const_xh(xh.data(), xh.dimensions());
+    TensorBlasGemm<Device, T, USE_CUBLAS>::compute(
+        ctx, stream, d, false, false, 1.0f, const_xh, w, 0.0f, icfo);
     icfo.device(d) +=
         b.broadcast(Eigen::array<int, 2>({batch_size_, 1}));
 
@@ -193,7 +200,7 @@ struct LSTMCellBlockFprop : public LSTMCellBlock {
   }
 };
 
-template <typename Device, bool USE_CUBLAS>
+template <typename Device, typename T, bool USE_CUBLAS>
 struct LSTMCellBlockBprop : public LSTMCellBlock {
   LSTMCellBlockBprop(const int batch_size, const int input_size,
                      const int cell_size)
@@ -201,30 +208,25 @@ struct LSTMCellBlockBprop : public LSTMCellBlock {
 
   void operator()(
       OpKernelContext* ctx, perftools::gputools::Stream* stream,
-      const Device& d, bool parallel_dw,
-      typename TTypes<float>::ConstMatrix x,
-      typename TTypes<float>::ConstMatrix states_prev,
-      typename TTypes<float>::ConstMatrix w, typename TTypes<float>::ConstVec b,
-      typename TTypes<float>::ConstMatrix i,
-      typename TTypes<float>::ConstMatrix cs,
-      typename TTypes<float>::ConstMatrix f,
-      typename TTypes<float>::ConstMatrix o,
-      typename TTypes<float>::ConstMatrix ci,
-      typename TTypes<float>::ConstMatrix co,
-      typename TTypes<float>::ConstMatrix h,
-      typename TTypes<float>::ConstMatrix states_grad,
-      typename TTypes<float>::ConstMatrix h_grad,
-      typename TTypes<float>::Matrix cs_prev,
-      typename TTypes<float>::Matrix states_c_grad,
-      typename TTypes<float>::Matrix states_h_grad,
-      typename TTypes<float>::Matrix xh, typename TTypes<float>::Matrix xh_grad,
-      typename TTypes<float>::Matrix x_grad, typename TTypes<float>::Matrix dh,
-      typename TTypes<float>::Matrix do_, typename TTypes<float>::Matrix dcs,
-      typename TTypes<float>::Matrix dci, typename TTypes<float>::Matrix df,
-      typename TTypes<float>::Matrix di, typename TTypes<float>::Matrix dicfo,
-      typename TTypes<float>::Matrix states_prev_grad,
-      typename TTypes<float>::Matrix w_grad,
-      typename TTypes<float>::Vec b_grad) {
+      const Device& d, bool parallel_dw, typename TTypes<T>::ConstMatrix x,
+      typename TTypes<T>::ConstMatrix states_prev,
+      typename TTypes<T>::ConstMatrix w, typename TTypes<T>::ConstVec b,
+      typename TTypes<T>::ConstMatrix i, typename TTypes<T>::ConstMatrix cs,
+      typename TTypes<T>::ConstMatrix f, typename TTypes<T>::ConstMatrix o,
+      typename TTypes<T>::ConstMatrix ci, typename TTypes<T>::ConstMatrix co,
+      typename TTypes<T>::ConstMatrix h,
+      typename TTypes<T>::ConstMatrix states_grad,
+      typename TTypes<T>::ConstMatrix h_grad,
+      typename TTypes<T>::Matrix cs_prev,
+      typename TTypes<T>::Matrix states_c_grad,
+      typename TTypes<T>::Matrix states_h_grad,
+      typename TTypes<T>::Matrix xh, typename TTypes<T>::Matrix xh_grad,
+      typename TTypes<T>::Matrix x_grad, typename TTypes<T>::Matrix dh,
+      typename TTypes<T>::Matrix do_, typename TTypes<T>::Matrix dcs,
+      typename TTypes<T>::Matrix dci, typename TTypes<T>::Matrix df,
+      typename TTypes<T>::Matrix di, typename TTypes<T>::Matrix dicfo,
+      typename TTypes<T>::Matrix states_prev_grad,
+      typename TTypes<T>::Matrix w_grad, typename TTypes<T>::Vec b_grad) {
     // [c_grad, h_grad] = states_grad.
     states_c_grad.device(d) =
         states_grad.slice(states_cs_offsets(), cell_extents());
@@ -263,9 +265,11 @@ struct LSTMCellBlockBprop : public LSTMCellBlock {
     auto workers = workers_threads.workers;
 
     // xh_grad = dstate4 * w^T
-    workers->Schedule([ctx, stream, d, dicfo, w, xh_grad, &counter]() {
-      TensorBlasGemm<Device, USE_CUBLAS>()(
-          ctx, stream, d, false, true, 1.0f, dicfo, w, 0.0f, xh_grad);
+    typename TTypes<T>::ConstMatrix const_dicfo(
+          dicfo.data(), dicfo.dimensions());
+    workers->Schedule([ctx, stream, d, const_dicfo, w, xh_grad, &counter]() {
+      TensorBlasGemm<Device, T, USE_CUBLAS>::compute(
+          ctx, stream, d, false, true, 1.0f, const_dicfo, w, 0.0f, xh_grad);
       counter.DecrementCount();
     });
 
@@ -276,9 +280,12 @@ struct LSTMCellBlockBprop : public LSTMCellBlock {
 
     // w_grad, b_grad.
     if (!parallel_dw) {
-      workers->Schedule([ctx, stream, &d, &xh, &dicfo, &w_grad, &counter]() {
-        TensorBlasGemm<Device, USE_CUBLAS>()(
-            ctx, stream, d, true, false, 1.0f, xh, dicfo, 1.0f, w_grad);
+      workers->Schedule([ctx, stream, &d, &xh, &const_dicfo, &w_grad, &counter]() {
+        typename TTypes<T>::ConstMatrix const_xh(
+            xh.data(), xh.dimensions());
+        TensorBlasGemm<Device, T, USE_CUBLAS>::compute(
+            ctx, stream, d, true, false, 1.0f, const_xh, const_dicfo, 1.0f,
+            w_grad);
         counter.DecrementCount();
       });
       b_grad.device(d) += dicfo.sum(Eigen::array<int, 1>({0}));
