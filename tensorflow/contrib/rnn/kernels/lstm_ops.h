@@ -72,9 +72,9 @@ struct TensorBlasGemm<Device, T, false /* USE_CUBLAS */ > {
     Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1> contract_pairs;
     contract_pairs[0] = Eigen::IndexPair<Eigen::DenseIndex>(
         transa == false, transb == true);
-    if (alpha == 1.0f && beta == 0.0f) {
+    if (alpha == T(1) && beta == T(0)) {
       c.device(d) = a.contract(b, contract_pairs);
-    } else if (alpha == 1.0f && beta == 1.0f) {
+    } else if (alpha == T(1) && beta == T(1)) {
       c.device(d) += a.contract(b, contract_pairs);
     } else {
       c.device(d) = c.constant(alpha) * a.contract(b, contract_pairs) +
