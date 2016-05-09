@@ -36,10 +36,15 @@ class TokenModel(object):
 
   def create_basic_model(self):
     self.add_token("<sos>", 0)
+    self._token_model_proto.token_sos = 0
     self.add_token("<eos>", 1)
+    self._token_model_proto.token_eos = 1
     self.add_token(" ", 2)
+    self._token_model_proto.token_eow = 2
     self.add_token("<unk>", 3)
+    self._token_model_proto.token_unk = 3
     self.add_token("<blank>", 4)
+    self._token_model_proto.token_blank = 4
 
     for c in string.ascii_uppercase:
       self.add_token(c)
