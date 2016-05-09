@@ -1,6 +1,7 @@
 import string
 
 from tensorflow.contrib.speech.data import token_model_pb2
+from tensorflow.python.platform import gfile
 from google.protobuf import text_format
 
 
@@ -11,11 +12,10 @@ class TokenModel(object):
     self._token_id_str_map = {}
     self._token_str_id_map = {}
 
-  def load_proto(self, p):
-    pass
-
   def save_proto(self, p):
-    pass
+    f = gfile.FastGFile(p, mode="w")
+    f.write(text_format.MessageToString(self._token_model_proto))
+    f.close()
 
   def token_model_proto(self):
     return self._token_model_proto
